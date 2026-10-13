@@ -7,19 +7,20 @@
 
 ## 실행 방법
 
-Node.js 22.13 이상이 필요합니다 (DB로 Node 내장 `node:sqlite`를 사용해 별도 DB 설치가 필요 없습니다).
+Node.js 22.13 이상이 필요합니다. 로컬에서는 Node 내장 `node:sqlite`를 써서 별도 DB 설치가 필요 없고, 실서비스는 Supabase(PostgreSQL)를 씁니다.
 
 ```bash
 npm install
-npm run demo     # 데모 모드 (추천): 시간과 상관없이 출석 가능, 주간 즉시 마감 버튼
-npm start        # 일반 모드: 약속 시작 30분 전 ~ 종료 시각에만 출석 가능
+npm run demo     # 데모 모드 (추천): SQLite + 데모 메이트, 시간과 상관없이 출석, 주간 즉시 마감 버튼
+npm start        # 일반 모드: SQLite, 약속 시작 30분 전 ~ 종료 시각에만 출석 가능
 npm run dev      # 데모 모드 + 파일 변경 시 자동 재시작
-npm test         # 매칭·출석·정산 로직 테스트
+npm run dev:db   # .env.local 의 DATABASE_URL(Supabase, 실서비스 DB!)에 접속해서 실행
+npm test         # 매칭·출석·정산 테스트 (SQLite와 PostgreSQL 모두)
 ```
 
 브라우저에서 http://localhost:3000 을 열고 회원가입하면 됩니다. 모바일 화면 기준으로 디자인되어 있습니다.
 
-환경 변수: `PORT` (기본 3000), `DB_FILE` (기본 `data/studybuddy.db`), `DEMO_MODE=1` (`--demo`와 동일)
+환경 변수: `PORT` (기본 3000), `DB_FILE` (기본 `data/studybuddy.db`), `DEMO_MODE=1` (`--demo`와 동일), `DATABASE_URL` (있으면 SQLite 대신 PostgreSQL 사용)
 
 데이터를 초기화하려면 서버를 끄고 `data/` 폴더를 지우세요.
 
@@ -35,9 +36,20 @@ npm run build:standalone
 - 데이터는 그 브라우저(localStorage)에만 저장되어 다른 사람과 공유되지 않습니다. 마이페이지의 "데모 데이터 모두 지우기"로 초기화할 수 있습니다.
 - 화면이나 로직을 고친 뒤에는 이 명령을 다시 실행해야 파일에 반영됩니다.
 
-### Vercel 배포 (데모 버전)
+## 실서비스 배포 (Vercel + Supabase)
 
-`vercel.json`이 이 데모 버전을 배포하도록 설정되어 있습니다. GitHub `main` 브랜치에 push하면 Vercel이 `npm run build:standalone`을 실행하고 `dist/index.html`을 올립니다. 서버(`server/`)는 배포되지 않으므로, 데이터는 방문자 각자의 브라우저에만 저장됩니다.
+GitHub `main` 브랜치에 push하면 Vercel이 `npm run build:vercel`을 실행해 배포합니다. (`vercel.json`)
+
+| 주소 | 내용 |
+| --- | --- |
+| `/` | 실서비스 화면 (`public/`) — 실제 사용자끼리 매칭 |
+| `/api/*` | 서버 API — `api/index.js` 서버리스 함수(서울 `icn1`)가 `server/app.js`를 실행 |
+| `/demo/` | 데모 버전 (서버 없는 HTML, 데모 메이트와 체험) |
+
+- DB: Supabase PostgreSQL(서울 `ap-northeast-2`). Vercel 환경 변수 `DATABASE_URL`에 **Transaction pooler(포트 6543)** 주소를 넣습니다. 테이블은 첫 실행 때 자동으로 만들어지고, 모든 테이블에 RLS가 켜져 Supabase 공개 API로는 접근할 수 없습니다.
+- 주간 정산: Vercel Cron이 매일 00:00(KST)에 `/api/cron/settle`을 호출합니다. 사용자가 앱을 열 때도 정산을 확인합니다. 환경 변수 `CRON_SECRET`을 넣으면 크론 호출만 허용합니다(선택).
+- 실서비스에는 데모 메이트와 데모 기능(시간 무관 출석, 즉시 마감)이 없습니다.
+- 날짜 계산은 서버 위치와 상관없이 한국 시간(KST) 기준입니다. (`server/time.js`)
 
 ## 기능 (기획서 → 구현)
 
@@ -71,16 +83,21 @@ npm run build:standalone
 ## 구조
 
 ```
+api/
+  index.js     Vercel 서버리스 함수 (실서비스 API)
 server/
-  index.js     서버 시작, 데모 메이트 생성, 주간 자동 정산 스케줄
-  app.js       Express 라우트 (REST API + 정적 파일)
-  service.js   핵심 로직: 인증, 매칭, 출석, 정산, 재매칭, 채팅, 포인트
-  db.js        SQLite 스키마 / 트랜잭션
+  index.js     로컬 서버 시작, 데모 메이트 생성, 주간 자동 정산 스케줄
+  app.js       Express 라우트 (REST API + 정적 파일 + 크론)
+  service.js   핵심 로직: 인증, 매칭, 출석, 정산, 재매칭, 채팅, 포인트 (동시 접속 안전)
+  db.js        DB 공통 인터페이스, 스키마, SQLite 드라이버
+  db-pg.js     PostgreSQL 드라이버 (Supabase / 테스트용 PGlite)
   options.js   장소·스타일·보증금 옵션
   seed.js      데모 메이트
-  time.js      날짜 유틸 (테스트에서 시간 고정 가능)
+  time.js      날짜 유틸 (KST 고정, 테스트에서 시간 고정 가능)
 public/        모바일 웹 프론트엔드 (빌드 없는 바닐라 JS)
-test/          node:test 테스트
+standalone/    서버 없는 HTML 데모용 브라우저 어댑터
+scripts/       빌드 스크립트 (단독 HTML, Vercel)
+test/          node:test 테스트 (SQLite·PostgreSQL 양쪽에서 실행)
 ```
 
 ## 참고 / 한계
@@ -88,4 +105,5 @@ test/          node:test 테스트
 - 보증금은 **가상 포인트**입니다. 실제 결제를 붙이려면 PG 연동(예치·환불·정산)이 필요합니다.
 - 출석 QR은 약속마다 하나의 코드를 두 사람이 공유하는 방식이라, 같은 장소에 있다는 것을 강하게 보장하지는 않습니다. 실서비스에서는 시간에 따라 바뀌는 코드나 위치 확인을 더하는 것을 권장합니다.
 - 카메라 QR 인식은 `BarcodeDetector`를 지원하는 브라우저(안드로이드 Chrome 등)에서 동작하며, 그 외에는 코드 입력으로 출석합니다. 카메라는 `localhost` 또는 HTTPS에서만 사용할 수 있습니다.
-- 채팅은 3초 간격 폴링입니다.
+- 채팅은 3초 간격 폴링입니다. 사용자가 많아지면 Supabase Realtime 등 실시간 방식으로 바꾸는 것을 권장합니다.
+- 비밀번호 찾기, 이메일 인증, 개인정보처리방침은 아직 없습니다. 실제 사용자를 받기 전에 필요합니다.

@@ -156,7 +156,8 @@ async function renderLogin() {
       <label class="field"><span>비밀번호</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn primary block mt-lg">로그인</button>
     </form>
-    <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a></p>`);
+    <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a></p>
+    ${window.__mockApi ? '' : '<p class="switch-link tiny">가입 없이 둘러보려면 <a href="demo/">데모 체험하기 →</a></p>'}`);
   $('#f').addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));

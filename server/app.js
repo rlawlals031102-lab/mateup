@@ -17,15 +17,21 @@ function readCookie(req, name) {
   return null;
 }
 
-export function createApp({ db, demo = false }) {
+// demo: 시간과 상관없이 출석, 주간 즉시 마감 허용
+// secureCookies: HTTPS 배포 환경에서 쿠키를 Secure로
+// cronSecret: 설정되어 있으면 /api/cron/settle 호출 시 확인 (Vercel Cron이 자동으로 붙여 보낸다)
+export function createApp({ db, demo = false, secureCookies = false, cronSecret = null, serveStatic = true }) {
   const app = express();
   const opts = { demo };
 
+  app.disable('x-powered-by');
   app.use(express.json({ limit: '50kb' }));
 
-  app.use((req, res, next) => {
+  const api = express.Router();
+
+  api.use(async (req, res, next) => {
     req.token = readCookie(req, COOKIE);
-    req.user = S.userByToken(db, req.token);
+    req.user = await S.userByToken(db, req.token);
     next();
   });
 
@@ -35,85 +41,93 @@ export function createApp({ db, demo = false }) {
   };
 
   const setSession = (res, token) => res.cookie(COOKIE, token, {
-    httpOnly: true, sameSite: 'lax', maxAge: COOKIE_MAX_AGE,
+    httpOnly: true, sameSite: 'lax', secure: secureCookies, maxAge: COOKIE_MAX_AGE,
   });
-
-  const api = express.Router();
 
   api.get('/options', (req, res) => {
     res.json({ locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo });
   });
 
   // 인증
-  api.post('/auth/signup', (req, res) => {
-    const { user, token } = S.signup(db, req.body ?? {});
+  api.post('/auth/signup', async (req, res) => {
+    const { user, token } = await S.signup(db, req.body ?? {});
     setSession(res, token);
     res.status(201).json({ user });
   });
-  api.post('/auth/login', (req, res) => {
-    const { user, token } = S.login(db, req.body ?? {});
+  api.post('/auth/login', async (req, res) => {
+    const { user, token } = await S.login(db, req.body ?? {});
     setSession(res, token);
     res.json({ user });
   });
-  api.post('/auth/logout', (req, res) => {
-    if (req.token) S.logout(db, req.token);
+  api.post('/auth/logout', async (req, res) => {
+    if (req.token) await S.logout(db, req.token);
     res.clearCookie(COOKIE);
     res.json({ ok: true });
   });
 
   // 내 정보
-  api.get('/me', auth, (req, res) => res.json(S.homeState(db, req.user.id, opts)));
-  api.put('/me', auth, (req, res) => res.json({ user: S.updateProfile(db, req.user.id, req.body ?? {}) }));
-  api.get('/me/points', auth, (req, res) => res.json({ logs: S.pointLogs(db, req.user.id) }));
-  api.get('/me/history', auth, (req, res) => res.json({ matches: S.matchHistory(db, req.user.id) }));
+  api.get('/me', auth, async (req, res) => res.json(await S.homeState(db, req.user.id, opts)));
+  api.put('/me', auth, async (req, res) => res.json({ user: await S.updateProfile(db, req.user.id, req.body ?? {}) }));
+  api.get('/me/points', auth, async (req, res) => res.json({ logs: await S.pointLogs(db, req.user.id) }));
+  api.get('/me/history', auth, async (req, res) => res.json({ matches: await S.matchHistory(db, req.user.id) }));
 
   // 매칭 신청
-  api.post('/requests', auth, (req, res) => res.status(201).json(S.createRequest(db, req.user.id, req.body ?? {})));
-  api.delete('/requests/current', auth, (req, res) => {
-    S.cancelRequest(db, req.user.id);
+  api.post('/requests', auth, async (req, res) => res.status(201).json(await S.createRequest(db, req.user.id, req.body ?? {})));
+  api.delete('/requests/current', auth, async (req, res) => {
+    await S.cancelRequest(db, req.user.id);
     res.json({ ok: true });
   });
 
   // 매칭
-  api.get('/matches/current', auth, (req, res) => res.json({ match: S.currentMatch(db, req.user.id, opts) }));
-  api.post('/matches/:id/settle', auth, (req, res) => {
+  api.get('/matches/current', auth, async (req, res) => res.json({ match: await S.currentMatch(db, req.user.id, opts) }));
+  api.post('/matches/:id/settle', auth, async (req, res) => {
     if (!demo) return res.status(403).json({ error: '데모 모드에서만 사용할 수 있어요.' });
-    S.forceSettle(db, req.user.id, Number(req.params.id));
-    res.json({ match: S.currentMatch(db, req.user.id, opts) });
+    await S.forceSettle(db, req.user.id, Number(req.params.id));
+    res.json({ match: await S.currentMatch(db, req.user.id, opts) });
   });
-  api.post('/matches/:id/choice', auth, (req, res) => {
-    res.json(S.chooseNext(db, req.user.id, Number(req.params.id), req.body?.choice));
+  api.post('/matches/:id/choice', auth, async (req, res) => {
+    res.json(await S.chooseNext(db, req.user.id, Number(req.params.id), req.body?.choice));
   });
 
   // 채팅
-  api.get('/matches/:id/messages', auth, (req, res) => {
-    res.json({ messages: S.listMessages(db, req.user.id, Number(req.params.id), req.query.after) });
+  api.get('/matches/:id/messages', auth, async (req, res) => {
+    res.json({ messages: await S.listMessages(db, req.user.id, Number(req.params.id), req.query.after) });
   });
-  api.post('/matches/:id/messages', auth, (req, res) => {
-    S.sendMessage(db, req.user.id, Number(req.params.id), req.body?.body);
+  api.post('/matches/:id/messages', auth, async (req, res) => {
+    await S.sendMessage(db, req.user.id, Number(req.params.id), req.body?.body);
     res.status(201).json({ ok: true });
   });
 
   // 출석
   api.get('/appointments/:id/qr', auth, async (req, res) => {
-    const appt = S.appointmentForQr(db, req.user.id, Number(req.params.id));
+    const appt = await S.appointmentForQr(db, req.user.id, Number(req.params.id));
     const svg = await QRCode.toString(`SB:${appt.id}:${appt.code}`, { type: 'svg', margin: 1, color: { dark: '#203829', light: '#ffffff' } });
     res.type('image/svg+xml').set('Cache-Control', 'no-store').send(svg);
   });
-  api.post('/appointments/:id/checkin', auth, (req, res) => {
-    S.checkIn(db, req.user.id, Number(req.params.id), req.body ?? {}, opts);
-    res.json({ match: S.currentMatch(db, req.user.id, opts) });
+  api.post('/appointments/:id/checkin', auth, async (req, res) => {
+    await S.checkIn(db, req.user.id, Number(req.params.id), req.body ?? {}, opts);
+    res.json({ match: await S.currentMatch(db, req.user.id, opts) });
   });
-  api.post('/appointments/:id/checkout', auth, (req, res) => {
-    const { minutes } = S.checkOut(db, req.user.id, Number(req.params.id), opts);
-    res.json({ minutes, match: S.currentMatch(db, req.user.id, opts) });
+  api.post('/appointments/:id/checkout', auth, async (req, res) => {
+    const { minutes } = await S.checkOut(db, req.user.id, Number(req.params.id), opts);
+    res.json({ minutes, match: await S.currentMatch(db, req.user.id, opts) });
+  });
+
+  // 주간이 끝난 매칭 일괄 정산 (Vercel Cron이 매일 호출)
+  api.get('/cron/settle', async (req, res) => {
+    if (cronSecret && req.headers.authorization !== `Bearer ${cronSecret}`) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    res.json({ settled: await S.autoSettle(db) });
   });
 
   api.use((req, res) => res.status(404).json({ error: '존재하지 않는 API입니다.' }));
 
   app.use('/api', api);
-  app.use(express.static(PUBLIC_DIR));
-  app.get('/{*path}', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
+  if (serveStatic) {
+    app.use(express.static(PUBLIC_DIR));
+    app.get('/{*path}', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
+  }
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {

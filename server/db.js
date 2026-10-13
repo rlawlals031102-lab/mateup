@@ -1,10 +1,20 @@
-import { DatabaseSync } from 'node:sqlite';
+// DB 공통 인터페이스 — SQLite(로컬·데모)와 PostgreSQL(Neon, 실서비스)에서 같은 코드가 돌도록
+// 서비스 코드는 아래 메서드만 쓴다. SQL은 두 DB에서 모두 통하는 문법으로 작성하고 자리표시자는 '?'를 쓴다.
+//
+//   await db.get(sql, ...params)   → 첫 행 또는 null
+//   await db.all(sql, ...params)   → 행 배열
+//   await db.run(sql, ...params)   → { changes, rows }  (RETURNING 결과는 rows)
+//   await db.exec(sql)             → 여러 문장 실행 (파라미터 없음)
+//   await db.tx(async (t) => ...)  → 트랜잭션. 안에서는 t를 db처럼 쓰고, t.tx()는 같은 트랜잭션에 합류
+
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA = `
+export function schema(dialect) {
+  const ID = dialect === 'pg' ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY';
+  return `
 CREATE TABLE IF NOT EXISTS users (
-  id            INTEGER PRIMARY KEY,
+  id            ${ID},
   email         TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   name          TEXT NOT NULL,
@@ -25,7 +35,7 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
 );
 
 CREATE TABLE IF NOT EXISTS match_requests (
-  id         INTEGER PRIMARY KEY,
+  id         ${ID},
   user_id    INTEGER NOT NULL REFERENCES users(id),
   days       TEXT NOT NULL,
   start_time TEXT NOT NULL,
@@ -38,7 +48,7 @@ CREATE TABLE IF NOT EXISTS match_requests (
 );
 
 CREATE TABLE IF NOT EXISTS matches (
-  id            INTEGER PRIMARY KEY,
+  id            ${ID},
   user_a        INTEGER NOT NULL REFERENCES users(id),
   user_b        INTEGER NOT NULL REFERENCES users(id),
   days          TEXT NOT NULL,
@@ -58,7 +68,7 @@ CREATE TABLE IF NOT EXISTS matches (
 );
 
 CREATE TABLE IF NOT EXISTS appointments (
-  id         INTEGER PRIMARY KEY,
+  id         ${ID},
   match_id   INTEGER NOT NULL REFERENCES matches(id),
   date       TEXT NOT NULL,
   start_time TEXT NOT NULL,
@@ -67,7 +77,7 @@ CREATE TABLE IF NOT EXISTS appointments (
 );
 
 CREATE TABLE IF NOT EXISTS attendance (
-  id             INTEGER PRIMARY KEY,
+  id             ${ID},
   appointment_id INTEGER NOT NULL REFERENCES appointments(id),
   user_id        INTEGER NOT NULL REFERENCES users(id),
   method         TEXT NOT NULL, -- qr | self
@@ -78,7 +88,7 @@ CREATE TABLE IF NOT EXISTS attendance (
 );
 
 CREATE TABLE IF NOT EXISTS messages (
-  id         INTEGER PRIMARY KEY,
+  id         ${ID},
   match_id   INTEGER NOT NULL REFERENCES matches(id),
   user_id    INTEGER NOT NULL REFERENCES users(id),
   body       TEXT NOT NULL,
@@ -86,7 +96,7 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE TABLE IF NOT EXISTS point_logs (
-  id         INTEGER PRIMARY KEY,
+  id         ${ID},
   user_id    INTEGER NOT NULL REFERENCES users(id),
   amount     INTEGER NOT NULL,
   balance    INTEGER NOT NULL,
@@ -96,34 +106,72 @@ CREATE TABLE IF NOT EXISTS point_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_status ON match_requests(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_one_pending ON match_requests(user_id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_matches_users ON matches(user_a, user_b);
+CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
 CREATE INDEX IF NOT EXISTS idx_appointments_match ON appointments(match_id);
 CREATE INDEX IF NOT EXISTS idx_messages_match ON messages(match_id);
-`;
+CREATE INDEX IF NOT EXISTS idx_tokens_user ON auth_tokens(user_id);
+${dialect === 'pg' ? RLS : ''}`;
+}
 
-export function openDb(file) {
-  if (file !== ':memory:') mkdirSync(path.dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
-  db.exec('PRAGMA foreign_keys = ON;');
-  if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
-  db.exec(SCHEMA);
+// PostgreSQL(Supabase)에서는 모든 테이블에 RLS를 켜 둔다. 정책이 없으므로 Supabase 공개 API(anon 키)로는
+// 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
+const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs']
+  .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
+  .join('\n');
+
+// UNIQUE 제약 위반 여부 (SQLite / PostgreSQL 공통)
+export const isUniqueViolation = (err) => err?.code === '23505' || /UNIQUE constraint failed/i.test(err?.message ?? '');
+
+// 동기 SQLite 드라이버(node:sqlite 또는 브라우저용 sql.js 래퍼)를 공통 인터페이스로 감싼다.
+// 연결이 하나뿐이라 트랜잭션은 잠금으로 한 번에 하나씩 실행한다.
+export function wrapSqlite(raw) {
+  const base = {
+    dialect: 'sqlite',
+    async get(sql, ...p) { return raw.prepare(sql).get(...p) ?? null; },
+    async all(sql, ...p) { return raw.prepare(sql).all(...p); },
+    async run(sql, ...p) {
+      if (/\breturning\b/i.test(sql)) {
+        const rows = raw.prepare(sql).all(...p);
+        return { changes: rows.length, rows };
+      }
+      const r = raw.prepare(sql).run(...p);
+      return { changes: Number(r.changes), rows: [] };
+    },
+    async exec(sql) { raw.exec(sql); },
+  };
+
+  let lock = Promise.resolve();
+  const db = {
+    ...base,
+    raw,
+    tx(fn) {
+      const run = lock.then(async () => {
+        const t = { ...base, tx: (f) => f(t) };
+        raw.exec('BEGIN');
+        try {
+          const result = await fn(t);
+          raw.exec('COMMIT');
+          return result;
+        } catch (err) {
+          raw.exec('ROLLBACK');
+          throw err;
+        }
+      });
+      lock = run.catch(() => {});
+      return run;
+    },
+  };
   return db;
 }
 
-// 중첩 호출 시 바깥 트랜잭션에 합류한다.
-let depth = 0;
-export function tx(db, fn) {
-  if (depth > 0) return fn();
-  db.exec('BEGIN');
-  depth++;
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  } finally {
-    depth--;
-  }
+export async function openSqlite(file) {
+  const { DatabaseSync } = await import('node:sqlite');
+  if (file !== ':memory:') mkdirSync(path.dirname(file), { recursive: true });
+  const raw = new DatabaseSync(file);
+  raw.exec('PRAGMA foreign_keys = ON;');
+  if (file !== ':memory:') raw.exec('PRAGMA journal_mode = WAL;');
+  raw.exec(schema('sqlite'));
+  return wrapSqlite(raw);
 }

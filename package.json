@@ -12,13 +12,17 @@
     "dev": "node --watch server/index.js --demo",
     "demo": "node server/index.js --demo",
     "test": "node --test",
-    "build:standalone": "node scripts/build-standalone.mjs"
+    "build:standalone": "node scripts/build-standalone.mjs",
+    "build:vercel": "node scripts/build-vercel.mjs",
+    "dev:db": "node --env-file=.env.local server/index.js"
   },
   "dependencies": {
     "express": "^5.1.0",
+    "pg": "^8.23.1",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.3.16",
     "esbuild": "^0.25.12",
     "sql.js": "1.13"
   }

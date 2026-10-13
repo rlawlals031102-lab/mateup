@@ -1,9 +1,9 @@
 import crypto from 'node:crypto';
-import { tx } from './db.js';
 import { requeueBot, adjustPoints } from './service.js';
 import * as T from './time.js';
 
-// 데모용 메이트. 사용자가 매칭을 신청하면 이 중 조건이 맞는 메이트와 연결된다.
+// 데모용 메이트. 로컬 데모(npm run demo)와 서버 없는 HTML 데모에서만 만든다. (실서비스에는 없음)
+// 사용자가 매칭을 신청하면 이 중 조건이 맞는 메이트와 연결된다.
 const ALL = [1, 2, 3, 4, 5, 6, 7];
 export const BOTS = [
   { name: '이지은', age: 24, avatar: '👩', tags: ['#카페공부', '#자격증준비', '#ENFJ'], bio: '카페에서 집중이 잘 돼요!',
@@ -26,33 +26,35 @@ export const BOTS = [
 
 const botEmail = (i) => `bot${i + 1}@studybuddy.local`;
 
-export function seedBots(db) {
-  tx(db, () => {
-    BOTS.forEach((b, i) => {
-      const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(botEmail(i));
+export async function seedBots(db) {
+  await db.tx(async (t) => {
+    for (const [i, b] of BOTS.entries()) {
+      const existing = await t.get('SELECT id FROM users WHERE email = ?', botEmail(i));
       if (existing) {
-        syncBot(db, existing.id, b);
-        return;
+        await syncBot(t, existing.id, b);
+        continue;
       }
-      const { lastInsertRowid } = db.prepare(
+      const { rows } = await t.run(
         `INSERT INTO users (email, password_hash, name, age, tags, bio, avatar, points, is_bot, bot_template, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`,
-      ).run(botEmail(i), `!${crypto.randomBytes(8).toString('hex')}`, b.name, b.age,
-        JSON.stringify(b.tags), b.bio, b.avatar, JSON.stringify(b.template), T.now().toISOString());
-      adjustPoints(db, Number(lastInsertRowid), 1_000_000, '데모 메이트 포인트');
-      requeueBot(db, Number(lastInsertRowid));
-    });
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?) RETURNING id`,
+        botEmail(i), `!${crypto.randomBytes(8).toString('hex')}`, b.name, b.age,
+        JSON.stringify(b.tags), b.bio, b.avatar, JSON.stringify(b.template), T.now().toISOString(),
+      );
+      await adjustPoints(t, rows[0].id, 1_000_000, '데모 메이트 포인트');
+      await requeueBot(t, rows[0].id);
+    }
   });
 }
 
 // 위 목록을 고치면 이미 만들어진 데모 메이트와 대기 중인 신청에도 반영한다.
 // (진행 중인 매칭은 건드리지 않고, 끝난 뒤 새 템플릿으로 다시 대기한다.)
-function syncBot(db, id, b) {
+async function syncBot(db, id, b) {
   const t = b.template;
-  db.prepare('UPDATE users SET name = ?, age = ?, tags = ?, bio = ?, avatar = ?, bot_template = ? WHERE id = ?')
-    .run(b.name, b.age, JSON.stringify(b.tags), b.bio, b.avatar, JSON.stringify(t), id);
-  db.prepare(
+  await db.run('UPDATE users SET name = ?, age = ?, tags = ?, bio = ?, avatar = ?, bot_template = ? WHERE id = ?',
+    b.name, b.age, JSON.stringify(b.tags), b.bio, b.avatar, JSON.stringify(t), id);
+  await db.run(
     `UPDATE match_requests SET location = ?, days = ?, start_time = ?, end_time = ?, styles = ?
      WHERE user_id = ? AND status = 'pending'`,
-  ).run(t.location, JSON.stringify(t.days), t.startTime, t.endTime, JSON.stringify(t.styles), id);
+    t.location, JSON.stringify(t.days), t.startTime, t.endTime, JSON.stringify(t.styles), id,
+  );
 }

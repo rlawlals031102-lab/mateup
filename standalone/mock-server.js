@@ -5,7 +5,7 @@
 import initSqlJs from 'sql.js';
 import wasmBinary from 'sql.js/dist/sql-wasm.wasm';
 import QRCode from 'qrcode';
-import { openDb } from '../server/db.js';
+import { openSqlite } from '../server/db.js';
 import { seedBots } from '../server/seed.js';
 import * as S from '../server/service.js';
 import { LOCATIONS, STYLES, DEPOSITS, CHECKIN_EARLY_MIN } from '../server/options.js';
@@ -17,9 +17,9 @@ const opts = { demo };
 
 const ready = (async () => {
   globalThis.__SQL = await initSqlJs({ wasmBinary });
-  const db = openDb('browser');
-  seedBots(db);
-  S.autoSettle(db);
+  const db = await openSqlite('browser');
+  await seedBots(db);
+  await S.autoSettle(db);
   persist();
   return db;
 })();
@@ -42,79 +42,87 @@ const needUser = (ctx) => {
 };
 
 const routes = [
-  ['GET', '/options', () => ({ locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo })],
+  ['GET', '/options', async () => ({ locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo })],
 
-  ['POST', '/auth/signup', ({ db, body }) => {
-    const { user, token } = S.signup(db, body);
+  ['POST', '/auth/signup', async ({ db, body }) => {
+    const { user, token } = await S.signup(db, body);
     setToken(token);
     return { user };
   }],
-  ['POST', '/auth/login', ({ db, body }) => {
-    const { user, token } = S.login(db, body);
+  ['POST', '/auth/login', async ({ db, body }) => {
+    const { user, token } = await S.login(db, body);
     setToken(token);
     return { user };
   }],
-  ['POST', '/auth/logout', ({ db }) => {
+  ['POST', '/auth/logout', async ({ db }) => {
     const t = getToken();
-    if (t) S.logout(db, t);
+    if (t) await S.logout(db, t);
     setToken(null);
     return { ok: true };
   }],
 
   ['GET', '/me', (ctx) => S.homeState(ctx.db, needUser(ctx), opts)],
-  ['PUT', '/me', (ctx) => ({ user: S.updateProfile(ctx.db, needUser(ctx), ctx.body) })],
-  ['GET', '/me/points', (ctx) => ({ logs: S.pointLogs(ctx.db, needUser(ctx)) })],
-  ['GET', '/me/history', (ctx) => ({ matches: S.matchHistory(ctx.db, needUser(ctx)) })],
+  ['PUT', '/me', async (ctx) => ({ user: await S.updateProfile(ctx.db, needUser(ctx), ctx.body) })],
+  ['GET', '/me/points', async (ctx) => ({ logs: await S.pointLogs(ctx.db, needUser(ctx)) })],
+  ['GET', '/me/history', async (ctx) => ({ matches: await S.matchHistory(ctx.db, needUser(ctx)) })],
 
   ['POST', '/requests', (ctx) => S.createRequest(ctx.db, needUser(ctx), ctx.body)],
-  ['DELETE', '/requests/current', (ctx) => {
-    S.cancelRequest(ctx.db, needUser(ctx));
+  ['DELETE', '/requests/current', async (ctx) => {
+    await S.cancelRequest(ctx.db, needUser(ctx));
     return { ok: true };
   }],
 
-  ['GET', '/matches/current', (ctx) => ({ match: S.currentMatch(ctx.db, needUser(ctx), opts) })],
-  ['POST', '/matches/:id/settle', (ctx) => {
+  ['GET', '/matches/current', async (ctx) => ({ match: await S.currentMatch(ctx.db, needUser(ctx), opts) })],
+  ['POST', '/matches/:id/settle', async (ctx) => {
     const uid = needUser(ctx);
-    S.forceSettle(ctx.db, uid, ctx.id);
-    return { match: S.currentMatch(ctx.db, uid, opts) };
+    await S.forceSettle(ctx.db, uid, ctx.id);
+    return { match: await S.currentMatch(ctx.db, uid, opts) };
   }],
   ['POST', '/matches/:id/choice', (ctx) => S.chooseNext(ctx.db, needUser(ctx), ctx.id, ctx.body.choice)],
-  ['GET', '/matches/:id/messages', (ctx) => ({ messages: S.listMessages(ctx.db, needUser(ctx), ctx.id, ctx.query.after) })],
-  ['POST', '/matches/:id/messages', (ctx) => {
-    S.sendMessage(ctx.db, needUser(ctx), ctx.id, ctx.body.body);
+  ['GET', '/matches/:id/messages', async (ctx) => ({ messages: await S.listMessages(ctx.db, needUser(ctx), ctx.id, ctx.query.after) })],
+  ['POST', '/matches/:id/messages', async (ctx) => {
+    await S.sendMessage(ctx.db, needUser(ctx), ctx.id, ctx.body.body);
     return { ok: true };
   }],
 
-  ['POST', '/appointments/:id/checkin', (ctx) => {
+  ['POST', '/appointments/:id/checkin', async (ctx) => {
     const uid = needUser(ctx);
-    S.checkIn(ctx.db, uid, ctx.id, ctx.body, opts);
-    return { match: S.currentMatch(ctx.db, uid, opts) };
+    await S.checkIn(ctx.db, uid, ctx.id, ctx.body, opts);
+    return { match: await S.currentMatch(ctx.db, uid, opts) };
   }],
-  ['POST', '/appointments/:id/checkout', (ctx) => {
+  ['POST', '/appointments/:id/checkout', async (ctx) => {
     const uid = needUser(ctx);
-    const { minutes } = S.checkOut(ctx.db, uid, ctx.id, opts);
-    return { minutes, match: S.currentMatch(ctx.db, uid, opts) };
+    const { minutes } = await S.checkOut(ctx.db, uid, ctx.id, opts);
+    return { minutes, match: await S.currentMatch(ctx.db, uid, opts) };
   }],
 ].map(([method, pattern, handler]) => ({
   method,
   handler,
-  regex: new RegExp(`^${pattern.replace(':id', '(\\d+)')}$`),
+  regex: new RegExp(`^${pattern.replace(':id', '(\d+)')}$`),
 }));
 
-window.__mockApi = async (path, { method = 'GET', body } = {}) => {
+// 요청을 하나씩 처리한다. (DB를 localStorage에 저장하는 동안 다른 트랜잭션이 열려 있으면 안 됨)
+let queue = Promise.resolve();
+const serial = (fn) => (...args) => {
+  const run = queue.then(() => fn(...args));
+  queue = run.catch(() => {});
+  return run;
+};
+
+window.__mockApi = serial(async (path, { method = 'GET', body } = {}) => {
   const db = await ready;
   const [pathname, qs] = path.split('?');
   const route = routes.find((r) => r.method === method && r.regex.test(pathname));
   if (!route) return { status: 404, data: { error: '존재하지 않는 API입니다.' } };
-  const ctx = {
-    db,
-    body: body ?? {},
-    query: Object.fromEntries(new URLSearchParams(qs ?? '')),
-    id: Number(pathname.match(route.regex)[1]),
-    user: S.userByToken(db, getToken()),
-  };
   try {
-    const data = route.handler(ctx);
+    const ctx = {
+      db,
+      body: body ?? {},
+      query: Object.fromEntries(new URLSearchParams(qs ?? '')),
+      id: Number(pathname.match(route.regex)[1]),
+      user: await S.userByToken(db, getToken()),
+    };
+    const data = await route.handler(ctx);
     return { status: 200, data };
   } catch (err) {
     if (err instanceof HttpError || err instanceof S.AppError) return { status: err.status, data: { error: err.message } };
@@ -123,16 +131,16 @@ window.__mockApi = async (path, { method = 'GET', body } = {}) => {
   } finally {
     persist();
   }
-};
+});
 
-window.__mockQr = async (appointmentId) => {
+window.__mockQr = serial(async (appointmentId) => {
   const db = await ready;
-  const user = S.userByToken(db, getToken());
+  const user = await S.userByToken(db, getToken());
   if (!user) throw new Error('로그인이 필요해요.');
-  const appt = S.appointmentForQr(db, user.id, appointmentId);
+  const appt = await S.appointmentForQr(db, user.id, appointmentId);
   const svg = await QRCode.toString(`SB:${appt.id}:${appt.code}`, { type: 'svg', margin: 1, color: { dark: '#203829', light: '#ffffff' } });
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-};
+});
 
 window.__mockReset = () => {
   clearSaved();

@@ -2,6 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "npm install",
-  "buildCommand": "npm run build:standalone",
-  "outputDirectory": "dist"
+  "buildCommand": "npm run build:vercel",
+  "outputDirectory": "www",
+  "regions": ["icn1"],
+  "rewrites": [{ "source": "/api/(.*)", "destination": "/api" }],
+  "crons": [{ "path": "/api/cron/settle", "schedule": "0 15 * * *" }]
 }

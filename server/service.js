@@ -1,9 +1,13 @@
 import crypto from 'node:crypto';
-import { tx } from './db.js';
+import { isUniqueViolation } from './db.js';
 import * as T from './time.js';
 import {
   LOCATIONS, STYLES, DEPOSITS, SIGNUP_POINTS, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
 } from './options.js';
+
+// 모든 함수는 첫 인자로 db(server/db.js 인터페이스)를 받는다.
+// 여러 사용자가 동시에 접근해도 데이터가 꼬이지 않도록, 상태를 바꾸는 작업은
+// "조건부 UPDATE"(WHERE status = '...')로 먼저 자리를 차지한 뒤 진행한다.
 
 export class AppError extends Error {
   constructor(status, message) {
@@ -35,7 +39,7 @@ export const publicUser = (u) => u && {
 
 export const privateUser = (u) => u && { ...publicUser(u), email: u.email, points: u.points };
 
-const getUser = (db, id) => db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+const getUser = (db, id) => db.get('SELECT * FROM users WHERE id = ?', id);
 
 // ───────────────────────── 인증 ─────────────────────────
 
@@ -53,9 +57,9 @@ function verifyPassword(password, stored) {
   return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
 }
 
-function issueToken(db, userId) {
+async function issueToken(db, userId) {
   const token = crypto.randomBytes(32).toString('hex');
-  db.prepare('INSERT INTO auth_tokens (token, user_id, created_at) VALUES (?, ?, ?)').run(token, userId, iso());
+  await db.run('INSERT INTO auth_tokens (token, user_id, created_at) VALUES (?, ?, ?)', token, userId, iso());
   return token;
 }
 
@@ -89,69 +93,70 @@ function validateProfile({ name, age, tags, bio, avatar }, partial = false) {
   return out;
 }
 
-export function signup(db, { email, password, name, age }) {
+export async function signup(db, { email, password, name, age }) {
   const e = String(email ?? '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new AppError(400, '이메일 형식이 올바르지 않습니다.');
   if (String(password ?? '').length < 6) throw new AppError(400, '비밀번호는 6자 이상이어야 합니다.');
   const profile = validateProfile({ name, age });
-  return tx(db, () => {
-    if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(e)) {
-      throw new AppError(409, '이미 가입된 이메일입니다.');
-    }
-    const { lastInsertRowid } = db.prepare(
-      'INSERT INTO users (email, password_hash, name, age, points, created_at) VALUES (?, ?, ?, ?, 0, ?)',
-    ).run(e, hashPassword(String(password)), profile.name, profile.age ?? null, iso());
-    const id = Number(lastInsertRowid);
-    adjustPoints(db, id, SIGNUP_POINTS, '가입 축하 포인트');
-    return { user: privateUser(getUser(db, id)), token: issueToken(db, id) };
+  const passwordHash = hashPassword(String(password));
+  return db.tx(async (t) => {
+    const { rows } = await t.run(
+      `INSERT INTO users (email, password_hash, name, age, points, created_at) VALUES (?, ?, ?, ?, 0, ?)
+       ON CONFLICT (email) DO NOTHING RETURNING id`,
+      e, passwordHash, profile.name, profile.age ?? null, iso(),
+    );
+    if (!rows.length) throw new AppError(409, '이미 가입된 이메일입니다.');
+    const id = rows[0].id;
+    await adjustPoints(t, id, SIGNUP_POINTS, '가입 축하 포인트');
+    return { user: privateUser(await getUser(t, id)), token: await issueToken(t, id) };
   });
 }
 
-export function login(db, { email, password }) {
-  const u = db.prepare('SELECT * FROM users WHERE email = ? AND is_bot = 0')
-    .get(String(email ?? '').trim().toLowerCase());
+export async function login(db, { email, password }) {
+  const u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', String(email ?? '').trim().toLowerCase());
   if (!u || !verifyPassword(String(password ?? ''), u.password_hash)) {
     throw new AppError(401, '이메일 또는 비밀번호가 올바르지 않습니다.');
   }
-  return { user: privateUser(u), token: issueToken(db, u.id) };
+  return { user: privateUser(u), token: await issueToken(db, u.id) };
 }
 
-export function logout(db, token) {
-  db.prepare('DELETE FROM auth_tokens WHERE token = ?').run(token);
+export async function logout(db, token) {
+  await db.run('DELETE FROM auth_tokens WHERE token = ?', token);
 }
 
-export function userByToken(db, token) {
+export async function userByToken(db, token) {
   if (!token) return null;
-  return db.prepare(
-    'SELECT u.* FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE t.token = ?',
-  ).get(token) ?? null;
+  return db.get('SELECT u.* FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE t.token = ?', token);
 }
 
-export function updateProfile(db, userId, input) {
+export async function updateProfile(db, userId, input) {
   const fields = validateProfile(input, true);
   const keys = Object.keys(fields);
   if (keys.length) {
-    db.prepare(`UPDATE users SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
-      .run(...keys.map((k) => fields[k]), userId);
+    await db.run(`UPDATE users SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+      ...keys.map((k) => fields[k]), userId);
   }
-  return privateUser(getUser(db, userId));
+  return privateUser(await getUser(db, userId));
 }
 
 // ───────────────────────── 포인트 ─────────────────────────
 
-export function adjustPoints(db, userId, amount, reason, matchId = null) {
+// 잔액 확인과 차감을 한 문장으로 처리해 동시에 요청이 와도 음수가 되지 않는다.
+export async function adjustPoints(db, userId, amount, reason, matchId = null) {
   if (!amount) return;
-  const { points } = db.prepare('SELECT points FROM users WHERE id = ?').get(userId);
-  const balance = points + amount;
-  if (balance < 0) throw new AppError(400, '포인트가 부족합니다.');
-  db.prepare('UPDATE users SET points = ? WHERE id = ?').run(balance, userId);
-  db.prepare(
+  const { rows } = await db.run(
+    'UPDATE users SET points = points + ? WHERE id = ? AND points + ? >= 0 RETURNING points',
+    amount, userId, amount,
+  );
+  if (!rows.length) throw new AppError(400, '포인트가 부족합니다.');
+  await db.run(
     'INSERT INTO point_logs (user_id, amount, balance, reason, match_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(userId, amount, balance, reason, matchId, iso());
+    userId, amount, rows[0].points, reason, matchId, iso(),
+  );
 }
 
 export function pointLogs(db, userId) {
-  return db.prepare('SELECT * FROM point_logs WHERE user_id = ? ORDER BY id DESC LIMIT 50').all(userId);
+  return db.all('SELECT * FROM point_logs WHERE user_id = ? ORDER BY id DESC LIMIT 50', userId);
 }
 
 // ───────────────────────── 매칭 신청 ─────────────────────────
@@ -202,58 +207,71 @@ export function compatibility(a, b) {
   };
 }
 
-export function pendingRequest(db, userId) {
-  return parseRequest(
-    db.prepare("SELECT * FROM match_requests WHERE user_id = ? AND status = 'pending'").get(userId),
-  ) ?? null;
+export async function pendingRequest(db, userId) {
+  return parseRequest(await db.get("SELECT * FROM match_requests WHERE user_id = ? AND status = 'pending'", userId));
 }
 
-export function createRequest(db, userId, input) {
+export async function createRequest(db, userId, input) {
   const req = validateRequest(input);
-  return tx(db, () => {
-    if (pendingRequest(db, userId)) throw new AppError(409, '이미 대기 중인 매칭 신청이 있어요.');
-    if (currentMatchRow(db, userId)) throw new AppError(409, '진행 중인 매칭이 있어요.');
-    if (req.deposit) adjustPoints(db, userId, -req.deposit, '보증금 예치');
-    const { lastInsertRowid } = db.prepare(
-      `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(userId, JSON.stringify(req.days), req.startTime, req.endTime, req.location,
-      JSON.stringify(req.styles), req.deposit, iso());
-    const match = tryMatch(db, Number(lastInsertRowid));
-    return { request: pendingRequest(db, userId), matchId: match?.id ?? null };
-  });
-}
-
-export function cancelRequest(db, userId) {
-  return tx(db, () => {
-    const req = pendingRequest(db, userId);
-    if (!req) throw new AppError(404, '대기 중인 매칭 신청이 없어요.');
-    db.prepare("UPDATE match_requests SET status = 'cancelled' WHERE id = ?").run(req.id);
-    if (req.deposit) adjustPoints(db, userId, req.deposit, '매칭 취소 보증금 반환');
-  });
-}
-
-function tryMatch(db, requestId) {
-  const req = parseRequest(db.prepare('SELECT * FROM match_requests WHERE id = ?').get(requestId));
-  const candidates = db.prepare(
-    "SELECT * FROM match_requests WHERE status = 'pending' AND user_id != ? ORDER BY id",
-  ).all(req.user_id).map(parseRequest);
-
-  let best = null;
-  for (const c of candidates) {
-    const compat = compatibility(req, c);
-    if (compat && (!best || compat.score > best.compat.score)) best = { c, compat };
+  try {
+    return await db.tx(async (t) => {
+      if (await pendingRequest(t, userId)) throw new AppError(409, '이미 대기 중인 매칭 신청이 있어요.');
+      if (await currentMatchRow(t, userId)) throw new AppError(409, '진행 중인 매칭이 있어요.');
+      if (req.deposit) await adjustPoints(t, userId, -req.deposit, '보증금 예치');
+      const { rows } = await t.run(
+        `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        userId, JSON.stringify(req.days), req.startTime, req.endTime, req.location,
+        JSON.stringify(req.styles), req.deposit, iso(),
+      );
+      const match = await tryMatch(t, rows[0].id);
+      return { request: await pendingRequest(t, userId), matchId: match?.id ?? null };
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new AppError(409, '이미 대기 중인 매칭 신청이 있어요.');
+    throw err;
   }
-  if (!best) return null;
+}
 
-  db.prepare("UPDATE match_requests SET status = 'matched' WHERE id IN (?, ?)").run(req.id, best.c.id);
-  return createMatch(db, {
-    userA: best.c.user_id, // 먼저 기다리던 사람이 A
-    userB: req.user_id,
-    stakeA: best.c.deposit,
-    stakeB: req.deposit,
-    terms: best.compat,
+export async function cancelRequest(db, userId) {
+  return db.tx(async (t) => {
+    const { rows } = await t.run(
+      "UPDATE match_requests SET status = 'cancelled' WHERE user_id = ? AND status = 'pending' RETURNING deposit",
+      userId,
+    );
+    if (!rows.length) throw new AppError(404, '대기 중인 매칭 신청이 없어요.');
+    if (rows[0].deposit) await adjustPoints(t, userId, rows[0].deposit, '매칭 취소 보증금 반환');
   });
+}
+
+async function tryMatch(db, requestId) {
+  const req = parseRequest(await db.get('SELECT * FROM match_requests WHERE id = ?', requestId));
+  const candidates = (await db.all(
+    "SELECT * FROM match_requests WHERE status = 'pending' AND user_id != ? AND location = ? ORDER BY id",
+    req.user_id, req.location,
+  )).map(parseRequest);
+
+  const ranked = candidates
+    .map((c) => ({ c, compat: compatibility(req, c) }))
+    .filter((x) => x.compat)
+    .sort((x, y) => y.compat.score - x.compat.score || x.c.id - y.c.id);
+
+  for (const { c, compat } of ranked) {
+    // 다른 사람이 같은 상대를 먼저 데려갔으면 다음 후보로 넘어간다.
+    const claimed = await db.run(
+      "UPDATE match_requests SET status = 'matched' WHERE id = ? AND status = 'pending'", c.id,
+    );
+    if (!claimed.changes) continue;
+    await db.run("UPDATE match_requests SET status = 'matched' WHERE id = ?", req.id);
+    return createMatch(db, {
+      userA: c.user_id, // 먼저 기다리던 사람이 A
+      userB: req.user_id,
+      stakeA: c.deposit,
+      stakeB: req.deposit,
+      terms: compat,
+    });
+  }
+  return null;
 }
 
 // 이번 주 약속 날짜를 계산한다. 오늘부터 7일이 기본이고,
@@ -282,58 +300,60 @@ export function planWeek(days, startTime, endTime) {
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const makeCode = () => Array.from(crypto.randomBytes(6), (b) => CODE_CHARS[b % CODE_CHARS.length]).join('');
 
-function createMatch(db, { userA, userB, stakeA, stakeB, terms, prevMatchId = null }) {
+async function createMatch(db, { userA, userB, stakeA, stakeB, terms, prevMatchId = null }) {
   const stake = Math.min(stakeA, stakeB);
   const { weekStart, weekEnd, dates } = planWeek(terms.days, terms.startTime, terms.endTime);
-  const { lastInsertRowid } = db.prepare(
+  const { rows } = await db.run(
     `INSERT INTO matches (user_a, user_b, days, start_time, end_time, location, styles, stake,
                           week_start, week_end, prev_match_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(userA, userB, JSON.stringify(terms.days), terms.startTime, terms.endTime, terms.location,
-    JSON.stringify(terms.styles), stake, weekStart, weekEnd, prevMatchId, iso());
-  const matchId = Number(lastInsertRowid);
-
-  if (stakeA > stake) adjustPoints(db, userA, stakeA - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
-  if (stakeB > stake) adjustPoints(db, userB, stakeB - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
-
-  const insert = db.prepare(
-    'INSERT INTO appointments (match_id, date, start_time, end_time, code) VALUES (?, ?, ?, ?, ?)',
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    userA, userB, JSON.stringify(terms.days), terms.startTime, terms.endTime, terms.location,
+    JSON.stringify(terms.styles), stake, weekStart, weekEnd, prevMatchId, iso(),
   );
-  for (const date of dates) insert.run(matchId, date, terms.startTime, terms.endTime, makeCode());
+  const matchId = rows[0].id;
 
+  if (stakeA > stake) await adjustPoints(db, userA, stakeA - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
+  if (stakeB > stake) await adjustPoints(db, userB, stakeB - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
+
+  for (const date of dates) {
+    await db.run(
+      'INSERT INTO appointments (match_id, date, start_time, end_time, code) VALUES (?, ?, ?, ?, ?)',
+      matchId, date, terms.startTime, terms.endTime, makeCode(),
+    );
+  }
   return getMatchRow(db, matchId);
 }
 
 // ───────────────────────── 매칭 조회 ─────────────────────────
 
-const getMatchRow = (db, id) => parseMatch(db.prepare('SELECT * FROM matches WHERE id = ?').get(id));
+const getMatchRow = async (db, id) => parseMatch(await db.get('SELECT * FROM matches WHERE id = ?', id));
 
-function currentMatchRow(db, userId) {
-  return parseMatch(db.prepare(
+async function currentMatchRow(db, userId) {
+  return parseMatch(await db.get(
     `SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status IN ('active', 'reported')
      ORDER BY id DESC LIMIT 1`,
-  ).get(userId, userId)) ?? null;
+    userId, userId,
+  ));
 }
 
 const mateOf = (m, userId) => (m.user_a === userId ? m.user_b : m.user_a);
 const isMember = (m, userId) => m && (m.user_a === userId || m.user_b === userId);
 
-function loadMatchForUser(db, userId, matchId) {
-  const m = getMatchRow(db, matchId);
+async function loadMatchForUser(db, userId, matchId) {
+  const m = await getMatchRow(db, matchId);
   if (!isMember(m, userId)) throw new AppError(404, '매칭을 찾을 수 없어요.');
   return m;
 }
 
-// 약속 주간이 끝났으면 자동으로 리포트를 만든다.
-export function autoSettle(db) {
-  const due = db.prepare("SELECT id FROM matches WHERE status = 'active' AND week_end < ?").all(T.today());
-  for (const { id } of due) settleMatch(db, id);
+// 약속 주간이 끝난 매칭의 리포트를 만든다. (크론 + 조회할 때마다)
+export async function autoSettle(db) {
+  const due = await db.all("SELECT id FROM matches WHERE status = 'active' AND week_end < ?", T.today());
+  for (const { id } of due) await settleMatch(db, id);
+  return due.length;
 }
 
-function attendanceOf(db, appointmentId, userId) {
-  return db.prepare('SELECT * FROM attendance WHERE appointment_id = ? AND user_id = ?')
-    .get(appointmentId, userId) ?? null;
-}
+const attendanceOf = (db, appointmentId, userId) =>
+  db.get('SELECT * FROM attendance WHERE appointment_id = ? AND user_id = ?', appointmentId, userId);
 
 // 아직 '공부 종료'를 누르지 않은 기록의 공부시간 추정: 입실 ~ min(약속 종료, 지금)
 function studiedMinutes(att, appt) {
@@ -343,14 +363,6 @@ function studiedMinutes(att, appt) {
   return Math.max(0, Math.round((end - new Date(att.checked_in_at).getTime()) / 60000));
 }
 
-function appointmentStatus(appt, att, demo) {
-  if (att) return att.checked_out_at ? 'done' : 'studying';
-  const nowT = T.now();
-  if (T.at(appt.date, appt.end_time) <= nowT) return 'missed';
-  if (demo || isCheckinWindow(appt)) return 'open';
-  return 'scheduled';
-}
-
 function isCheckinWindow(appt) {
   const nowT = T.now().getTime();
   const open = T.at(appt.date, appt.start_time).getTime() - CHECKIN_EARLY_MIN * 60000;
@@ -358,13 +370,24 @@ function isCheckinWindow(appt) {
   return nowT >= open && nowT < close;
 }
 
-export function matchDetail(db, userId, m, { demo = false } = {}) {
+function appointmentStatus(appt, att, demo) {
+  if (att) return att.checked_out_at ? 'done' : 'studying';
+  if (T.at(appt.date, appt.end_time) <= T.now()) return 'missed';
+  if (demo || isCheckinWindow(appt)) return 'open';
+  return 'scheduled';
+}
+
+export async function matchDetail(db, userId, m, { demo = false } = {}) {
   const mateId = mateOf(m, userId);
-  const appts = db.prepare('SELECT * FROM appointments WHERE match_id = ? ORDER BY date').all(m.id);
+  const appts = await db.all('SELECT * FROM appointments WHERE match_id = ? ORDER BY date', m.id);
+  const atts = await db.all(
+    'SELECT a.* FROM attendance a JOIN appointments p ON p.id = a.appointment_id WHERE p.match_id = ?', m.id,
+  );
+  const find = (apptId, uid) => atts.find((a) => a.appointment_id === apptId && a.user_id === uid) ?? null;
 
   const appointments = appts.map((a) => {
-    const mine = attendanceOf(db, a.id, userId);
-    const mates = attendanceOf(db, a.id, mateId);
+    const mine = find(a.id, userId);
+    const mates = find(a.id, mateId);
     return {
       id: a.id,
       date: a.date,
@@ -405,8 +428,8 @@ export function matchDetail(db, userId, m, { demo = false } = {}) {
     stake: m.stake,
     weekStart: m.week_start,
     weekEnd: m.week_end,
-    round: countRounds(db, m),
-    mate: publicUser(getUser(db, mateId)),
+    round: await countRounds(db, m),
+    mate: publicUser(await getUser(db, mateId)),
     appointments,
     week,
     stats: { me: summarize('me'), mate: summarize('mate') },
@@ -416,68 +439,78 @@ export function matchDetail(db, userId, m, { demo = false } = {}) {
   };
 }
 
-function countRounds(db, m) {
+async function countRounds(db, m) {
   let n = 1;
   let prev = m.prev_match_id;
   while (prev) {
     n++;
-    prev = db.prepare('SELECT prev_match_id FROM matches WHERE id = ?').get(prev)?.prev_match_id;
+    prev = (await db.get('SELECT prev_match_id FROM matches WHERE id = ?', prev))?.prev_match_id;
   }
   return n;
 }
 
-export function currentMatch(db, userId, opts) {
-  autoSettle(db);
-  const m = currentMatchRow(db, userId);
+export async function currentMatch(db, userId, opts) {
+  await autoSettle(db);
+  const m = await currentMatchRow(db, userId);
   return m ? matchDetail(db, userId, m, opts) : null;
 }
 
-export function matchHistory(db, userId) {
-  return db.prepare(
+export async function matchHistory(db, userId) {
+  const rows = await db.all(
     `SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status = 'closed' ORDER BY id DESC LIMIT 20`,
-  ).all(userId, userId).map((row) => {
+    userId, userId,
+  );
+  const out = [];
+  for (const row of rows) {
     const m = parseMatch(row);
     const mateId = mateOf(m, userId);
-    return {
+    out.push({
       id: m.id,
       weekStart: m.week_start,
       weekEnd: m.week_end,
       location: m.location,
-      mate: publicUser(getUser(db, mateId)),
+      mate: publicUser(await getUser(db, mateId)),
       report: m.report && { me: m.report.users[userId], mate: m.report.users[mateId] },
-    };
-  });
+    });
+  }
+  return out;
 }
 
-export function homeState(db, userId, opts) {
+export async function homeState(db, userId, opts) {
+  const match = await currentMatch(db, userId, opts);
   return {
-    user: privateUser(getUser(db, userId)),
-    pendingRequest: pendingRequest(db, userId),
-    match: currentMatch(db, userId, opts),
+    user: privateUser(await getUser(db, userId)),
+    pendingRequest: await pendingRequest(db, userId),
+    match,
   };
 }
 
 // ───────────────────────── 출석 ─────────────────────────
 
-function loadAppointment(db, userId, appointmentId) {
-  const appt = db.prepare('SELECT * FROM appointments WHERE id = ?').get(appointmentId);
+async function loadAppointment(db, userId, appointmentId) {
+  const appt = await db.get('SELECT * FROM appointments WHERE id = ?', appointmentId);
   if (!appt) throw new AppError(404, '약속을 찾을 수 없어요.');
-  const m = loadMatchForUser(db, userId, appt.match_id);
+  const m = await loadMatchForUser(db, userId, appt.match_id);
   return { appt, m };
 }
 
-export function appointmentForQr(db, userId, appointmentId) {
-  return loadAppointment(db, userId, appointmentId).appt;
+export async function appointmentForQr(db, userId, appointmentId) {
+  return (await loadAppointment(db, userId, appointmentId)).appt;
 }
 
-export function checkIn(db, userId, appointmentId, { method, code }, { demo = false } = {}) {
-  return tx(db, () => {
-    const { appt, m } = loadAppointment(db, userId, appointmentId);
+const insertAttendance = (db, appointmentId, userId, method) => db.run(
+  `INSERT INTO attendance (appointment_id, user_id, method, checked_in_at) VALUES (?, ?, ?, ?)
+   ON CONFLICT (appointment_id, user_id) DO NOTHING`,
+  appointmentId, userId, method, iso(),
+);
+
+export async function checkIn(db, userId, appointmentId, { method, code }, { demo = false } = {}) {
+  return db.tx(async (t) => {
+    const { appt, m } = await loadAppointment(t, userId, appointmentId);
     if (m.status !== 'active') throw new AppError(400, '이미 마감된 주간이에요.');
     if (!demo && !isCheckinWindow(appt)) {
       throw new AppError(400, `출석은 약속 시작 ${CHECKIN_EARLY_MIN}분 전부터 종료 시각까지 할 수 있어요.`);
     }
-    if (attendanceOf(db, appt.id, userId)) throw new AppError(409, '이미 출석했어요.');
     if (method === 'qr') {
       if (String(code ?? '').trim().toUpperCase() !== appt.code) {
         throw new AppError(400, 'QR 코드가 이 약속과 일치하지 않아요.');
@@ -485,37 +518,38 @@ export function checkIn(db, userId, appointmentId, { method, code }, { demo = fa
     } else if (method !== 'self') {
       throw new AppError(400, '출석 방식이 올바르지 않습니다.');
     }
-    db.prepare(
-      'INSERT INTO attendance (appointment_id, user_id, method, checked_in_at) VALUES (?, ?, ?, ?)',
-    ).run(appt.id, userId, method, iso());
+    const { changes } = await insertAttendance(t, appt.id, userId, method);
+    if (!changes) throw new AppError(409, '이미 출석했어요.');
 
     // 데모용 메이트(봇)는 사용자가 출석하면 함께 출석한다.
-    const mate = getUser(db, mateOf(m, userId));
-    if (mate.is_bot && !attendanceOf(db, appt.id, mate.id)) {
-      db.prepare(
-        'INSERT INTO attendance (appointment_id, user_id, method, checked_in_at) VALUES (?, ?, ?, ?)',
-      ).run(appt.id, mate.id, 'qr', iso());
-    }
+    const mate = await getUser(t, mateOf(m, userId));
+    if (mate.is_bot) await insertAttendance(t, appt.id, mate.id, 'qr');
   });
 }
 
-export function checkOut(db, userId, appointmentId, { demo = false } = {}) {
-  return tx(db, () => {
-    const { appt, m } = loadAppointment(db, userId, appointmentId);
-    const att = attendanceOf(db, appt.id, userId);
+export async function checkOut(db, userId, appointmentId, { demo = false } = {}) {
+  return db.tx(async (t) => {
+    const { appt, m } = await loadAppointment(t, userId, appointmentId);
+    const att = await attendanceOf(t, appt.id, userId);
     if (!att) throw new AppError(400, '먼저 출석해 주세요.');
     if (att.checked_out_at) throw new AppError(409, '이미 공부를 마쳤어요.');
     const nowT = T.now().getTime();
     // 데모 모드에서는 약속 시간과 상관없이 실제 경과 시간을 기록한다.
     const end = demo ? nowT : Math.min(nowT, T.at(appt.date, appt.end_time).getTime());
     const minutes = Math.max(0, Math.round((end - new Date(att.checked_in_at).getTime()) / 60000));
-    db.prepare('UPDATE attendance SET checked_out_at = ?, minutes = ? WHERE id = ?').run(iso(), minutes, att.id);
+    const { changes } = await t.run(
+      'UPDATE attendance SET checked_out_at = ?, minutes = ? WHERE id = ? AND checked_out_at IS NULL',
+      iso(), minutes, att.id,
+    );
+    if (!changes) throw new AppError(409, '이미 공부를 마쳤어요.');
 
-    const mate = getUser(db, mateOf(m, userId));
-    const mateAtt = attendanceOf(db, appt.id, mate.id);
-    if (mate.is_bot && mateAtt && !mateAtt.checked_out_at) {
-      db.prepare('UPDATE attendance SET checked_out_at = ?, minutes = ? WHERE id = ?')
-        .run(iso(), minutes, mateAtt.id);
+    const mate = await getUser(t, mateOf(m, userId));
+    if (mate.is_bot) {
+      await t.run(
+        `UPDATE attendance SET checked_out_at = ?, minutes = ?
+         WHERE appointment_id = ? AND user_id = ? AND checked_out_at IS NULL`,
+        iso(), minutes, appt.id, mate.id,
+      );
     }
     return { minutes };
   });
@@ -523,23 +557,25 @@ export function checkOut(db, userId, appointmentId, { demo = false } = {}) {
 
 // ───────────────────────── 주간 정산 / 리포트 ─────────────────────────
 
-export function settleMatch(db, matchId) {
-  return tx(db, () => {
-    const m = getMatchRow(db, matchId);
-    if (m.status !== 'active') return m;
-    const appts = db.prepare('SELECT * FROM appointments WHERE match_id = ?').all(m.id);
+export async function settleMatch(db, matchId) {
+  return db.tx(async (t) => {
+    // 먼저 상태를 바꿔 자리를 차지한다. 다른 요청이 이미 정산했다면 아무것도 하지 않는다.
+    const claimed = await t.run("UPDATE matches SET status = 'reported' WHERE id = ? AND status = 'active'", matchId);
+    if (!claimed.changes) return getMatchRow(t, matchId);
+    const m = await getMatchRow(t, matchId);
+    const appts = await t.all('SELECT * FROM appointments WHERE match_id = ?', m.id);
 
-    const stat = (uid) => {
+    const stat = async (uid) => {
       let attended = 0;
       let minutes = 0;
       for (const a of appts) {
-        const att = attendanceOf(db, a.id, uid);
+        const att = await attendanceOf(t, a.id, uid);
         if (!att) continue;
         attended++;
         const mins = studiedMinutes(att, a);
         minutes += mins;
         if (!att.checked_out_at) {
-          db.prepare('UPDATE attendance SET checked_out_at = ?, minutes = ? WHERE id = ?').run(iso(), mins, att.id);
+          await t.run('UPDATE attendance SET checked_out_at = ?, minutes = ? WHERE id = ?', iso(), mins, att.id);
         }
       }
       const total = appts.length;
@@ -547,7 +583,7 @@ export function settleMatch(db, matchId) {
         kept: attended >= total };
     };
 
-    const users = { [m.user_a]: stat(m.user_a), [m.user_b]: stat(m.user_b) };
+    const users = { [m.user_a]: await stat(m.user_a), [m.user_b]: await stat(m.user_b) };
 
     for (const [uid, mid] of [[m.user_a, m.user_b], [m.user_b, m.user_a]]) {
       const me = users[uid];
@@ -555,10 +591,10 @@ export function settleMatch(db, matchId) {
       if (!m.stake) {
         me.deposit = { result: 'none', amount: 0 };
       } else if (me.kept) {
-        adjustPoints(db, uid, m.stake, '약속 이행 · 보증금 반환', m.id);
+        await adjustPoints(t, uid, m.stake, '약속 이행 · 보증금 반환', m.id);
         me.deposit = { result: 'refunded', amount: m.stake };
       } else if (mate.kept) {
-        adjustPoints(db, mid, m.stake, '메이트 약속 미이행 보상', m.id);
+        await adjustPoints(t, mid, m.stake, '메이트 약속 미이행 보상', m.id);
         me.deposit = { result: 'to_mate', amount: m.stake };
       } else {
         me.deposit = { result: 'forfeited', amount: m.stake };
@@ -569,53 +605,56 @@ export function settleMatch(db, matchId) {
     }
 
     const report = { generatedAt: iso(), users };
-    db.prepare("UPDATE matches SET status = 'reported', report = ? WHERE id = ?").run(JSON.stringify(report), m.id);
+    await t.run('UPDATE matches SET report = ? WHERE id = ?', JSON.stringify(report), m.id);
 
     // 데모용 봇은 항상 '계속하기'를 고른다.
     for (const [uid, col] of [[m.user_a, 'choice_a'], [m.user_b, 'choice_b']]) {
-      if (getUser(db, uid).is_bot) db.prepare(`UPDATE matches SET ${col} = 'continue' WHERE id = ?`).run(m.id);
+      if ((await getUser(t, uid)).is_bot) await t.run(`UPDATE matches SET ${col} = 'continue' WHERE id = ?`, m.id);
     }
-    return getMatchRow(db, m.id);
+    return getMatchRow(t, m.id);
   });
 }
 
 // 데모 모드에서 주간을 즉시 마감한다.
-export function forceSettle(db, userId, matchId) {
-  const m = loadMatchForUser(db, userId, matchId);
+export async function forceSettle(db, userId, matchId) {
+  const m = await loadMatchForUser(db, userId, matchId);
   if (m.status !== 'active') throw new AppError(400, '이미 마감된 주간이에요.');
-  settleMatch(db, m.id);
+  await settleMatch(db, m.id);
 }
 
-export function chooseNext(db, userId, matchId, choice) {
+export async function chooseNext(db, userId, matchId, choice) {
   if (!['continue', 'new'].includes(choice)) throw new AppError(400, '선택이 올바르지 않습니다.');
-  return tx(db, () => {
-    const m = loadMatchForUser(db, userId, matchId);
-    if (m.status !== 'reported') throw new AppError(400, '리포트가 나온 뒤에 선택할 수 있어요.');
+  return db.tx(async (t) => {
+    const m = await loadMatchForUser(t, userId, matchId);
     const col = m.user_a === userId ? 'choice_a' : 'choice_b';
-    db.prepare(`UPDATE matches SET ${col} = ? WHERE id = ?`).run(choice, m.id);
-    const updated = getMatchRow(db, m.id);
+    // UPDATE ... RETURNING 으로 행을 잠그고 최신 상태를 읽는다. (둘이 동시에 골라도 한쪽이 반드시 상대 선택을 본다)
+    const { rows } = await t.run(
+      `UPDATE matches SET ${col} = ? WHERE id = ? AND status = 'reported' RETURNING *`, choice, m.id,
+    );
+    if (!rows.length) throw new AppError(400, '리포트가 나온 뒤에 선택할 수 있어요.');
+    const updated = parseMatch(rows[0]);
 
-    if (choice === 'new' || updated.choice_a === 'new' || updated.choice_b === 'new') {
-      closeMatch(db, updated);
+    if (updated.choice_a === 'new' || updated.choice_b === 'new') {
+      await closeMatch(t, updated);
       return { next: 'new' };
     }
     if (updated.choice_a === 'continue' && updated.choice_b === 'continue') {
-      closeMatch(db, updated);
-      const next = continueMatch(db, updated);
+      await closeMatch(t, updated);
+      const next = await continueMatch(t, updated);
       return { next: 'continue', matchId: next.id };
     }
     return { next: 'waiting' };
   });
 }
 
-function continueMatch(db, m) {
+async function continueMatch(db, m) {
   // 이전 주와 같은 보증금을 다시 건다. 둘 중 한 명이라도 포인트가 부족하면 보증금 없이 진행.
   let stake = m.stake;
-  const canPay = (uid) => getUser(db, uid).points >= stake;
-  if (stake && (!canPay(m.user_a) || !canPay(m.user_b))) stake = 0;
+  const canPay = async (uid) => (await getUser(db, uid)).points >= stake;
+  if (stake && (!(await canPay(m.user_a)) || !(await canPay(m.user_b)))) stake = 0;
   if (stake) {
-    adjustPoints(db, m.user_a, -stake, '보증금 예치 (재매칭)', m.id);
-    adjustPoints(db, m.user_b, -stake, '보증금 예치 (재매칭)', m.id);
+    await adjustPoints(db, m.user_a, -stake, '보증금 예치 (재매칭)', m.id);
+    await adjustPoints(db, m.user_b, -stake, '보증금 예치 (재매칭)', m.id);
   }
   return createMatch(db, {
     userA: m.user_a,
@@ -627,23 +666,23 @@ function continueMatch(db, m) {
   });
 }
 
-function closeMatch(db, m) {
-  db.prepare("UPDATE matches SET status = 'closed' WHERE id = ?").run(m.id);
+async function closeMatch(db, m) {
+  await db.run("UPDATE matches SET status = 'closed' WHERE id = ?", m.id);
   // 매칭이 끝난 봇은 다시 매칭 대기열에 들어간다.
-  for (const uid of [m.user_a, m.user_b]) requeueBot(db, uid);
+  for (const uid of [m.user_a, m.user_b]) await requeueBot(db, uid);
 }
 
-export function requeueBot(db, userId) {
-  const u = getUser(db, userId);
+export async function requeueBot(db, userId) {
+  const u = await getUser(db, userId);
   if (!u.is_bot || !u.bot_template) return;
-  if (pendingRequest(db, userId) || currentMatchRow(db, userId)) return;
+  if (await pendingRequest(db, userId) || await currentMatchRow(db, userId)) return;
   const t = JSON.parse(u.bot_template);
-  if (t.deposit) adjustPoints(db, userId, -t.deposit, '보증금 예치');
-  db.prepare(
+  if (t.deposit) await adjustPoints(db, userId, -t.deposit, '보증금 예치');
+  await db.run(
     `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(userId, JSON.stringify(t.days), t.startTime, t.endTime, t.location, JSON.stringify(t.styles),
-    t.deposit, iso());
+    userId, JSON.stringify(t.days), t.startTime, t.endTime, t.location, JSON.stringify(t.styles), t.deposit, iso(),
+  );
 }
 
 // ───────────────────────── 채팅 ─────────────────────────
@@ -669,25 +708,26 @@ function botReply(text) {
   return hit ? hit[1] : BOT_REPLIES[crypto.randomInt(BOT_REPLIES.length)];
 }
 
-export function listMessages(db, userId, matchId, afterId = 0) {
-  loadMatchForUser(db, userId, matchId);
-  return db.prepare(
-    'SELECT id, user_id AS userId, body, created_at AS createdAt FROM messages WHERE match_id = ? AND id > ? ORDER BY id',
-  ).all(matchId, Number(afterId) || 0);
+export async function listMessages(db, userId, matchId, afterId = 0) {
+  await loadMatchForUser(db, userId, matchId);
+  return db.all(
+    'SELECT id, user_id AS "userId", body, created_at AS "createdAt" FROM messages WHERE match_id = ? AND id > ? ORDER BY id',
+    matchId, Number(afterId) || 0,
+  );
 }
 
-export function sendMessage(db, userId, matchId, body) {
+export async function sendMessage(db, userId, matchId, body) {
   const text = String(body ?? '').trim();
   if (!text) throw new AppError(400, '메시지를 입력해 주세요.');
   if (text.length > 500) throw new AppError(400, '메시지는 500자까지 보낼 수 있어요.');
-  return tx(db, () => {
-    const m = loadMatchForUser(db, userId, matchId);
+  return db.tx(async (t) => {
+    const m = await loadMatchForUser(t, userId, matchId);
     if (m.status === 'closed') throw new AppError(400, '종료된 매칭이에요.');
-    const insert = db.prepare('INSERT INTO messages (match_id, user_id, body, created_at) VALUES (?, ?, ?, ?)');
-    insert.run(m.id, userId, text, iso());
-    const mate = getUser(db, mateOf(m, userId));
-    if (mate.is_bot) {
-      insert.run(m.id, mate.id, botReply(text), iso());
-    }
+    const insert = (uid, msg) => t.run(
+      'INSERT INTO messages (match_id, user_id, body, created_at) VALUES (?, ?, ?, ?)', m.id, uid, msg, iso(),
+    );
+    await insert(userId, text);
+    const mate = await getUser(t, mateOf(m, userId));
+    if (mate.is_bot) await insert(mate.id, botReply(text));
   });
 }
