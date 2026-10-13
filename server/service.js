@@ -656,6 +656,19 @@ const BOT_REPLIES = [
   '끝나고 공부한 거 서로 공유해요 ✍️',
 ];
 
+// 빠른 연락 메시지에는 상황에 맞게 답한다.
+const BOT_CONTEXT_REPLIES = [
+  [/늦을|지연/, '괜찮아요! 천천히 조심히 오세요 :)'],
+  [/도착|접속/, '저도 거의 다 왔어요! 곧 봬요 🙌'],
+  [/쉬었다|쉬는/, '좋아요! 10분 뒤에 다시 시작해요 ☕'],
+  [/수고/, '저도요! 다음 약속 때 또 봬요 👋'],
+];
+
+function botReply(text) {
+  const hit = BOT_CONTEXT_REPLIES.find(([re]) => re.test(text));
+  return hit ? hit[1] : BOT_REPLIES[crypto.randomInt(BOT_REPLIES.length)];
+}
+
 export function listMessages(db, userId, matchId, afterId = 0) {
   loadMatchForUser(db, userId, matchId);
   return db.prepare(
@@ -674,7 +687,7 @@ export function sendMessage(db, userId, matchId, body) {
     insert.run(m.id, userId, text, iso());
     const mate = getUser(db, mateOf(m, userId));
     if (mate.is_bot) {
-      insert.run(m.id, mate.id, BOT_REPLIES[crypto.randomInt(BOT_REPLIES.length)], iso());
+      insert.run(m.id, mate.id, botReply(text), iso());
     }
   });
 }

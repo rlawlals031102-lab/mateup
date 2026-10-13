@@ -40,6 +40,16 @@ const todayStr = () => {
 };
 
 async function api(path, { method = 'GET', body } = {}) {
+  // 단독 실행 HTML(npm run build:standalone)에서는 브라우저 안의 가짜 서버를 쓴다.
+  if (window.__mockApi) {
+    const { status, data } = await window.__mockApi(path, { method, body });
+    if (status >= 400) {
+      const err = new Error(data.error || '요청을 처리하지 못했어요.');
+      err.status = status;
+      throw err;
+    }
+    return data;
+  }
   const res = await fetch(`/api${path}`, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -71,7 +81,7 @@ function every(ms, fn) {
 function setTop({ title = '', back = null, brand = false, right = '' } = {}) {
   topbar.innerHTML = `
     <div>${back ? `<a class="icon-btn" href="${back}" aria-label="뒤로">‹</a>` : ''}</div>
-    ${brand ? '<div class="center"><span class="brand"><i>b</i>studybuddy.</span></div>' : `<h1>${esc(title)}</h1>`}
+    ${brand ? '<div class="center"><img class="logo" src="logo.png" alt="스터디버디"></div>' : `<h1>${esc(title)}</h1>`}
     <div>${right}</div>`;
 }
 
@@ -132,7 +142,7 @@ function authShell(inner) {
   topbar.innerHTML = '';
   view.innerHTML = `
     <div class="auth">
-      <span class="brand"><i>b</i>studybuddy.</span>
+      <img class="logo lg" src="logo.png" alt="스터디버디">
       ${inner}
     </div>`;
 }
@@ -468,7 +478,7 @@ function drawMatch(m, alive) {
           <p class="tiny muted mt">내 출석 코드</p>
           <div class="code">${esc(target.code)}</div>
         </div>
-        <div class="qr-box"><img src="/api/appointments/${target.id}/qr" alt="출석 QR 코드"></div>
+        <div class="qr-box"><img data-qr="${target.id}" alt="출석 QR 코드"></div>
       </div>
       <div class="btn-row mt">
         <button class="btn primary" id="scan" data-id="${target.id}">⌗ QR 스캔하기</button>
@@ -542,6 +552,11 @@ function drawMatch(m, alive) {
         <b>데모 모드</b> · 시간과 상관없이 출석할 수 있고, 주간을 바로 마감해 리포트를 볼 수 있어요.
         <button class="btn sm block mt" id="settle">이번 주 마감하고 리포트 받기</button>
       </div>` : ''}`;
+
+  $$('img[data-qr]').forEach(async (img) => {
+    const id = img.dataset.qr;
+    img.src = window.__mockQr ? await window.__mockQr(Number(id)).catch(() => '') : `/api/appointments/${id}/qr`;
+  });
 
   const timer = $('#timer');
   if (timer) {
@@ -751,15 +766,30 @@ async function renderChat(alive) {
     return;
   }
   setTop({ title: `${match.mate.avatar} ${match.mate.name}` });
+  const quick = quickMessages(match);
   view.innerHTML = `
     <div class="notice"><span>📌</span><span>${esc(match.location)} · ${match.days.map((d) => WD[d]).join('·')} ${fmtTime(match.startTime)}~${fmtTime(match.endTime)}</span></div>
     <div class="chat mt" id="chat"></div>
-    <form class="chat-input" id="send">
-      <input class="input" name="body" maxlength="500" placeholder="메시지를 입력하세요" autocomplete="off">
-      <button class="btn primary">전송</button>
-    </form>`;
+    <div class="chat-dock">
+      <div class="quick">
+        <div class="quick-head"><b>⚡ 메이트 빠른 연락</b><span>원클릭 알림</span></div>
+        <div class="quick-list" id="quick">
+          ${quick.map((q, i) => `
+            <button type="button" class="quick-card" data-i="${i}">
+              <span class="quick-icon">${q.icon}</span>
+              <span class="quick-text"><b>${esc(q.title)}</b><small>"${esc(q.body)}"</small></span>
+            </button>`).join('')}
+        </div>
+      </div>
+      <form class="chat-input" id="send">
+        <input class="input" name="body" maxlength="500" placeholder="메시지를 입력하세요" autocomplete="off">
+        <button class="btn primary">전송</button>
+      </form>
+    </div>`;
 
   const box = $('#chat');
+  // 하단 빠른 연락 + 입력창 높이만큼 비워 두어 마지막 메시지가 가려지지 않게 한다.
+  box.style.paddingBottom = `${$('.chat-dock').offsetHeight + 16}px`;
   let lastId = 0;
   const load = async () => {
     const { messages } = await api(`/matches/${match.id}/messages?after=${lastId}`);
@@ -777,6 +807,8 @@ async function renderChat(alive) {
   if (!box.children.length) box.innerHTML = `<p class="center small muted" id="hello">${esc(match.mate.name)}님께 먼저 인사해 보세요 👋</p>`;
   every(3000, () => load().catch(() => {}));
 
+  const send = (body) => api(`/matches/${match.id}/messages`, { method: 'POST', body: { body } }).then(load);
+
   $('#send').addEventListener('submit', async (e) => {
     e.preventDefault();
     const input = e.target.body;
@@ -784,13 +816,37 @@ async function renderChat(alive) {
     if (!body) return;
     input.value = '';
     try {
-      await api(`/matches/${match.id}/messages`, { method: 'POST', body: { body } });
-      await load();
+      await send(body);
     } catch (err) {
       toast(err.message, true);
       input.value = body;
     }
   });
+
+  $('#quick').addEventListener('click', async (e) => {
+    const card = e.target.closest('.quick-card');
+    if (!card || card.disabled) return;
+    const q = quick[Number(card.dataset.i)];
+    card.disabled = true;
+    try {
+      await send(q.body);
+      toast(`${q.icon} ${match.mate.name}님께 알림을 보냈어요.`);
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      card.disabled = false;
+    }
+  });
+}
+
+// 채팅 '메이트 빠른 연락' 원클릭 메시지
+function quickMessages(match) {
+  return [
+    { icon: '🚶', title: '도착 완료 알림', body: `${match.location}에 도착했어요! 먼저 자리 잡고 있을게요.` },
+    { icon: '⏰', title: '5분 지연 양해', body: '5분 정도 늦을 것 같아요. 죄송해요, 금방 갈게요!' },
+    { icon: '☕', title: '쉬는 시간 제안', body: '잠깐 10분 쉬었다 할까요?' },
+    { icon: '👋', title: '오늘 수고 인사', body: '오늘도 같이 공부해서 좋았어요. 수고 많으셨어요!' },
+  ];
 }
 
 // ───────────────────────── 마이페이지 ─────────────────────────
@@ -837,7 +893,15 @@ async function renderMe(alive) {
         </div>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
     </section>
 
-    <button class="btn ghost block mt-lg danger" id="logout">로그아웃</button>`;
+    <button class="btn ghost block mt-lg danger" id="logout">로그아웃</button>
+    ${window.__mockReset ? '<button class="btn ghost block small muted" id="reset">이 브라우저의 데모 데이터 모두 지우기</button>' : ''}`;
+
+  $('#reset')?.addEventListener('click', () => {
+    if (!confirm('이 브라우저에 저장된 계정·매칭 기록을 모두 지우고 처음 상태로 돌아갈까요?')) return;
+    window.__mockReset();
+    location.hash = '#/login';
+    location.reload();
+  });
 
   $('#logout').addEventListener('click', async () => {
     await api('/auth/logout', { method: 'POST' }).catch(() => {});

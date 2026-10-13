@@ -51,8 +51,9 @@ a { color: inherit; }
 .topbar h1 { font-size: 17px; font-weight: 800; text-align: center; letter-spacing: -.02em; }
 .topbar .icon-btn { width: 40px; height: 40px; border: 0; background: none; border-radius: 10px; font-size: 22px; display: grid; place-items: center; text-decoration: none; }
 .topbar .icon-btn:hover { background: var(--soft); }
-.brand { display: inline-flex; align-items: center; gap: 7px; font-weight: 800; font-size: 16px; color: var(--green); }
-.brand i { width: 26px; height: 26px; border-radius: 8px 8px 8px 2px; background: var(--green); color: var(--lime); display: grid; place-items: center; font-style: normal; font-size: 15px; }
+/* 한 줄 로고 (public/logo.png, 투명 배경) */
+.logo { display: block; height: 34px; width: auto; max-width: 100%; margin: 0 auto; }
+.logo.lg { height: auto; width: min(100%, 340px); margin: 0; }
 
 .view { flex: 1; padding: 8px 16px calc(var(--tabbar-h) + 28px); }
 .view.no-tabs { padding-bottom: 32px; }
@@ -221,12 +222,30 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 .minus { color: var(--red); font-weight: 800; }
 
 /* ── 채팅 ── */
-.chat { display: flex; flex-direction: column; gap: 8px; padding-bottom: 72px; }
+.chat { display: flex; flex-direction: column; gap: 8px; padding-bottom: 300px; }
 .bubble { max-width: 78%; padding: 9px 13px; border-radius: 16px; font-size: 14.5px; white-space: pre-wrap; word-break: break-word; }
 .bubble.me { align-self: flex-end; background: var(--green); color: #fff; border-bottom-right-radius: 4px; }
 .bubble.mate { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .bubble time { display: block; font-size: 10.5px; opacity: .65; margin-top: 2px; }
-.chat-input { position: fixed; bottom: var(--tabbar-h); left: 50%; transform: translateX(-50%); width: 100%; max-width: 440px; display: flex; gap: 8px; padding: 10px 12px; background: var(--paper); border-top: 1px solid var(--line); z-index: 6; }
+.chat-dock { position: fixed; bottom: var(--tabbar-h); left: 50%; transform: translateX(-50%); width: 100%; max-width: 440px; background: var(--paper); border-top: 1px solid var(--line); z-index: 6; }
+.chat-input { display: flex; gap: 8px; padding: 8px 12px 10px; }
+
+.quick { padding: 10px 0 0; }
+.quick-head { display: flex; align-items: center; justify-content: space-between; padding: 0 14px 8px; font-size: 13.5px; }
+.quick-head span { font-size: 12px; font-weight: 700; color: var(--green-2); }
+.quick-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 12px 2px; }
+.quick-card {
+  min-width: 0; display: flex; align-items: flex-start; gap: 8px; text-align: left;
+  padding: 9px 10px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--surface);
+  transition: border-color .15s, transform .05s;
+}
+.quick-card:hover { border-color: var(--green); }
+.quick-card:active { transform: scale(.97); }
+.quick-card:disabled { opacity: .5; }
+.quick-icon { flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--soft); display: grid; place-items: center; font-size: 18px; }
+.quick-text { min-width: 0; }
+.quick-text b { display: block; font-size: 13.5px; }
+.quick-text small { display: block; font-size: 11.5px; line-height: 1.4; color: var(--muted); margin-top: 2px; word-break: keep-all; overflow-wrap: anywhere; }
 .chat-input .input { height: 44px; }
 .chat-input .btn { height: 44px; }
 

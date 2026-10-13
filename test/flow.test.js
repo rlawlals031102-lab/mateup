@@ -32,7 +32,7 @@ test('compatibility: 장소·요일·시간·스타일·보증금 조건', () =>
   assert.equal(c.endTime, '21:00');
   assert.deepEqual(c.styles, ['check']);
 
-  assert.equal(S.compatibility(a, { ...b, location: '온라인 (캠스터디)' }), null);
+  assert.equal(S.compatibility(a, { ...b, location: '정릉 근처 카페' }), null);
   assert.equal(S.compatibility(a, { ...b, days: [2] }), null);
   assert.equal(S.compatibility(a, { ...b, start_time: '20:30' }), null, '겹치는 시간 1시간 미만');
   assert.equal(S.compatibility(a, { ...b, styles: ['social'] }), null);

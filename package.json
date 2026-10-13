@@ -11,10 +11,15 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js --demo",
     "demo": "node server/index.js --demo",
-    "test": "node --test"
+    "test": "node --test",
+    "build:standalone": "node scripts/build-standalone.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12",
+    "sql.js": "1.13"
   }
 }
