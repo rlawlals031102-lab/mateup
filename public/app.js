@@ -1,0 +1,889 @@
+// 스터디버디 프론트엔드 — 빌드 도구 없는 단일 페이지 앱 (hash 라우팅)
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const view = $('#view');
+const topbar = $('#topbar');
+const tabbar = $('#tabbar');
+
+const WD = ['', '월', '화', '수', '목', '금', '토', '일'];
+const AVATARS = ['🙂', '😎', '🤓', '😺', '🐻', '🐰', '🦊', '🐼', '👩', '🧑', '👦', '👧', '👩‍🎓', '🧑‍💻', '🙋‍♀️', '🙋‍♂️', '🌱', '📚'];
+
+let OPTIONS = null;
+let timers = [];
+let routeToken = 0;
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const won = (n) => `${Number(n).toLocaleString('ko-KR')}`;
+
+function fmtDate(s, withWeekday = false) {
+  const [, m, d] = s.split('-').map(Number);
+  const wd = new Date(`${s}T00:00:00`).getDay();
+  return `${m}월 ${d}일${withWeekday ? ` (${WD[wd === 0 ? 7 : wd]})` : ''}`;
+}
+function fmtTime(t) {
+  const [h, m] = t.split(':').map(Number);
+  if (h === 24) return '자정';
+  const ap = h < 12 ? '오전' : '오후';
+  const hh = h % 12 === 0 ? 12 : h % 12;
+  return `${ap} ${hh}:${String(m).padStart(2, '0')}`;
+}
+function fmtMinutes(min) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (!h) return `${m}분`;
+  return m ? `${h}시간 ${m}분` : `${h}시간`;
+}
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+async function api(path, { method = 'GET', body } = {}) {
+  const res = await fetch(`/api${path}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: 'same-origin',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || '요청을 처리하지 못했어요.');
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+let toastTimer;
+function toast(msg, isError = false) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.className = `toast show${isError ? ' error' : ''}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, 2600);
+}
+
+function every(ms, fn) {
+  timers.push(setInterval(fn, ms));
+}
+
+function setTop({ title = '', back = null, brand = false, right = '' } = {}) {
+  topbar.innerHTML = `
+    <div>${back ? `<a class="icon-btn" href="${back}" aria-label="뒤로">‹</a>` : ''}</div>
+    ${brand ? '<div class="center"><span class="brand"><i>b</i>studybuddy.</span></div>' : `<h1>${esc(title)}</h1>`}
+    <div>${right}</div>`;
+}
+
+function setTabs(active) {
+  tabbar.hidden = !active;
+  view.classList.toggle('no-tabs', !active);
+  $$('a', tabbar).forEach((a) => a.classList.toggle('active', a.dataset.tab === active));
+}
+
+const loading = () => { view.innerHTML = '<div class="spinner"></div>'; };
+
+function styleLabels(keys) {
+  return keys.map((k) => OPTIONS.styles[k]?.label ?? k).join(' · ');
+}
+
+// ───────────────────────── 라우터 ─────────────────────────
+
+const routes = {
+  login: renderLogin,
+  signup: renderSignup,
+  home: renderHome,
+  apply: renderApply,
+  match: renderMatch,
+  chat: renderChat,
+  me: renderMe,
+  'me/edit': renderEditProfile,
+};
+
+async function router() {
+  timers.forEach(clearInterval);
+  timers = [];
+  closeModal();
+  const token = ++routeToken;
+  const name = location.hash.replace(/^#\/?/, '') || 'home';
+  window.scrollTo(0, 0);
+  const render = routes[name] ?? renderHome;
+  try {
+    if (!OPTIONS) OPTIONS = await api('/options');
+    await render(() => token === routeToken);
+  } catch (err) {
+    if (err.status === 401 && !['login', 'signup'].includes(name)) {
+      location.hash = '#/login';
+      return;
+    }
+    console.error(err);
+    view.innerHTML = `<div class="empty"><div class="em">⚠️</div><h3>문제가 생겼어요</h3><p>${esc(err.message)}</p></div>`;
+  }
+}
+
+window.addEventListener('hashchange', router);
+router();
+
+// ───────────────────────── 로그인 / 가입 ─────────────────────────
+
+function authShell(inner) {
+  setTop({});
+  setTabs(null);
+  topbar.innerHTML = '';
+  view.innerHTML = `
+    <div class="auth">
+      <span class="brand"><i>b</i>studybuddy.</span>
+      ${inner}
+    </div>`;
+}
+
+async function renderLogin() {
+  authShell(`
+    <h2>같은 시간에<br>함께 시작하는 공부</h2>
+    <p class="lead">1주일 단위 1:1 스터디 메이트 매칭, 스터디버디</p>
+    <form id="f" class="card">
+      <label class="field"><span>이메일</span><input class="input" name="email" type="email" autocomplete="email" required></label>
+      <label class="field"><span>비밀번호</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary block mt-lg">로그인</button>
+    </form>
+    <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a></p>`);
+  $('#f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    try {
+      await api('/auth/login', { method: 'POST', body: fd });
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+async function renderSignup() {
+  authShell(`
+    <h2>공부 약속이<br>지켜지는 구조</h2>
+    <p class="lead">가입하면 보증금으로 쓸 수 있는 50,000P를 드려요.</p>
+    <form id="f" class="card">
+      <label class="field"><span>이름 (닉네임)</span><input class="input" name="name" maxlength="20" required></label>
+      <label class="field"><span>나이</span><input class="input" name="age" type="number" min="14" max="100" inputmode="numeric"></label>
+      <label class="field"><span>이메일</span><input class="input" name="email" type="email" autocomplete="email" required></label>
+      <label class="field"><span>비밀번호 (6자 이상)</span><input class="input" name="password" type="password" minlength="6" autocomplete="new-password" required></label>
+      <button class="btn primary block mt-lg">가입하고 시작하기</button>
+    </form>
+    <p class="switch-link">이미 계정이 있나요? <a href="#/login">로그인</a></p>`);
+  $('#f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    try {
+      await api('/auth/signup', { method: 'POST', body: fd });
+      toast('환영해요! 이번 주 메이트를 찾아볼까요?');
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+// ───────────────────────── 홈 ─────────────────────────
+
+async function renderHome(alive) {
+  setTop({ brand: true });
+  setTabs('home');
+  loading();
+  const state = await api('/me');
+  if (!alive()) return;
+  const { user, pendingRequest: req, match } = state;
+
+  let main;
+  if (match?.status === 'reported') {
+    main = `
+      <div class="card lime">
+        <div class="card-head"><h2>📊 주간 리포트가 도착했어요</h2></div>
+        <p class="small">${esc(match.mate.name)}님과의 ${match.round}주차 결과를 확인하고, 다음 주를 골라 주세요.</p>
+        <a class="btn primary block mt" href="#/match">리포트 보기</a>
+      </div>`;
+  } else if (match) {
+    const next = match.appointments.find((a) => ['open', 'studying', 'scheduled'].includes(a.me.status));
+    main = `
+      <div class="card">
+        <div class="card-head"><h2>👥 이번 주 메이트</h2><span class="pill">${match.round}주차</span></div>
+        <div class="profile">
+          <div class="avatar">${esc(match.mate.avatar)}</div>
+          <div>
+            <div class="name">${esc(match.mate.name)}${match.mate.age ? `<small>(${match.mate.age}세)</small>` : ''}</div>
+            <div class="small muted">출석 ${match.stats.me.attended}/${match.stats.me.total} · 공부 ${fmtMinutes(match.stats.me.minutes)}</div>
+          </div>
+        </div>
+        ${next ? `
+          <div class="notice"><span>📅</span><span>다음 약속 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b> · ${esc(next.location)}</span></div>`
+        : '<div class="notice"><span>✅</span><span>이번 주 약속을 모두 마쳤어요. 주간이 끝나면 리포트가 도착해요.</span></div>'}
+        <a class="btn primary block mt" href="#/match">${next && ['open', 'studying'].includes(next.me.status) ? '지금 출석하러 가기' : '매칭 정보 보기'}</a>
+      </div>`;
+  } else if (req) {
+    main = `
+      <div class="card center">
+        <div class="pulse">🔍</div>
+        <h2 style="font-size:18px">조건이 맞는 메이트를 찾는 중</h2>
+        <p class="small muted mt">새 신청이 들어오면 바로 연결해 드릴게요.</p>
+        <div class="notice" style="text-align:left">
+          <span>📋</span>
+          <span>${req.days.map((d) => WD[d]).join('·')} · ${fmtTime(req.start_time)} ~ ${fmtTime(req.end_time)}<br>
+          ${esc(req.location)} · ${styleLabels(req.styles)}${req.deposit ? ` · 보증금 ${won(req.deposit)}원` : ''}</span>
+        </div>
+        <button class="btn ghost block mt danger" id="cancel">신청 취소하기</button>
+      </div>`;
+  } else {
+    main = `
+      <div class="card hero">
+        <h2 style="font-size:20px;line-height:1.4">이번 주, 같이 공부할<br>메이트를 찾아볼까요?</h2>
+        <p class="small muted mt">요일·시간·장소만 고르면 조건이 맞는 1:1 메이트와 연결돼요.</p>
+        <a class="btn lime block mt-lg" href="#/apply">매칭 신청하기 →</a>
+      </div>`;
+  }
+
+  view.innerHTML = `
+    <div class="row between mt">
+      <div>
+        <div class="small muted">안녕하세요,</div>
+        <div style="font-size:22px;font-weight:800">${esc(user.name)}님 👋</div>
+      </div>
+      <a href="#/me" class="pill lime" style="text-decoration:none">💰 ${won(user.points)}P</a>
+    </div>
+    ${main}
+    <div class="card">
+      <div class="card-head"><h2>스터디버디는 이렇게 진행돼요</h2></div>
+      <ol class="steps">
+        <li><b>매칭 신청</b><span class="small muted">요일·시간, 장소, 교류 방식을 고르면 1:1로 연결돼요.</span></li>
+        <li><b>약속 보증금 (선택)</b><span class="small muted">약속을 지키면 돌려받고, 어기면 지킨 메이트에게 보상으로 가요.</span></li>
+        <li><b>약속 이행</b><span class="small muted">1주일 동안 만나서 각자 공부하고 출석·공부시간을 기록해요.</span></li>
+        <li><b>주간 리포트와 재매칭</b><span class="small muted">같은 메이트와 계속할지, 새 메이트를 만날지 골라요.</span></li>
+      </ol>
+    </div>`;
+
+  $('#cancel')?.addEventListener('click', async () => {
+    if (!confirm('매칭 신청을 취소할까요? 걸어둔 보증금은 돌려드려요.')) return;
+    try {
+      await api('/requests/current', { method: 'DELETE' });
+      toast('신청을 취소했어요.');
+      router();
+    } catch (err) { toast(err.message, true); }
+  });
+
+  if (req) {
+    every(4000, async () => {
+      const s = await api('/me').catch(() => null);
+      if (s?.match && alive()) {
+        toast('🎉 메이트를 찾았어요!');
+        location.hash = '#/match';
+      }
+    });
+  }
+}
+
+// ───────────────────────── 매칭 신청 ─────────────────────────
+
+async function renderApply(alive) {
+  setTop({ title: '매칭 신청', back: '#/home' });
+  setTabs(null);
+  loading();
+  const { user, pendingRequest: req, match } = await api('/me');
+  if (!alive()) return;
+  if (req || match) {
+    toast(req ? '이미 매칭을 기다리는 중이에요.' : '진행 중인 매칭이 있어요.');
+    location.hash = req ? '#/home' : '#/match';
+    return;
+  }
+
+  const form = { days: new Set([1, 3, 5]), startTime: '19:00', endTime: '22:00', location: OPTIONS.locations[0], styles: new Set(), depositOn: false, deposit: 10000 };
+  const timeOpts = (sel) => {
+    let html = '';
+    for (let m = 6 * 60; m <= 24 * 60; m += 30) {
+      const t = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+      html += `<option value="${t}"${t === sel ? ' selected' : ''}>${fmtTime(t)}</option>`;
+    }
+    return html;
+  };
+
+  view.innerHTML = `
+    <section class="card">
+      <div class="card-head"><h2>👤 내 프로필</h2><a class="link" href="#/me/edit">수정하기 ›</a></div>
+      <div class="profile">
+        <div class="avatar">${esc(user.avatar)}</div>
+        <div>
+          <div class="name">${esc(user.name)}${user.age ? `<small>(${user.age}세)</small>` : ''}</div>
+          <div class="tags">${user.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('') || '<span class="small muted">태그를 추가하면 메이트가 나를 더 잘 알 수 있어요</span>'}</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>📅 공부 일정 및 장소 설정</h2></div>
+      <div class="field"><span>요일 선택</span>
+        <div class="day-picker" id="days">
+          ${[1, 2, 3, 4, 5, 6, 7].map((d) => `<button type="button" data-day="${d}" aria-pressed="${form.days.has(d)}">${WD[d]}</button>`).join('')}
+        </div>
+      </div>
+      <div class="field"><span>시간 설정</span>
+        <div class="time-range">
+          <select class="select" id="start">${timeOpts(form.startTime)}</select>
+          <span class="muted">~</span>
+          <select class="select" id="end">${timeOpts(form.endTime)}</select>
+        </div>
+      </div>
+      <label class="field"><span>장소 설정</span>
+        <select class="select" id="loc">${OPTIONS.locations.map((l) => `<option>${esc(l)}</option>`).join('')}</select>
+      </label>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>📖 공부 스타일 선택</h2><span class="hint">중복 선택 가능</span></div>
+      <div class="style-picker" id="styles">
+        ${Object.entries(OPTIONS.styles).map(([k, s], i) => `
+          <button type="button" data-style="${k}" aria-pressed="false">
+            <b>${'ABC'[i]}. ${esc(s.label)}</b><small>${esc(s.desc)}</small>
+          </button>`).join('')}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>💰 보증금 설정</h2><span class="hint">노쇼 방지를 위해 걸 수 있어요</span></div>
+      <div class="toggle-pair" id="dep">
+        <button type="button" data-on="1" aria-pressed="false"><span class="switch"></span>보증금 사용</button>
+        <button type="button" data-on="0" aria-pressed="true"><span class="switch"></span>사용 안함</button>
+      </div>
+      <div id="dep-amount" hidden>
+        <label class="field"><span>보증금 금액 (보유 ${won(user.points)}P)</span>
+          <select class="select" id="amount">${OPTIONS.deposits.map((d) => `<option value="${d}"${d === form.deposit ? ' selected' : ''}>${won(d)}원</option>`).join('')}</select>
+        </label>
+        <div class="notice"><span>🛡️</span><span>매칭이 성사되면 보증금이 안전하게 보관돼요. 약속을 모두 지키면 돌려받고, 지키지 못하면 약속을 지킨 메이트에게 보상으로 전달돼요. 메이트와 금액이 다르면 낮은 금액에 맞추고 차액은 바로 돌려드려요.</span></div>
+      </div>
+    </section>
+
+    <div class="sticky-cta"><button class="btn primary block" id="submit">매칭 신청하기 →</button></div>`;
+
+  $('#days').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const d = Number(b.dataset.day);
+    form.days.has(d) ? form.days.delete(d) : form.days.add(d);
+    b.setAttribute('aria-pressed', form.days.has(d));
+  });
+  $('#styles').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const s = b.dataset.style;
+    form.styles.has(s) ? form.styles.delete(s) : form.styles.add(s);
+    b.setAttribute('aria-pressed', form.styles.has(s));
+  });
+  $('#dep').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    form.depositOn = b.dataset.on === '1';
+    $$('#dep button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+    $('#dep-amount').hidden = !form.depositOn;
+  });
+  $('#start').addEventListener('change', (e) => { form.startTime = e.target.value; });
+  $('#end').addEventListener('change', (e) => { form.endTime = e.target.value; });
+  $('#loc').addEventListener('change', (e) => { form.location = e.target.value; });
+  $('#amount').addEventListener('change', (e) => { form.deposit = Number(e.target.value); });
+
+  $('#submit').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const res = await api('/requests', {
+        method: 'POST',
+        body: {
+          days: [...form.days],
+          startTime: form.startTime,
+          endTime: form.endTime,
+          location: form.location,
+          styles: [...form.styles],
+          deposit: form.depositOn ? form.deposit : 0,
+        },
+      });
+      if (res.matchId) {
+        toast('🎉 바로 메이트를 찾았어요!');
+        location.hash = '#/match';
+      } else {
+        toast('신청 완료! 조건이 맞는 메이트를 기다리는 중이에요.');
+        location.hash = '#/home';
+      }
+    } catch (err) {
+      toast(err.message, true);
+      e.target.disabled = false;
+    }
+  });
+}
+
+// ───────────────────────── 매칭중 ─────────────────────────
+
+const STATUS_PILL = {
+  done: '<span class="pill">출석</span>',
+  studying: '<span class="pill lime">공부중</span>',
+  missed: '<span class="pill red">미참석</span>',
+  open: '<span class="pill lime">출석 가능</span>',
+  scheduled: '<span class="pill gray">예정</span>',
+};
+const MARK = {
+  done: ['✓', '출석'], studying: ['✓', '공부중'], missed: ['✕', '미참석'],
+  open: ['', '예정'], scheduled: ['', '예정'], off: ['–', '휴식'],
+};
+
+async function renderMatch(alive) {
+  setTop({ title: '매칭중' });
+  setTabs('match');
+  loading();
+  const { match } = await api('/matches/current');
+  if (!alive()) return;
+  if (!match) {
+    view.innerHTML = `
+      <div class="empty">
+        <div class="em">🌱</div>
+        <h3>진행 중인 매칭이 없어요</h3>
+        <p>매칭을 신청하면 1주일 동안 함께할 메이트를 찾아드려요.</p>
+        <a class="btn primary mt-lg" href="#/home">홈으로</a>
+      </div>`;
+    return;
+  }
+  if (match.status === 'reported') return renderReport(match, alive);
+  drawMatch(match, alive);
+}
+
+function drawMatch(m, alive) {
+  const today = todayStr();
+  const target = m.appointments.find((a) => a.me.status === 'studying')
+    ?? m.appointments.find((a) => a.me.status === 'open');
+  const next = m.appointments.find((a) => a.me.status === 'scheduled');
+
+  let checkin;
+  if (target?.me.status === 'studying') {
+    checkin = `
+      <div class="center">
+        <p class="small muted">${fmtDate(target.date, true)} 약속 · ${target.me.method === 'qr' ? 'QR 출석' : '직접 출석'} 완료</p>
+        <div class="timer mt" id="timer" data-since="${esc(target.me.checkedInAt)}">00:00:00</div>
+        <p class="tiny muted">공부 시간 기록 중</p>
+        <button class="btn primary block mt" id="checkout" data-id="${target.id}">공부 종료하고 기록하기</button>
+      </div>`;
+  } else if (target) {
+    checkin = `
+      <div class="checkin">
+        <div>
+          <p class="small muted">함께 있는 장소에서 메이트의 QR을 스캔하거나 직접 출석을 완료해 주세요.</p>
+          <p class="tiny muted mt">내 출석 코드</p>
+          <div class="code">${esc(target.code)}</div>
+        </div>
+        <div class="qr-box"><img src="/api/appointments/${target.id}/qr" alt="출석 QR 코드"></div>
+      </div>
+      <div class="btn-row mt">
+        <button class="btn primary" id="scan" data-id="${target.id}">⌗ QR 스캔하기</button>
+        <button class="btn" id="self" data-id="${target.id}">✓ 출석하기</button>
+      </div>`;
+  } else if (next) {
+    checkin = `<div class="notice" style="margin-top:0"><span>⏰</span><span>다음 약속은 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b>이에요. 시작 ${OPTIONS.checkinEarlyMin}분 전부터 출석할 수 있어요.</span></div>`;
+  } else {
+    checkin = '<div class="notice" style="margin-top:0"><span>✅</span><span>이번 주 약속이 모두 끝났어요. 주간이 끝나면 리포트가 도착해요.</span></div>';
+  }
+
+  const weekRow = (who) => m.week.map((d) => {
+    const st = d[who];
+    const [sym, label] = MARK[st];
+    return `<div class="d${d.date === today ? ' today' : ''}">
+      <b>${WD[d.weekday]}</b><span class="muted">${Number(d.date.slice(8))}일</span>
+      <div class="mark ${st}">${sym}</div><span class="tiny">${label}</span>
+    </div>`;
+  }).join('');
+
+  view.innerHTML = `
+    <section class="card">
+      <div class="card-head"><h2>👥 메이트 프로필</h2><span class="pill">${m.round}주차</span></div>
+      <div class="profile">
+        <div class="avatar lg">${esc(m.mate.avatar)}</div>
+        <div>
+          <div class="name">${esc(m.mate.name)}${m.mate.age ? `<small>(${m.mate.age}세)</small>` : ''}</div>
+          ${m.mate.bio ? `<div class="small muted">${esc(m.mate.bio)}</div>` : ''}
+          <div class="tags">${m.mate.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
+        </div>
+      </div>
+      <div class="notice">
+        <span>🤝</span>
+        <span>${esc(styleLabels(m.styles))} · ${esc(m.location)}${m.stake ? ` · 보증금 ${won(m.stake)}원` : ' · 보증금 없음'}</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>📅 예정된 약속</h2><span class="hint">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)}</span></div>
+      ${m.appointments.length ? m.appointments.map((a) => `
+        <div class="appt${a.id === target?.id ? ' is-open' : ''}">
+          <div class="date"><b>${fmtDate(a.date)}</b><span>(${WD[a.weekday]})</span></div>
+          <div class="meta">
+            <div>🕒 ${fmtTime(a.startTime)} ~ ${fmtTime(a.endTime)}</div>
+            <div class="muted">📍 ${esc(a.location)}</div>
+          </div>
+          <div>${STATUS_PILL[a.me.status]}</div>
+        </div>`).join('') : '<p class="small muted">이번 주 약속이 없어요.</p>'}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>⌗ 현장 출석 확인</h2></div>
+      ${checkin}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>📊 이번주 출석</h2></div>
+      <div class="stat-grid">
+        <div class="stat"><b>${m.stats.me.attended}/${m.stats.me.total}</b><span>내 출석</span></div>
+        <div class="stat"><b>${fmtMinutes(m.stats.me.minutes)}</b><span>내 공부시간</span></div>
+        <div class="stat"><b>${m.stats.mate.attended}/${m.stats.mate.total}</b><span>메이트 출석</span></div>
+      </div>
+      <div class="week-label">나</div>
+      <div class="week">${weekRow('me')}</div>
+      <div class="week-label">${esc(m.mate.name)}</div>
+      <div class="week">${weekRow('mate')}</div>
+    </section>
+
+    ${OPTIONS.demo ? `
+      <div class="demo-bar">
+        <b>데모 모드</b> · 시간과 상관없이 출석할 수 있고, 주간을 바로 마감해 리포트를 볼 수 있어요.
+        <button class="btn sm block mt" id="settle">이번 주 마감하고 리포트 받기</button>
+      </div>` : ''}`;
+
+  const timer = $('#timer');
+  if (timer) {
+    const since = new Date(timer.dataset.since).getTime();
+    const tick = () => {
+      const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
+      timer.textContent = [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60].map((n) => String(n).padStart(2, '0')).join(':');
+    };
+    tick();
+    every(1000, tick);
+  }
+
+  const refresh = (match) => {
+    if (!alive()) return;
+    timers.forEach(clearInterval);
+    timers = [];
+    match.status === 'reported' ? renderReport(match, alive) : drawMatch(match, alive);
+  };
+
+  $('#self')?.addEventListener('click', async (e) => {
+    try {
+      const res = await api(`/appointments/${e.target.dataset.id}/checkin`, { method: 'POST', body: { method: 'self' } });
+      toast('출석 완료! 오늘도 화이팅 💪');
+      refresh(res.match);
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#scan')?.addEventListener('click', (e) => openScanner(Number(e.target.dataset.id), refresh));
+  $('#checkout')?.addEventListener('click', async (e) => {
+    try {
+      const res = await api(`/appointments/${e.target.dataset.id}/checkout`, { method: 'POST' });
+      toast(`수고했어요! ${fmtMinutes(res.minutes)} 공부를 기록했어요.`);
+      refresh(res.match);
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#settle')?.addEventListener('click', async () => {
+    if (!confirm('이번 주를 마감하고 보증금을 정산할까요?')) return;
+    try {
+      const res = await api(`/matches/${m.id}/settle`, { method: 'POST' });
+      refresh(res.match);
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+const DEPOSIT_TEXT = {
+  none: () => '보증금 없이 진행했어요.',
+  refunded: (n) => `약속을 지켜 보증금 ${won(n)}원을 돌려받았어요.`,
+  to_mate: (n) => `약속을 지키지 못해 보증금 ${won(n)}원이 메이트에게 전달됐어요.`,
+  forfeited: (n) => `둘 다 약속을 지키지 못해 보증금 ${won(n)}원이 반환되지 않았어요.`,
+};
+
+function renderReport(m, alive) {
+  setTop({ title: '주간 리포트' });
+  const { me, mate } = m.report;
+  const col = (who, r, name) => `
+    <div class="col">
+      <div class="small muted">${esc(name)}</div>
+      <div class="big">${r.rate}%</div>
+      <div class="tiny muted">출석 ${r.attended}/${r.total}</div>
+      <div class="bar"><i style="width:${r.rate}%"></i></div>
+      <div class="small mt"><b>${fmtMinutes(r.minutes)}</b></div>
+      <div class="tiny muted">공부시간</div>
+    </div>`;
+
+  let choice;
+  if (m.myChoice === 'continue') {
+    choice = `<div class="notice"><span>⏳</span><span>${esc(m.mate.name)}님의 선택을 기다리고 있어요. 둘 다 '계속하기'를 고르면 다음 주 약속이 바로 만들어져요.</span></div>`;
+  } else {
+    choice = `
+      <p class="small muted">${m.mateChoice === 'continue' ? `💚 ${esc(m.mate.name)}님은 계속하고 싶어해요!` : '다음 주는 어떻게 할까요?'}</p>
+      <div class="stack mt">
+        <button class="btn primary block" data-choice="continue">${esc(m.mate.name)}님과 계속하기</button>
+        <button class="btn block" data-choice="new">새 메이트 만나기</button>
+      </div>`;
+  }
+
+  view.innerHTML = `
+    <section class="card hero">
+      <div class="small muted">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)} · ${m.round}주차</div>
+      <h2 style="font-size:20px;margin-top:4px">${me.kept ? '이번 주 약속을 모두 지켰어요 🎉' : '이번 주는 아쉬웠어요'}</h2>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>📈 출석률과 공부시간</h2></div>
+      <div class="vs">${col('me', me, '나')}${col('mate', mate, m.mate.name)}</div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>💰 보증금 정산</h2></div>
+      <p class="small">${DEPOSIT_TEXT[me.deposit.result](me.deposit.amount)}</p>
+      ${me.reward ? `<p class="small mt"><span class="plus">+${won(me.reward)}P</span> 메이트의 미이행 보상을 받았어요.</p>` : ''}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>🔁 다음 주 선택</h2></div>
+      ${choice}
+    </section>`;
+
+  $$('[data-choice]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      const res = await api(`/matches/${m.id}/choice`, { method: 'POST', body: { choice: b.dataset.choice } });
+      if (res.next === 'continue') {
+        toast(`${m.mate.name}님과 다음 주도 함께해요!`);
+        router();
+      } else if (res.next === 'new') {
+        toast('새 메이트를 찾아볼까요?');
+        location.hash = '#/apply';
+      } else {
+        toast('선택을 저장했어요.');
+        router();
+      }
+    } catch (err) { toast(err.message, true); }
+  }));
+
+  if (m.myChoice === 'continue') {
+    every(4000, async () => {
+      const res = await api('/matches/current').catch(() => null);
+      if (!alive() || !res) return;
+      if (!res.match || res.match.id !== m.id) router();
+    });
+  }
+}
+
+// ───────────────────────── QR 스캐너 ─────────────────────────
+
+function closeModal() {
+  const modal = $('#modal');
+  modal.dispatchEvent(new Event('close'));
+  modal.hidden = true;
+  modal.innerHTML = '';
+}
+
+function openScanner(appointmentId, onDone) {
+  const modal = $('#modal');
+  const canScan = 'BarcodeDetector' in window && navigator.mediaDevices?.getUserMedia;
+  modal.innerHTML = `
+    <div class="sheet">
+      <div class="row between"><h3>QR 스캔하기</h3><button class="btn sm ghost" id="close">닫기</button></div>
+      <p class="small muted">메이트 화면의 출석 QR을 비추거나, 아래에 코드를 입력하세요.</p>
+      ${canScan ? '<div class="scanner"><video id="video" playsinline muted></video></div>' : '<div class="notice">이 브라우저는 카메라 QR 인식을 지원하지 않아요. 메이트 화면의 6자리 코드를 입력해 주세요.</div>'}
+      <form id="code-form" class="row mt">
+        <input class="input code" name="code" maxlength="6" placeholder="출석 코드" autocomplete="off" style="text-transform:uppercase" required>
+        <button class="btn primary">확인</button>
+      </form>
+    </div>`;
+  modal.hidden = false;
+
+  let stream = null;
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+    stream?.getTracks().forEach((t) => t.stop());
+  };
+  modal.addEventListener('close', stop, { once: true });
+  modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+  $('#close').addEventListener('click', closeModal);
+
+  const submit = async (code) => {
+    try {
+      const res = await api(`/appointments/${appointmentId}/checkin`, { method: 'POST', body: { method: 'qr', code } });
+      closeModal();
+      toast('QR 출석 완료! 함께 시작해요 📚');
+      onDone(res.match);
+    } catch (err) { toast(err.message, true); }
+  };
+
+  $('#code-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    submit(new FormData(e.target).get('code'));
+  });
+
+  if (canScan) {
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        if (stopped) return stop();
+        const video = $('#video');
+        video.srcObject = stream;
+        await video.play();
+        const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+        const loop = async () => {
+          if (stopped) return;
+          const codes = await detector.detect(video).catch(() => []);
+          const hit = codes.map((c) => c.rawValue).find((v) => v.startsWith('SB:'));
+          if (hit) return submit(hit.split(':')[2]);
+          requestAnimationFrame(loop);
+        };
+        loop();
+      } catch {
+        toast('카메라를 사용할 수 없어요. 코드를 입력해 주세요.', true);
+      }
+    })();
+  }
+}
+
+// ───────────────────────── 채팅 ─────────────────────────
+
+async function renderChat(alive) {
+  setTop({ title: '채팅' });
+  setTabs('chat');
+  loading();
+  const [{ match }, { user }] = await Promise.all([api('/matches/current'), api('/me')]);
+  if (!alive()) return;
+  if (!match) {
+    view.innerHTML = `
+      <div class="empty"><div class="em">💬</div><h3>대화할 메이트가 없어요</h3>
+      <p>매칭이 되면 메이트와 약속을 이야기할 수 있어요.</p></div>`;
+    return;
+  }
+  setTop({ title: `${match.mate.avatar} ${match.mate.name}` });
+  view.innerHTML = `
+    <div class="notice"><span>📌</span><span>${esc(match.location)} · ${match.days.map((d) => WD[d]).join('·')} ${fmtTime(match.startTime)}~${fmtTime(match.endTime)}</span></div>
+    <div class="chat mt" id="chat"></div>
+    <form class="chat-input" id="send">
+      <input class="input" name="body" maxlength="500" placeholder="메시지를 입력하세요" autocomplete="off">
+      <button class="btn primary">전송</button>
+    </form>`;
+
+  const box = $('#chat');
+  let lastId = 0;
+  const load = async () => {
+    const { messages } = await api(`/matches/${match.id}/messages?after=${lastId}`);
+    if (!alive() || !messages.length) return;
+    $('#hello')?.remove();
+    for (const msg of messages) {
+      lastId = msg.id;
+      const t = new Date(msg.createdAt);
+      box.insertAdjacentHTML('beforeend', `
+        <div class="bubble ${msg.userId === user.id ? 'me' : 'mate'}">${esc(msg.body)}<time>${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}</time></div>`);
+    }
+    window.scrollTo(0, document.body.scrollHeight);
+  };
+  await load();
+  if (!box.children.length) box.innerHTML = `<p class="center small muted" id="hello">${esc(match.mate.name)}님께 먼저 인사해 보세요 👋</p>`;
+  every(3000, () => load().catch(() => {}));
+
+  $('#send').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = e.target.body;
+    const body = input.value.trim();
+    if (!body) return;
+    input.value = '';
+    try {
+      await api(`/matches/${match.id}/messages`, { method: 'POST', body: { body } });
+      await load();
+    } catch (err) {
+      toast(err.message, true);
+      input.value = body;
+    }
+  });
+}
+
+// ───────────────────────── 마이페이지 ─────────────────────────
+
+async function renderMe(alive) {
+  setTop({ title: '마이페이지' });
+  setTabs('me');
+  loading();
+  const [{ user }, { logs }, { matches }] = await Promise.all([api('/me'), api('/me/points'), api('/me/history')]);
+  if (!alive()) return;
+
+  view.innerHTML = `
+    <section class="card">
+      <div class="card-head"><h2>👤 내 프로필</h2><a class="link" href="#/me/edit">수정하기 ›</a></div>
+      <div class="profile">
+        <div class="avatar lg">${esc(user.avatar)}</div>
+        <div>
+          <div class="name">${esc(user.name)}${user.age ? `<small>(${user.age}세)</small>` : ''}</div>
+          <div class="small muted">${esc(user.email)}</div>
+          ${user.bio ? `<div class="small mt">${esc(user.bio)}</div>` : ''}
+          <div class="tags">${user.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>💰 포인트</h2><span class="pill lime">${won(user.points)}P</span></div>
+      ${logs.length ? logs.map((l) => `
+        <div class="list-item">
+          <div><div>${esc(l.reason)}</div><div class="tiny muted">${new Date(l.created_at).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' })}</div></div>
+          <span class="${l.amount > 0 ? 'plus' : 'minus'}">${l.amount > 0 ? '+' : ''}${won(l.amount)}</span>
+        </div>`).join('') : '<p class="small muted">아직 포인트 내역이 없어요.</p>'}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>📚 지난 스터디</h2></div>
+      ${matches.length ? matches.map((h) => `
+        <div class="list-item">
+          <div class="row">
+            <div class="avatar sm">${esc(h.mate.avatar)}</div>
+            <div><div><b>${esc(h.mate.name)}</b></div><div class="tiny muted">${fmtDate(h.weekStart)} ~ ${fmtDate(h.weekEnd)} · ${esc(h.location)}</div></div>
+          </div>
+          ${h.report ? `<span class="pill">${h.report.me.rate}% · ${fmtMinutes(h.report.me.minutes)}</span>` : ''}
+        </div>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
+    </section>
+
+    <button class="btn ghost block mt-lg danger" id="logout">로그아웃</button>`;
+
+  $('#logout').addEventListener('click', async () => {
+    await api('/auth/logout', { method: 'POST' }).catch(() => {});
+    location.hash = '#/login';
+  });
+}
+
+async function renderEditProfile(alive) {
+  setTop({ title: '프로필 수정', back: '#/me' });
+  setTabs(null);
+  loading();
+  const { user } = await api('/me');
+  if (!alive()) return;
+  let avatar = user.avatar;
+  const avatars = AVATARS.includes(avatar) ? AVATARS : [avatar, ...AVATARS.slice(0, -1)];
+
+  view.innerHTML = `
+    <form id="f" class="card">
+      <div class="field"><span>아바타</span>
+        <div class="avatar-picker" id="avatars">
+          ${avatars.map((a) => `<button type="button" aria-pressed="${a === avatar}">${a}</button>`).join('')}
+        </div>
+      </div>
+      <label class="field"><span>이름 (닉네임)</span><input class="input" name="name" maxlength="20" value="${esc(user.name)}" required></label>
+      <label class="field"><span>나이</span><input class="input" name="age" type="number" min="14" max="100" value="${user.age ?? ''}"></label>
+      <label class="field"><span>태그 (쉼표로 구분, 최대 5개)</span><input class="input" name="tags" value="${esc(user.tags.join(', '))}" placeholder="#카페공부, #자격증준비, #ENFJ"></label>
+      <label class="field"><span>한 줄 소개</span><textarea class="input" name="bio" maxlength="200" placeholder="메이트에게 나를 소개해 주세요">${esc(user.bio)}</textarea></label>
+      <button class="btn primary block mt-lg">저장하기</button>
+    </form>`;
+
+  $('#avatars').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    avatar = b.textContent;
+    $$('#avatars button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+  });
+  $('#f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    try {
+      await api('/me', {
+        method: 'PUT',
+        body: { ...fd, avatar, tags: fd.tags.split(/[,\s]+/).filter(Boolean) },
+      });
+      toast('프로필을 저장했어요.');
+      history.back();
+    } catch (err) { toast(err.message, true); }
+  });
+}
