@@ -35,6 +35,10 @@ npm run build:standalone
 - 데이터는 그 브라우저(localStorage)에만 저장되어 다른 사람과 공유되지 않습니다. 마이페이지의 "데모 데이터 모두 지우기"로 초기화할 수 있습니다.
 - 화면이나 로직을 고친 뒤에는 이 명령을 다시 실행해야 파일에 반영됩니다.
 
+### Vercel 배포 (데모 버전)
+
+`vercel.json`이 이 데모 버전을 배포하도록 설정되어 있습니다. GitHub `main` 브랜치에 push하면 Vercel이 `npm run build:standalone`을 실행하고 `dist/index.html`을 올립니다. 서버(`server/`)는 배포되지 않으므로, 데이터는 방문자 각자의 브라우저에만 저장됩니다.
+
 ## 기능 (기획서 → 구현)
 
 | 기획서 | 구현 내용 |

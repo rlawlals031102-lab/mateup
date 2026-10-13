@@ -61,4 +61,6 @@ if (out.includes('src="app.js"') || out.includes('href="styles.css"')) {
 await mkdir(path.join(ROOT, 'dist'), { recursive: true });
 const file = path.join(ROOT, 'dist', 'studybuddy-demo.html');
 await writeFile(file, out);
-console.log(`만들었어요 → ${path.relative(ROOT, file)} (${(out.length / 1024).toFixed(0)} KB)`);
+// 웹에 올릴 때(Vercel 등) 첫 페이지로 쓰이도록 같은 내용을 index.html로도 둔다.
+await writeFile(path.join(ROOT, 'dist', 'index.html'), out);
+console.log(`만들었어요 → ${path.relative(ROOT, file)} (+ dist/index.html) (${(out.length / 1024).toFixed(0)} KB)`);
