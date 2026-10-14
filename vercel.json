@@ -26,7 +26,12 @@
       "permanent": false
     },
     {
-      "source": "/demo/:path*",
+      "source": "/demo/",
+      "destination": "/",
+      "permanent": false
+    },
+    {
+      "source": "/demo/:path+",
       "destination": "/",
       "permanent": false
     }
