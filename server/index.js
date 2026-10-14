@@ -33,7 +33,7 @@ setInterval(() => autoSettle(db).catch(console.error), 10 * 60 * 1000).unref();
 
 // 데모가 아니면 실서비스처럼 국민대 메일 + 인증번호. (메일은 .env.local 의 GMAIL_USER / GMAIL_APP_PASSWORD)
 const mailer = await createGmailMailer({ user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD });
-const emailPolicy = demo ? { domain: null, verify: false } : { domain: EMAIL_DOMAIN, verify: !!mailer };
+const emailPolicy = demo ? { domain: null, verify: false } : { domain: EMAIL_DOMAIN, verify: true };
 
 createApp({ db, demo, emailPolicy, mailer }).listen(port, () => {
   console.log(`스터디버디 서버 실행 중 → http://localhost:${port}${demo ? '  (데모 모드)' : ''}`);
