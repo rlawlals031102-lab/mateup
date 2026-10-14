@@ -21,3 +21,11 @@ export const SIGNUP_POINTS = 50000;
 export const CHECKIN_EARLY_MIN = 30;
 
 export const MIN_OVERLAP_MIN = 60;
+
+// 실서비스 가입·로그인을 허용하는 학교 메일 도메인 (데모 모드에서는 제한 없음)
+export const EMAIL_DOMAIN = 'kookmin.ac.kr';
+
+// 이메일 인증번호: 유효 시간(분), 최대 입력 시도, 재발송 간격(초)
+export const EMAIL_CODE_TTL_MIN = 10;
+export const EMAIL_CODE_MAX_ATTEMPTS = 5;
+export const EMAIL_CODE_RESEND_SEC = 60;

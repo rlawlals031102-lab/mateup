@@ -93,6 +93,9 @@ function setTabs(active) {
 
 const loading = () => { view.innerHTML = '<div class="spinner"></div>'; };
 
+// 데모(가상) 메이트 표시
+const botBadge = (u) => (u?.isBot ? ' <span class="pill gray" title="실제 사람이 아닌 체험용 메이트">데모 메이트</span>' : '');
+
 function styleLabels(keys) {
   return keys.map((k) => OPTIONS.styles[k]?.label ?? k).join(' · ');
 }
@@ -102,6 +105,7 @@ function styleLabels(keys) {
 const routes = {
   login: renderLogin,
   signup: renderSignup,
+  reset: renderReset,
   home: renderHome,
   apply: renderApply,
   match: renderMatch,
@@ -122,7 +126,7 @@ async function router() {
     if (!OPTIONS) OPTIONS = await api('/options');
     await render(() => token === routeToken);
   } catch (err) {
-    if (err.status === 401 && !['login', 'signup'].includes(name)) {
+    if (err.status === 401 && !['login', 'signup', 'reset'].includes(name)) {
       location.hash = '#/login';
       return;
     }
@@ -147,19 +151,78 @@ function authShell(inner) {
     </div>`;
 }
 
+// 실서비스는 국민대 메일만 받는다. 아이디만 입력해도 @kookmin.ac.kr 을 붙여 준다.
+const withDomain = (email) => {
+  const v = String(email ?? '').trim();
+  return OPTIONS.emailDomain && v && !v.includes('@') ? `${v}@${OPTIONS.emailDomain}` : v;
+};
+
+const emailLabel = () => (OPTIONS.emailDomain ? '국민대 메일' : '이메일');
+const emailPlaceholder = () => (OPTIONS.emailDomain ? `아이디@${OPTIONS.emailDomain}` : '');
+
+// 이메일 + "인증번호 받기" 버튼 + 인증번호 입력칸 (메일 인증을 쓰는 실서비스에서만)
+function emailCodeFields() {
+  if (!OPTIONS.emailVerification) {
+    return `<label class="field"><span>${emailLabel()}</span><input class="input" name="email" type="email" autocomplete="email" placeholder="${esc(emailPlaceholder())}" required></label>`;
+  }
+  return `
+    <div class="field"><span>${emailLabel()}</span>
+      <div class="row">
+        <input class="input" name="email" autocomplete="email" placeholder="${esc(emailPlaceholder())}" required>
+        <button type="button" class="btn inline-btn" id="send-code">인증번호 받기</button>
+      </div>
+    </div>
+    <label class="field" id="code-field" hidden><span>인증번호 (메일로 받은 6자리)</span>
+      <input class="input code" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000">
+    </label>`;
+}
+
+function bindSendCode(form, purpose) {
+  const btn = $('#send-code', form);
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    form.email.value = withDomain(form.email.value);
+    if (!form.email.value) return toast('메일 주소를 입력해 주세요.', true);
+    btn.disabled = true;
+    try {
+      await api('/auth/code', { method: 'POST', body: { email: form.email.value, purpose } });
+      $('#code-field', form).hidden = false;
+      form.code.required = true;
+      form.code.focus();
+      toast('메일로 인증번호를 보냈어요. (스팸함도 확인해 주세요)');
+      let left = 60;
+      btn.textContent = `다시 받기 (${left})`;
+      const timer = setInterval(() => {
+        left -= 1;
+        if (left <= 0 || !btn.isConnected) {
+          clearInterval(timer);
+          btn.disabled = false;
+          btn.textContent = '다시 받기';
+        } else {
+          btn.textContent = `다시 받기 (${left})`;
+        }
+      }, 1000);
+    } catch (err) {
+      btn.disabled = false;
+      toast(err.message, true);
+    }
+  });
+}
+
 async function renderLogin() {
   authShell(`
     <h2>같은 시간에<br>함께 시작하는 공부</h2>
-    <p class="lead">1주일 단위 1:1 스터디 메이트 매칭, 스터디버디</p>
+    <p class="lead">${OPTIONS.emailDomain ? '국민대 학생을 위한 ' : ''}1주일 단위 1:1 스터디 메이트 매칭, 스터디버디</p>
     <form id="f" class="card">
-      <label class="field"><span>이메일</span><input class="input" name="email" type="email" autocomplete="email" required></label>
+      <label class="field"><span>${emailLabel()}</span><input class="input" name="email" autocomplete="email" placeholder="${esc(emailPlaceholder())}" required></label>
       <label class="field"><span>비밀번호</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn primary block mt-lg">로그인</button>
     </form>
-    <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a></p>
+    <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a>${OPTIONS.emailVerification ? ' · <a href="#/reset">비밀번호 찾기</a>' : ''}</p>
     ${window.__mockApi ? '' : '<p class="switch-link tiny">가입 없이 둘러보려면 <a href="demo/">데모 체험하기 →</a></p>'}`);
   $('#f').addEventListener('submit', async (e) => {
     e.preventDefault();
+    e.target.email.value = withDomain(e.target.email.value);
     const fd = Object.fromEntries(new FormData(e.target));
     try {
       await api('/auth/login', { method: 'POST', body: fd });
@@ -171,21 +234,54 @@ async function renderLogin() {
 async function renderSignup() {
   authShell(`
     <h2>공부 약속이<br>지켜지는 구조</h2>
-    <p class="lead">가입하면 보증금으로 쓸 수 있는 50,000P를 드려요.</p>
+    <p class="lead">${OPTIONS.emailDomain ? '국민대학교 메일로 가입할 수 있어요. ' : ''}가입하면 보증금으로 쓸 수 있는 50,000P를 드려요.</p>
     <form id="f" class="card">
+      ${emailCodeFields()}
       <label class="field"><span>이름 (닉네임)</span><input class="input" name="name" maxlength="20" required></label>
       <label class="field"><span>나이</span><input class="input" name="age" type="number" min="14" max="100" inputmode="numeric"></label>
-      <label class="field"><span>이메일</span><input class="input" name="email" type="email" autocomplete="email" required></label>
       <label class="field"><span>비밀번호 (6자 이상)</span><input class="input" name="password" type="password" minlength="6" autocomplete="new-password" required></label>
       <button class="btn primary block mt-lg">가입하고 시작하기</button>
     </form>
     <p class="switch-link">이미 계정이 있나요? <a href="#/login">로그인</a></p>`);
-  $('#f').addEventListener('submit', async (e) => {
+  const form = $('#f');
+  bindSendCode(form, 'signup');
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const fd = Object.fromEntries(new FormData(e.target));
+    form.email.value = withDomain(form.email.value);
+    if (OPTIONS.emailVerification && $('#code-field').hidden) return toast("먼저 '인증번호 받기'를 눌러 주세요.", true);
+    const fd = Object.fromEntries(new FormData(form));
     try {
       await api('/auth/signup', { method: 'POST', body: fd });
       toast('환영해요! 이번 주 메이트를 찾아볼까요?');
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+async function renderReset() {
+  if (!OPTIONS.emailVerification) {
+    authShell(`<div class="empty"><h3>비밀번호 찾기</h3><p>데모 버전에서는 지원하지 않아요.</p><a class="btn mt" href="#/login">로그인으로</a></div>`);
+    return;
+  }
+  authShell(`
+    <h2>비밀번호 찾기</h2>
+    <p class="lead">가입한 국민대 메일로 인증번호를 보내 드려요.</p>
+    <form id="f" class="card">
+      ${emailCodeFields()}
+      <label class="field"><span>새 비밀번호 (6자 이상)</span><input class="input" name="password" type="password" minlength="6" autocomplete="new-password" required></label>
+      <button class="btn primary block mt-lg">비밀번호 바꾸기</button>
+    </form>
+    <p class="switch-link"><a href="#/login">로그인으로 돌아가기</a></p>`);
+  const form = $('#f');
+  bindSendCode(form, 'reset');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    form.email.value = withDomain(form.email.value);
+    if ($('#code-field').hidden) return toast("먼저 '인증번호 받기'를 눌러 주세요.", true);
+    const fd = Object.fromEntries(new FormData(form));
+    try {
+      await api('/auth/reset', { method: 'POST', body: fd });
+      toast('비밀번호를 바꿨어요. 다른 기기에서는 다시 로그인해 주세요.');
       location.hash = '#/home';
     } catch (err) { toast(err.message, true); }
   });
@@ -217,7 +313,7 @@ async function renderHome(alive) {
         <div class="profile">
           <div class="avatar">${esc(match.mate.avatar)}</div>
           <div>
-            <div class="name">${esc(match.mate.name)}${match.mate.age ? `<small>(${match.mate.age}세)</small>` : ''}</div>
+            <div class="name">${esc(match.mate.name)}${match.mate.age ? `<small>(${match.mate.age}세)</small>` : ''}${botBadge(match.mate)}</div>
             <div class="small muted">출석 ${match.stats.me.attended}/${match.stats.me.total} · 공부 ${fmtMinutes(match.stats.me.minutes)}</div>
           </div>
         </div>
@@ -506,11 +602,12 @@ function drawMatch(m, alive) {
       <div class="profile">
         <div class="avatar lg">${esc(m.mate.avatar)}</div>
         <div>
-          <div class="name">${esc(m.mate.name)}${m.mate.age ? `<small>(${m.mate.age}세)</small>` : ''}</div>
+          <div class="name">${esc(m.mate.name)}${m.mate.age ? `<small>(${m.mate.age}세)</small>` : ''}${botBadge(m.mate)}</div>
           ${m.mate.bio ? `<div class="small muted">${esc(m.mate.bio)}</div>` : ''}
           <div class="tags">${m.mate.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
         </div>
       </div>
+      ${m.mate.isBot ? '<div class="notice"><span>🤖</span><span>체험용 <b>가상 메이트</b>예요. 실제로 약속 장소에 나오지 않아요. 내가 출석하면 함께 출석하고, 채팅에 자동으로 답해요.</span></div>' : ''}
       <div class="notice">
         <span>🤝</span>
         <span>${esc(styleLabels(m.styles))} · ${esc(m.location)}${m.stake ? ` · 보증금 ${won(m.stake)}원` : ' · 보증금 없음'}</span>

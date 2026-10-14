@@ -3,6 +3,7 @@ import { isUniqueViolation } from './db.js';
 import * as T from './time.js';
 import {
   LOCATIONS, STYLES, DEPOSITS, SIGNUP_POINTS, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
+  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC,
 } from './options.js';
 
 // 모든 함수는 첫 인자로 db(server/db.js 인터페이스)를 받는다.
@@ -35,6 +36,7 @@ export const publicUser = (u) => u && {
   tags: JSON.parse(u.tags),
   bio: u.bio,
   avatar: u.avatar,
+  isBot: !!u.is_bot, // 체험용 데모 메이트 (화면에 "가상 인물"로 표시)
 };
 
 export const privateUser = (u) => u && { ...publicUser(u), email: u.email, points: u.points };
@@ -93,11 +95,86 @@ function validateProfile({ name, age, tags, bio, avatar }, partial = false) {
   return out;
 }
 
-export async function signup(db, { email, password, name, age }) {
+// 이메일 정책: { domain: 'kookmin.ac.kr' | null, verify: true면 가입·비밀번호 찾기에 메일 인증번호 필요 }
+// 실서비스는 { domain: EMAIL_DOMAIN, verify: true }, 로컬 데모·테스트 기본값은 제한 없음.
+const NO_POLICY = { domain: null, verify: false };
+
+function normalizeEmail(email, policy = NO_POLICY) {
   const e = String(email ?? '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new AppError(400, '이메일 형식이 올바르지 않습니다.');
+  if (policy.domain && !e.endsWith(`@${policy.domain}`)) {
+    throw new AppError(400, `국민대학교 메일(@${policy.domain})만 사용할 수 있어요.`);
+  }
+  return e;
+}
+
+const checkPassword = (password) => {
   if (String(password ?? '').length < 6) throw new AppError(400, '비밀번호는 6자 이상이어야 합니다.');
+};
+
+const hashCode = (email, code) => crypto.createHash('sha256').update(`${email}:${code}`).digest('hex');
+
+// 인증번호 메일 보내기. purpose: 'signup'(가입) | 'reset'(비밀번호 찾기)
+export async function requestEmailCode(db, mailer, { email, purpose }, policy = NO_POLICY) {
+  if (!['signup', 'reset'].includes(purpose)) throw new AppError(400, '요청이 올바르지 않습니다.');
+  const e = normalizeEmail(email, policy);
+  if (!mailer) throw new AppError(503, '메일 발송이 아직 설정되지 않았어요. 운영자에게 문의해 주세요.');
+
+  const exists = await db.get('SELECT id FROM users WHERE email = ? AND is_bot = 0', e);
+  if (purpose === 'signup' && exists) throw new AppError(409, '이미 가입된 이메일입니다. 로그인해 주세요.');
+
+  const last = await db.get(
+    'SELECT created_at FROM email_codes WHERE email = ? AND purpose = ? ORDER BY id DESC LIMIT 1', e, purpose,
+  );
+  const wait = last && EMAIL_CODE_RESEND_SEC - Math.floor((T.now() - new Date(last.created_at)) / 1000);
+  if (wait > 0) throw new AppError(429, `${wait}초 후에 다시 받을 수 있어요.`);
+
+  // 가입되지 않은 메일로 비밀번호 찾기를 요청하면, 가입 여부를 알 수 없도록 성공처럼 응답만 한다.
+  if (purpose === 'reset' && !exists) return { sent: true };
+
+  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+  const expires = new Date(T.now().getTime() + EMAIL_CODE_TTL_MIN * 60000).toISOString();
+  await db.run("UPDATE email_codes SET used = 1 WHERE email = ? AND purpose = ? AND used = 0", e, purpose);
+  await db.run(
+    'INSERT INTO email_codes (email, purpose, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)',
+    e, purpose, hashCode(e, code), expires, iso(),
+  );
+
+  const what = purpose === 'signup' ? '회원가입' : '비밀번호 재설정';
+  await mailer.send({
+    to: e,
+    subject: `[스터디버디] ${what} 인증번호 ${code}`,
+    text: `스터디버디 ${what} 인증번호는 ${code} 입니다.\n${EMAIL_CODE_TTL_MIN}분 안에 입력해 주세요.\n\n본인이 요청하지 않았다면 이 메일을 무시하세요.`,
+    html: `<div style="font-family:sans-serif;max-width:420px;margin:auto;padding:24px;border:1px solid #dde4d5;border-radius:16px">
+      <p style="color:#315443;font-weight:800;margin:0 0 12px">STUDY BUDDY</p>
+      <p>스터디버디 ${what} 인증번호입니다.</p>
+      <p style="font-size:32px;font-weight:800;letter-spacing:6px;color:#203829;margin:16px 0">${code}</p>
+      <p style="color:#5f6b5c;font-size:13px">${EMAIL_CODE_TTL_MIN}분 안에 입력해 주세요. 본인이 요청하지 않았다면 이 메일을 무시하세요.</p>
+    </div>`,
+  });
+  return { sent: true };
+}
+
+// 인증번호 확인. 틀리면 시도 횟수를 올리고(트랜잭션 밖에서 기록되도록 여기서 처리), 맞으면 코드 id를 돌려준다.
+async function verifyEmailCode(db, email, purpose, code) {
+  const row = await db.get(
+    'SELECT * FROM email_codes WHERE email = ? AND purpose = ? AND used = 0 ORDER BY id DESC LIMIT 1', email, purpose,
+  );
+  if (!row || new Date(row.expires_at) <= T.now()) throw new AppError(400, '인증번호를 다시 받아 주세요.');
+  if (row.attempts >= EMAIL_CODE_MAX_ATTEMPTS) throw new AppError(400, '입력 횟수를 넘었어요. 인증번호를 다시 받아 주세요.');
+  if (hashCode(email, String(code ?? '').trim()) !== row.code_hash) {
+    await db.run('UPDATE email_codes SET attempts = attempts + 1 WHERE id = ?', row.id);
+    const left = EMAIL_CODE_MAX_ATTEMPTS - row.attempts - 1;
+    throw new AppError(400, left > 0 ? `인증번호가 맞지 않아요. (${left}번 남음)` : '입력 횟수를 넘었어요. 인증번호를 다시 받아 주세요.');
+  }
+  return row.id;
+}
+
+export async function signup(db, { email, password, name, age, code }, policy = NO_POLICY) {
+  const e = normalizeEmail(email, policy);
+  checkPassword(password);
   const profile = validateProfile({ name, age });
+  const codeId = policy.verify ? await verifyEmailCode(db, e, 'signup', code) : null;
   const passwordHash = hashPassword(String(password));
   return db.tx(async (t) => {
     const { rows } = await t.run(
@@ -106,18 +183,36 @@ export async function signup(db, { email, password, name, age }) {
       e, passwordHash, profile.name, profile.age ?? null, iso(),
     );
     if (!rows.length) throw new AppError(409, '이미 가입된 이메일입니다.');
+    if (codeId) await t.run('UPDATE email_codes SET used = 1 WHERE id = ?', codeId);
     const id = rows[0].id;
     await adjustPoints(t, id, SIGNUP_POINTS, '가입 축하 포인트');
     return { user: privateUser(await getUser(t, id)), token: await issueToken(t, id) };
   });
 }
 
-export async function login(db, { email, password }) {
-  const u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', String(email ?? '').trim().toLowerCase());
+export async function login(db, { email, password }, policy = NO_POLICY) {
+  const e = normalizeEmail(email, policy);
+  const u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', e);
   if (!u || !verifyPassword(String(password ?? ''), u.password_hash)) {
     throw new AppError(401, '이메일 또는 비밀번호가 올바르지 않습니다.');
   }
   return { user: privateUser(u), token: await issueToken(db, u.id) };
+}
+
+// 비밀번호 찾기: 메일로 받은 인증번호로 새 비밀번호 설정. 다른 기기의 로그인은 모두 해제하고 새로 로그인시킨다.
+export async function resetPassword(db, { email, code, password }, policy = NO_POLICY) {
+  const e = normalizeEmail(email, policy);
+  checkPassword(password);
+  const codeId = await verifyEmailCode(db, e, 'reset', code);
+  const passwordHash = hashPassword(String(password));
+  return db.tx(async (t) => {
+    const u = await t.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', e);
+    if (!u) throw new AppError(400, '인증번호를 다시 받아 주세요.');
+    await t.run('UPDATE email_codes SET used = 1 WHERE id = ?', codeId);
+    await t.run('UPDATE users SET password_hash = ? WHERE id = ?', passwordHash, u.id);
+    await t.run('DELETE FROM auth_tokens WHERE user_id = ?', u.id);
+    return { user: privateUser(u), token: await issueToken(t, u.id) };
+  });
 }
 
 export async function logout(db, token) {

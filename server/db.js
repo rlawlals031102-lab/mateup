@@ -105,6 +105,17 @@ CREATE TABLE IF NOT EXISTS point_logs (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS email_codes (
+  id         ${ID},
+  email      TEXT NOT NULL,
+  purpose    TEXT NOT NULL, -- signup | reset
+  code_hash  TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  used       INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_requests_status ON match_requests(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_one_pending ON match_requests(user_id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_matches_users ON matches(user_a, user_b);
@@ -112,12 +123,13 @@ CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
 CREATE INDEX IF NOT EXISTS idx_appointments_match ON appointments(match_id);
 CREATE INDEX IF NOT EXISTS idx_messages_match ON messages(match_id);
 CREATE INDEX IF NOT EXISTS idx_tokens_user ON auth_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_email_codes ON email_codes(email, purpose);
 ${dialect === 'pg' ? RLS : ''}`;
 }
 
 // PostgreSQL(Supabase)에서는 모든 테이블에 RLS를 켜 둔다. 정책이 없으므로 Supabase 공개 API(anon 키)로는
 // 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
-const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs']
+const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'email_codes']
   .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
   .join('\n');
 

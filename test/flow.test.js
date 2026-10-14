@@ -166,6 +166,52 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(msgs[0].userId, a);
     });
 
+    test('국민대 메일 인증: 가입 · 로그인 제한 · 비밀번호 찾기', async () => {
+      const policy = { domain: 'kookmin.ac.kr', verify: true };
+      const sent = [];
+      const mailer = { send: async (m) => { sent.push(m); } };
+      const lastCode = () => sent.at(-1).subject.match(/(\d{6})$/)[1];
+      const email = 'student@kookmin.ac.kr';
+
+      await assert.rejects(S.requestEmailCode(db, mailer, { email: 'x@gmail.com', purpose: 'signup' }, policy), /국민대학교 메일/);
+      await assert.rejects(S.requestEmailCode(db, null, { email, purpose: 'signup' }, policy), /메일 발송/);
+
+      await S.requestEmailCode(db, mailer, { email, purpose: 'signup' }, policy);
+      assert.equal(sent.length, 1);
+      assert.equal(sent[0].to, email);
+      // 1분 안에는 다시 못 받음
+      await assert.rejects(S.requestEmailCode(db, mailer, { email, purpose: 'signup' }, policy), /초 후에/);
+
+      const form = { email, password: 'secret1', name: '국민' };
+      await assert.rejects(S.signup(db, { ...form }, policy), /인증번호가 맞지 않아요/);
+      await assert.rejects(S.signup(db, { ...form, code: '000000' === lastCode() ? '111111' : '000000' }, policy), /3번 남음/);
+      const { user } = await S.signup(db, { ...form, code: lastCode() }, policy);
+      assert.equal(user.email, email);
+      // 같은 인증번호로 두 번 가입 불가
+      await assert.rejects(S.signup(db, { ...form, email, code: lastCode() }, policy), /다시 받아/);
+
+      await assert.rejects(S.login(db, { email: 'student@gmail.com', password: 'secret1' }, policy), /국민대학교 메일/);
+      const { token: oldToken } = await S.login(db, { email, password: 'secret1' }, policy);
+
+      // 가입 안 된 메일로 찾기 요청 → 성공처럼 응답하지만 메일은 안 감
+      await S.requestEmailCode(db, mailer, { email: 'nobody@kookmin.ac.kr', purpose: 'reset' }, policy);
+      assert.equal(sent.length, 1);
+
+      setNow(kst(2026, 10, 12, 9, 5));
+      await S.requestEmailCode(db, mailer, { email, purpose: 'reset' }, policy);
+      assert.equal(sent.length, 2);
+      await S.resetPassword(db, { email, code: lastCode(), password: 'newpass1' }, policy);
+      assert.equal(await S.userByToken(db, oldToken), null, '기존 로그인은 해제');
+      await assert.rejects(S.login(db, { email, password: 'secret1' }, policy), /올바르지/);
+      await S.login(db, { email, password: 'newpass1' }, policy);
+
+      // 인증번호 만료
+      setNow(kst(2026, 10, 12, 9, 10));
+      await S.requestEmailCode(db, mailer, { email, purpose: 'reset' }, policy);
+      setNow(kst(2026, 10, 12, 9, 21));
+      await assert.rejects(S.resetPassword(db, { email, code: lastCode(), password: 'another1' }, policy), /다시 받아/);
+    });
+
     test('로그인 / 토큰', async () => {
       await signup('a');
       await assert.rejects(S.signup(db, { email: 'a@test.dev', password: 'secret1', name: 'x' }), /이미 가입/);

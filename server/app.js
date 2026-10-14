@@ -20,7 +20,12 @@ function readCookie(req, name) {
 // demo: 시간과 상관없이 출석, 주간 즉시 마감 허용
 // secureCookies: HTTPS 배포 환경에서 쿠키를 Secure로
 // cronSecret: 설정되어 있으면 /api/cron/settle 호출 시 확인 (Vercel Cron이 자동으로 붙여 보낸다)
-export function createApp({ db, demo = false, secureCookies = false, cronSecret = null, serveStatic = true }) {
+// emailPolicy: { domain, verify } — 실서비스는 국민대 메일만 + 메일 인증번호 (server/service.js 참고)
+// mailer: 인증번호 메일 발송기 (server/mailer.js)
+export function createApp({
+  db, demo = false, secureCookies = false, cronSecret = null, serveStatic = true,
+  emailPolicy = { domain: null, verify: false }, mailer = null,
+}) {
   const app = express();
   const opts = { demo };
 
@@ -45,17 +50,28 @@ export function createApp({ db, demo = false, secureCookies = false, cronSecret 
   });
 
   api.get('/options', (req, res) => {
-    res.json({ locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo });
+    res.json({
+      locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo,
+      emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify,
+    });
   });
 
   // 인증
+  api.post('/auth/code', async (req, res) => {
+    res.json(await S.requestEmailCode(db, mailer, req.body ?? {}, emailPolicy));
+  });
+  api.post('/auth/reset', async (req, res) => {
+    const { user, token } = await S.resetPassword(db, req.body ?? {}, emailPolicy);
+    setSession(res, token);
+    res.json({ user });
+  });
   api.post('/auth/signup', async (req, res) => {
-    const { user, token } = await S.signup(db, req.body ?? {});
+    const { user, token } = await S.signup(db, req.body ?? {}, emailPolicy);
     setSession(res, token);
     res.status(201).json({ user });
   });
   api.post('/auth/login', async (req, res) => {
-    const { user, token } = await S.login(db, req.body ?? {});
+    const { user, token } = await S.login(db, req.body ?? {}, emailPolicy);
     setSession(res, token);
     res.json({ user });
   });

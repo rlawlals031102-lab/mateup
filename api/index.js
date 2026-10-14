@@ -1,22 +1,29 @@
 // Vercel 서버리스 함수 — /api/* 요청을 모두 받아 Express 앱으로 처리한다. (vercel.json rewrites)
 // DB는 Vercel 환경 변수 DATABASE_URL(Supabase Transaction pooler)을 쓴다.
+// 가입·로그인은 국민대 메일(@kookmin.ac.kr)만. GMAIL_USER / GMAIL_APP_PASSWORD 를 넣으면 가입·비밀번호 찾기에 메일 인증번호가 켜진다.
 // 시작(모듈 로드·DB 연결)에 실패하면 함수가 통째로 죽지 않고, 원인을 JSON으로 알려 준다. (접속 정보는 가림)
 
 let appPromise = null;
 
 function getApp() {
   appPromise ??= (async () => {
-    const [{ createApp }, { openPg }] = await Promise.all([
+    const [{ createApp }, { openPg }, { createGmailMailer }, { EMAIL_DOMAIN }] = await Promise.all([
       import('../server/app.js'),
       import('../server/db-pg.js'),
+      import('../server/mailer.js'),
+      import('../server/options.js'),
     ]);
     const db = await openPg(process.env.DATABASE_URL);
+    const mailer = await createGmailMailer({ user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD });
     return createApp({
       db,
       demo: false,
       secureCookies: true,
       cronSecret: process.env.CRON_SECRET || null,
       serveStatic: false,
+      // 국민대 메일만 가입·로그인. Gmail이 설정되어 있으면 메일 인증번호까지 확인한다.
+      emailPolicy: { domain: EMAIL_DOMAIN, verify: !!mailer },
+      mailer,
     });
   })();
   return appPromise;

@@ -6,6 +6,13 @@
       "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
       "runtimeArgs": ["server/index.js", "--demo"],
       "port": 3000
+    },
+    {
+      "name": "studybuddy-prodlike",
+      "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+      "runtimeArgs": ["server/index.js"],
+      "port": 3005,
+      "env": { "PORT": "3005", "DB_FILE": "data/prodlike.db" }
     }
   ]
 }

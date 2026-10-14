@@ -15,6 +15,7 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   background: #e7eadf;
@@ -285,3 +286,7 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 
 .spinner { width: 28px; height: 28px; border: 3px solid var(--line); border-top-color: var(--green); border-radius: 50%; animation: spin .8s linear infinite; margin: 60px auto; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* 입력칸 옆 버튼 (인증번호 받기) */
+.field .row .input { flex: 1; min-width: 0; }
+.inline-btn { height: 46px; padding: 0 12px; font-size: 13.5px; white-space: nowrap; }
