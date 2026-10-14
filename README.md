@@ -44,11 +44,11 @@ GitHub `main` 브랜치에 push하면 Vercel이 `npm run build:vercel`을 실행
 | --- | --- |
 | `/` | 실서비스 화면 (`public/`) — 실제 사용자끼리 매칭 |
 | `/api/*` | 서버 API — `api/index.js` 서버리스 함수(서울 `icn1`)가 `server/app.js`를 실행 |
-| `/demo/` | 데모 버전 (서버 없는 HTML, 데모 메이트와 체험) |
 
 - DB: Supabase PostgreSQL(서울 `ap-northeast-2`). Vercel 환경 변수 `DATABASE_URL`에 **Transaction pooler(포트 6543)** 주소를 넣습니다. 테이블은 첫 실행 때 자동으로 만들어지고, 모든 테이블에 RLS가 켜져 Supabase 공개 API로는 접근할 수 없습니다.
 - 주간 정산: Vercel Cron이 매일 00:00(KST)에 `/api/cron/settle`을 호출합니다. 사용자가 앱을 열 때도 정산을 확인합니다. 환경 변수 `CRON_SECRET`을 넣으면 크론 호출만 허용합니다(선택).
-- 실서비스에는 데모 메이트와 데모 기능(시간 무관 출석, 즉시 마감)이 없습니다.
+- 실서비스에는 데모 기능(시간 무관 출석, 즉시 마감)이 없습니다. 데모 버전은 배포하지 않습니다(`npm run build:standalone`으로 HTML 파일만 만들 수 있음).
+- 가입·로그인은 국민대 메일(@kookmin.ac.kr)만 가능하고, 가입·비밀번호 찾기는 메일 인증번호로 확인합니다. Vercel 환경 변수 `GMAIL_USER`, `GMAIL_APP_PASSWORD`(Gmail 앱 비밀번호)가 필요합니다.
 - 날짜 계산은 서버 위치와 상관없이 한국 시간(KST) 기준입니다. (`server/time.js`)
 
 ## 기능 (기획서 → 구현)
