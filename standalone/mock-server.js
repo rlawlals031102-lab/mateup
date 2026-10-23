@@ -78,6 +78,7 @@ const routes = [
     await S.forceSettle(ctx.db, uid, ctx.id);
     return { match: await S.currentMatch(ctx.db, uid, opts) };
   }],
+  ['POST', '/matches/:id/leave', (ctx) => S.leaveMatch(ctx.db, needUser(ctx), ctx.id)],
   ['POST', '/matches/:id/choice', (ctx) => S.chooseNext(ctx.db, needUser(ctx), ctx.id, ctx.body.choice)],
   ['GET', '/matches/:id/messages', async (ctx) => ({ messages: await S.listMessages(ctx.db, needUser(ctx), ctx.id, ctx.query.after) })],
   ['POST', '/matches/:id/messages', async (ctx) => {

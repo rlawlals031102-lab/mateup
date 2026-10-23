@@ -101,6 +101,9 @@ export function createApp({
     await S.forceSettle(db, req.user.id, Number(req.params.id));
     res.json({ match: await S.currentMatch(db, req.user.id, opts) });
   });
+  api.post('/matches/:id/leave', auth, async (req, res) => {
+    res.json(await S.leaveMatch(db, req.user.id, Number(req.params.id)));
+  });
   api.post('/matches/:id/choice', auth, async (req, res) => {
     res.json(await S.chooseNext(db, req.user.id, Number(req.params.id), req.body?.choice));
   });

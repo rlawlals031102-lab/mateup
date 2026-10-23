@@ -531,6 +531,7 @@ export async function matchDetail(db, userId, m, { demo = false } = {}) {
     report: m.report && { me: m.report.users[userId], mate: m.report.users[mateId] },
     myChoice: amA ? m.choice_a : m.choice_b,
     mateChoice: amA ? m.choice_b : m.choice_a,
+    leavePolicy: m.status === 'active' ? leavePolicy(appts, atts.length > 0) : null,
   };
 }
 
@@ -566,6 +567,7 @@ export async function matchHistory(db, userId) {
       location: m.location,
       mate: publicUser(await getUser(db, mateId)),
       report: m.report && { me: m.report.users[userId], mate: m.report.users[mateId] },
+      left: m.report?.leftBy ? (m.report.leftBy === userId ? 'me' : 'mate') : null,
     });
   }
   return out;
@@ -577,6 +579,24 @@ export async function homeState(db, userId, opts) {
     user: privateUser(await getUser(db, userId)),
     pendingRequest: await pendingRequest(db, userId),
     match,
+    mateLeft: match ? null : await recentMateLeft(db, userId),
+  };
+}
+
+// 메이트가 최근(3일 안)에 매칭을 그만뒀으면 홈에서 알려 준다.
+async function recentMateLeft(db, userId) {
+  const row = await db.get(
+    `SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status = 'closed' ORDER BY id DESC LIMIT 1`,
+    userId, userId,
+  );
+  const m = parseMatch(row);
+  if (!m?.report?.leftBy || m.report.leftBy === userId) return null;
+  if (T.now() - new Date(m.report.generatedAt) > 3 * 24 * 60 * 60 * 1000) return null;
+  const mine = m.report.users[userId];
+  return {
+    mateName: (await getUser(db, mateOf(m, userId))).name,
+    refunded: mine.deposit.result === 'refunded' ? mine.deposit.amount : 0,
+    reward: mine.reward ?? 0,
   };
 }
 
@@ -652,6 +672,24 @@ export async function checkOut(db, userId, appointmentId, { demo = false } = {})
 
 // ───────────────────────── 주간 정산 / 리포트 ─────────────────────────
 
+// 한 사람의 출석률·공부시간. '공부 종료'를 안 누른 기록은 여기서 마감한다.
+async function attendanceStats(db, appts, uid) {
+  let attended = 0;
+  let minutes = 0;
+  for (const a of appts) {
+    const att = await attendanceOf(db, a.id, uid);
+    if (!att) continue;
+    attended++;
+    const mins = studiedMinutes(att, a);
+    minutes += mins;
+    if (!att.checked_out_at) {
+      await db.run('UPDATE attendance SET checked_out_at = ?, minutes = ? WHERE id = ?', iso(), mins, att.id);
+    }
+  }
+  const total = appts.length;
+  return { total, attended, minutes, rate: total ? Math.round((attended / total) * 100) : 100, kept: attended >= total };
+}
+
 export async function settleMatch(db, matchId) {
   return db.tx(async (t) => {
     // 먼저 상태를 바꿔 자리를 차지한다. 다른 요청이 이미 정산했다면 아무것도 하지 않는다.
@@ -660,25 +698,10 @@ export async function settleMatch(db, matchId) {
     const m = await getMatchRow(t, matchId);
     const appts = await t.all('SELECT * FROM appointments WHERE match_id = ?', m.id);
 
-    const stat = async (uid) => {
-      let attended = 0;
-      let minutes = 0;
-      for (const a of appts) {
-        const att = await attendanceOf(t, a.id, uid);
-        if (!att) continue;
-        attended++;
-        const mins = studiedMinutes(att, a);
-        minutes += mins;
-        if (!att.checked_out_at) {
-          await t.run('UPDATE attendance SET checked_out_at = ?, minutes = ? WHERE id = ?', iso(), mins, att.id);
-        }
-      }
-      const total = appts.length;
-      return { total, attended, minutes, rate: total ? Math.round((attended / total) * 100) : 100,
-        kept: attended >= total };
+    const users = {
+      [m.user_a]: await attendanceStats(t, appts, m.user_a),
+      [m.user_b]: await attendanceStats(t, appts, m.user_b),
     };
-
-    const users = { [m.user_a]: await stat(m.user_a), [m.user_b]: await stat(m.user_b) };
 
     for (const [uid, mid] of [[m.user_a, m.user_b], [m.user_b, m.user_a]]) {
       const me = users[uid];
@@ -707,6 +730,64 @@ export async function settleMatch(db, matchId) {
       if ((await getUser(t, uid)).is_bot) await t.run(`UPDATE matches SET ${col} = 'continue' WHERE id = ?`, m.id);
     }
     return getMatchRow(t, m.id);
+  });
+}
+
+// 매칭 그만두기 규칙
+//   free    : 첫 약속 시작 전 (아무도 출석 안 함) → 둘 다 보증금 반환
+//   penalty : 약속이 시작된 뒤 → 그만둔 사람의 보증금은 메이트에게 보상, 메이트는 자기 보증금 반환
+//   settle  : 남은 약속이 없음 → 그만두는 대신 지금까지의 출석으로 주간 정산
+function leavePolicy(appts, anyAttendance) {
+  const nowT = T.now();
+  if (!appts.some((a) => T.at(a.date, a.end_time) > nowT)) return 'settle';
+  const started = anyAttendance || appts.some((a) => T.at(a.date, a.start_time) <= nowT);
+  return started ? 'penalty' : 'free';
+}
+
+export async function leaveMatch(db, userId, matchId) {
+  const m = await loadMatchForUser(db, userId, matchId);
+  if (m.status !== 'active') throw new AppError(400, '진행 중인 매칭만 그만둘 수 있어요.');
+  const appts = await db.all('SELECT * FROM appointments WHERE match_id = ? ORDER BY date', m.id);
+  const anyAtt = await db.get(
+    'SELECT 1 AS x FROM attendance a JOIN appointments p ON p.id = a.appointment_id WHERE p.match_id = ? LIMIT 1', m.id,
+  );
+  const policy = leavePolicy(appts, !!anyAtt);
+  if (policy === 'settle') {
+    await settleMatch(db, m.id);
+    return { result: 'settled' };
+  }
+
+  return db.tx(async (t) => {
+    // 동시에 정산·그만두기가 겹쳐도 한 번만 처리되도록 상태를 먼저 바꾼다.
+    const claimed = await t.run("UPDATE matches SET status = 'closed' WHERE id = ? AND status = 'active'", m.id);
+    if (!claimed.changes) throw new AppError(409, '이미 끝난 매칭이에요.');
+    const mateId = mateOf(m, userId);
+    const users = {
+      [userId]: await attendanceStats(t, appts, userId),
+      [mateId]: await attendanceStats(t, appts, mateId),
+    };
+    const none = { result: 'none', amount: 0 };
+    if (!m.stake) {
+      users[userId].deposit = none;
+      users[mateId].deposit = none;
+    } else if (policy === 'free') {
+      await adjustPoints(t, userId, m.stake, '첫 약속 전 매칭 종료 · 보증금 반환', m.id);
+      await adjustPoints(t, mateId, m.stake, '메이트의 첫 약속 전 매칭 종료 · 보증금 반환', m.id);
+      users[userId].deposit = { result: 'refunded', amount: m.stake };
+      users[mateId].deposit = { result: 'refunded', amount: m.stake };
+    } else {
+      await adjustPoints(t, mateId, m.stake * 2, '메이트 중도 종료 · 보증금 반환 + 보상', m.id);
+      users[userId].deposit = { result: 'to_mate', amount: m.stake };
+      users[mateId].deposit = { result: 'refunded', amount: m.stake };
+    }
+    users[userId].reward = 0;
+    users[mateId].reward = policy === 'penalty' ? m.stake : 0;
+
+    const col = m.user_a === userId ? 'choice_a' : 'choice_b';
+    const report = { generatedAt: iso(), leftBy: userId, leavePolicy: policy, users };
+    await t.run(`UPDATE matches SET report = ?, ${col} = 'left' WHERE id = ?`, JSON.stringify(report), m.id);
+    for (const uid of [m.user_a, m.user_b]) await requeueBot(t, uid);
+    return { result: policy === 'free' ? 'left_free' : 'left_penalty', stake: m.stake };
   });
 }
 

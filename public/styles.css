@@ -290,3 +290,78 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 /* 입력칸 옆 버튼 (인증번호 받기) */
 .field .row .input { flex: 1; min-width: 0; }
 .inline-btn { height: 46px; padding: 0 12px; font-size: 13.5px; white-space: nowrap; }
+
+/* 매칭 그만두기 */
+.leave-box { margin-top: 28px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.leave-box .btn { height: 42px; font-size: 14px; }
+.leave-box p { margin-top: 6px; }
+
+/* ── 모바일: 요소를 촘촘하게 (한 화면에 더 많이) ── */
+@media (max-width: 480px) {
+  html { font-size: 14px; }
+  body { line-height: 1.45; }
+  .topbar { height: 48px; }
+  .topbar h1 { font-size: 16px; }
+  .logo { height: 28px; }
+  .view { padding: 4px 12px calc(var(--tabbar-h) + 20px); }
+  :root { --tabbar-h: 56px; --radius: 14px; }
+  .card { padding: 13px; margin-top: 9px; }
+  .card-head { margin-bottom: 8px; }
+  .card-head h2 { font-size: 14.5px; }
+  .btn { height: 42px; font-size: 14px; border-radius: 10px; }
+  .btn.sm { height: 32px; font-size: 12.5px; }
+  .sticky-cta .btn { height: 48px; font-size: 15.5px; }
+  .input, .select { height: 40px; font-size: 14px; }
+  .inline-btn { height: 40px; }
+  .field { margin-top: 10px; }
+  .field > span { font-size: 12px; margin-bottom: 4px; }
+  .day-picker button { height: 36px; font-size: 13px; }
+  .style-picker button { padding: 9px 4px; }
+  .style-picker b { font-size: 13px; }
+  .style-picker small { font-size: 10.5px; }
+  .toggle-pair button { height: 40px; font-size: 13px; }
+  .notice { font-size: 12px; padding: 8px 10px; margin-top: 9px; }
+  .avatar { width: 48px; height: 48px; font-size: 26px; }
+  .avatar.lg { width: 64px; height: 64px; font-size: 34px; }
+  .profile { gap: 12px; }
+  .profile .name { font-size: 17px; }
+  .tag { font-size: 11.5px; padding: 2px 8px; }
+  .appt { grid-template-columns: auto 1fr auto; gap: 10px; padding: 7px 10px; }
+  .appt + .appt { margin-top: 6px; }
+  .appt .date { display: flex; gap: 3px; align-items: baseline; white-space: nowrap; border-right: 0; padding-right: 0; }
+  .appt .date b { display: inline; font-size: 13px; }
+  .appt .date span { font-size: 12px; }
+  .appt .meta .muted { display: none; } /* 장소는 위 안내에 이미 있음 */
+  .pill { font-size: 11px; padding: 1px 7px; }
+  .appt .meta { font-size: 12.5px; }
+  .checkin { grid-template-columns: 1fr 88px; gap: 10px; }
+  .qr-box { width: 88px; height: 88px; }
+  .timer { font-size: 26px; }
+  .week { gap: 3px; }
+  .week .d { padding: 5px 0 4px; font-size: 10.5px; border-radius: 8px; }
+  .week .d b { font-size: 11.5px; }
+  .week .d .mark { width: 20px; height: 20px; margin: 3px auto 2px; font-size: 11px; }
+  .stat { padding: 9px 6px; }
+  .stat b { font-size: 16px; }
+  .vs .col { padding: 10px; }
+  .vs .col .big { font-size: 22px; }
+  .steps li { margin-top: 8px; font-size: 13px; padding-left: 30px; }
+  .steps li::before { width: 21px; height: 21px; font-size: 12px; }
+  .bubble { font-size: 13.5px; padding: 7px 11px; }
+  .quick { padding-top: 6px; }
+  .quick-head { padding-bottom: 5px; font-size: 12.5px; }
+  .quick-card { padding: 7px 8px; gap: 6px; }
+  .quick-icon { width: 26px; height: 26px; font-size: 14px; }
+  .quick-text b { font-size: 12.5px; }
+  .quick-text small { font-size: 10.5px; }
+  .chat-input { padding: 6px 10px 8px; }
+  .chat-input .input, .chat-input .btn { height: 38px; }
+  .tabbar a { font-size: 10.5px; }
+  .tabbar a .ti { font-size: 17px; }
+  .auth { padding-top: 3vh; }
+  .auth h2 { font-size: 22px; margin: 12px 0 4px; }
+  .auth .lead { margin-bottom: 14px; font-size: 13px; }
+  .logo.lg { width: min(100%, 260px); }
+  .list-item { padding: 8px 0; font-size: 13px; }
+  .leave-box { margin-top: 18px; }
+}

@@ -294,7 +294,7 @@ async function renderHome(alive) {
   loading();
   const state = await api('/me');
   if (!alive()) return;
-  const { user, pendingRequest: req, match } = state;
+  const { user, pendingRequest: req, match, mateLeft } = state;
 
   let main;
   if (match?.status === 'reported') {
@@ -335,7 +335,18 @@ async function renderHome(alive) {
         <button class="btn ghost block mt danger" id="cancel">신청 취소하기</button>
       </div>`;
   } else {
-    main = `
+    let leftNote = '';
+    if (mateLeft) {
+      const detail = mateLeft.reward
+        ? `보증금 ${won(mateLeft.refunded)}P를 돌려받고, 보상으로 <span class="plus">+${won(mateLeft.reward)}P</span>를 받았어요.`
+        : mateLeft.refunded ? `보증금 ${won(mateLeft.refunded)}P를 돌려받았어요.` : '';
+      leftNote = `
+      <div class="card">
+        <div class="card-head"><h2>👋 메이트가 매칭을 그만뒀어요</h2></div>
+        <p class="small">${esc(mateLeft.mateName)}님이 이번 주 매칭을 중간에 그만뒀어요. ${detail}</p>
+      </div>`;
+    }
+    main = `${leftNote}
       <div class="card hero">
         <h2 style="font-size:20px;line-height:1.4">이번 주, 같이 공부할<br>메이트를 찾아볼까요?</h2>
         <p class="small muted mt">요일·시간·장소만 고르면 조건이 맞는 1:1 메이트와 연결돼요.</p>
@@ -648,7 +659,12 @@ function drawMatch(m, alive) {
       <div class="demo-bar">
         <b>데모 모드</b> · 시간과 상관없이 출석할 수 있고, 주간을 바로 마감해 리포트를 볼 수 있어요.
         <button class="btn sm block mt" id="settle">이번 주 마감하고 리포트 받기</button>
-      </div>` : ''}`;
+      </div>` : ''}
+
+    <div class="leave-box">
+      <button class="btn ghost block danger" id="leave">매칭 그만두기</button>
+      <p class="tiny muted center">${esc(LEAVE_HINT[m.leavePolicy]?.(m) ?? '')}</p>
+    </div>`;
 
   $$('img[data-qr]').forEach(async (img) => {
     const id = img.dataset.qr;
@@ -688,6 +704,21 @@ function drawMatch(m, alive) {
       refresh(res.match);
     } catch (err) { toast(err.message, true); }
   });
+  $('#leave')?.addEventListener('click', async () => {
+    if (!confirm(LEAVE_CONFIRM[m.leavePolicy](m))) return;
+    try {
+      const res = await api(`/matches/${m.id}/leave`, { method: 'POST' });
+      if (res.result === 'settled') {
+        toast('이번 주를 정산했어요. 리포트를 확인해 주세요.');
+        router();
+        return;
+      }
+      toast(res.result === 'left_free' || !res.stake
+        ? '매칭을 그만뒀어요.'
+        : `매칭을 그만뒀어요. 보증금 ${won(res.stake)}P는 메이트에게 전달됐어요.`);
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
   $('#settle')?.addEventListener('click', async () => {
     if (!confirm('이번 주를 마감하고 보증금을 정산할까요?')) return;
     try {
@@ -696,6 +727,26 @@ function drawMatch(m, alive) {
     } catch (err) { toast(err.message, true); }
   });
 }
+
+// 매칭 그만두기 규칙 안내 (server/service.js leavePolicy 와 같은 규칙)
+const LEAVE_HINT = {
+  free: (m) => (m.stake ? `첫 약속 전이라 지금 그만두면 둘 다 보증금 ${won(m.stake)}P를 돌려받아요.` : '첫 약속 전이에요.'),
+  penalty: (m) => (m.stake ? `지금 그만두면 내 보증금 ${won(m.stake)}P는 메이트에게 보상으로 전달돼요.` : '지금 그만두면 이번 주 매칭이 바로 끝나요.'),
+  settle: () => '남은 약속이 없어서, 지금까지 출석으로 이번 주를 정산해요.',
+};
+const LEAVE_CONFIRM = {
+  free: (m) => `매칭을 그만둘까요?
+
+첫 약속 전이라 나와 메이트 모두 보증금${m.stake ? ` ${won(m.stake)}P` : ''}를 돌려받아요.`,
+  penalty: (m) => (m.stake
+    ? `정말 매칭을 그만둘까요?
+
+약속이 이미 시작돼서 내 보증금 ${won(m.stake)}P는 ${m.mate.name}님에게 보상으로 전달되고, 돌려받을 수 없어요.`
+    : `정말 매칭을 그만둘까요?
+
+${m.mate.name}님과의 이번 주 매칭이 바로 끝나요.`),
+  settle: () => '남은 약속이 없어요. 지금까지 출석으로 이번 주를 정산하고 리포트를 받을까요?',
+};
 
 const DEPOSIT_TEXT = {
   none: () => '보증금 없이 진행했어요.',
@@ -986,7 +1037,7 @@ async function renderMe(alive) {
             <div class="avatar sm">${esc(h.mate.avatar)}</div>
             <div><div><b>${esc(h.mate.name)}</b></div><div class="tiny muted">${fmtDate(h.weekStart)} ~ ${fmtDate(h.weekEnd)} · ${esc(h.location)}</div></div>
           </div>
-          ${h.report ? `<span class="pill">${h.report.me.rate}% · ${fmtMinutes(h.report.me.minutes)}</span>` : ''}
+          ${h.left ? `<span class="pill red">${h.left === 'me' ? '내가 그만둠' : '메이트가 그만둠'}</span>` : h.report ? `<span class="pill">${h.report.me.rate}% · ${fmtMinutes(h.report.me.minutes)}</span>` : ''}
         </div>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
     </section>
 

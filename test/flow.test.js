@@ -166,6 +166,44 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(msgs[0].userId, a);
     });
 
+    test('매칭 그만두기: 첫 약속 전 / 시작 후 / 남은 약속 없음', async () => {
+      const [a, b] = [await signup('a'), await signup('b')];
+      const req = { ...baseReq, deposit: 10000 };
+
+      // 첫 약속(월 19:00) 전 → 둘 다 보증금 반환
+      await S.createRequest(db, a, req);
+      let { matchId } = await S.createRequest(db, b, req);
+      assert.equal((await S.currentMatch(db, a)).leavePolicy, 'free');
+      assert.equal((await S.leaveMatch(db, a, matchId)).result, 'left_free');
+      assert.equal(await points(a), 50000);
+      assert.equal(await points(b), 50000);
+      assert.equal(await S.currentMatch(db, b), null);
+      assert.equal((await S.homeState(db, b)).mateLeft.mateName, 'a');
+      assert.equal((await S.matchHistory(db, b))[0].left, 'mate');
+      await assert.rejects(S.leaveMatch(db, a, matchId), /진행 중인 매칭만/);
+
+      // 약속 시작 후 → 그만둔 쪽 보증금이 메이트에게
+      await S.createRequest(db, a, req);
+      ({ matchId } = await S.createRequest(db, b, req));
+      setNow(kst(2026, 10, 12, 19, 30));
+      assert.equal((await S.currentMatch(db, b)).leavePolicy, 'penalty');
+      assert.equal((await S.leaveMatch(db, b, matchId)).result, 'left_penalty');
+      assert.equal(await points(b), 40000);
+      assert.equal(await points(a), 60000);
+      const note = (await S.homeState(db, a)).mateLeft;
+      assert.deepEqual([note.refunded, note.reward], [10000, 10000]);
+      assert.equal((await S.homeState(db, b)).mateLeft, null, '그만둔 본인에게는 안내 없음');
+      assert.equal((await S.matchHistory(db, b))[0].left, 'me');
+
+      // 남은 약속이 없으면 → 그만두는 대신 정산 (리포트)
+      setNow(kst(2026, 10, 12, 9, 0));
+      await S.createRequest(db, a, { ...baseReq, days: [1] });
+      ({ matchId } = await S.createRequest(db, b, { ...baseReq, days: [1] }));
+      setNow(kst(2026, 10, 13, 9, 0));
+      assert.equal((await S.leaveMatch(db, a, matchId)).result, 'settled');
+      assert.equal((await S.currentMatch(db, a)).status, 'reported');
+    });
+
     test('국민대 메일 인증: 가입 · 로그인 제한 · 비밀번호 찾기', async () => {
       const policy = { domain: 'kookmin.ac.kr', verify: true };
       const sent = [];
