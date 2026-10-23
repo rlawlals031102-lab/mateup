@@ -182,6 +182,15 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal((await S.matchHistory(db, b))[0].left, 'mate');
       await assert.rejects(S.leaveMatch(db, a, matchId), /진행 중인 매칭만/);
 
+      // 지난 스터디 다시 보기: 남은 약속은 '취소', 누가 그만뒀는지 표시, 남의 매칭은 볼 수 없음
+      const past = await S.matchById(db, b, matchId);
+      assert.equal(past.status, 'closed');
+      assert.equal(past.left, 'mate');
+      assert.ok(past.appointments.every((x) => x.me.status === 'cancelled'));
+      assert.equal(past.report.me.deposit.result, 'refunded');
+      const c = await signup('c');
+      await assert.rejects(S.matchById(db, c, matchId), /찾을 수 없어요/);
+
       // 약속 시작 후 → 그만둔 쪽 보증금이 메이트에게
       await S.createRequest(db, a, req);
       ({ matchId } = await S.createRequest(db, b, req));

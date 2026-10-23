@@ -64,6 +64,7 @@ const routes = [
   ['GET', '/me', (ctx) => S.homeState(ctx.db, needUser(ctx), opts)],
   ['PUT', '/me', async (ctx) => ({ user: await S.updateProfile(ctx.db, needUser(ctx), ctx.body) })],
   ['GET', '/me/points', async (ctx) => ({ logs: await S.pointLogs(ctx.db, needUser(ctx)) })],
+  ['GET', '/matches/:id', async (ctx) => ({ match: await S.matchById(ctx.db, needUser(ctx), ctx.id, opts) })],
   ['GET', '/me/history', async (ctx) => ({ matches: await S.matchHistory(ctx.db, needUser(ctx)) })],
 
   ['POST', '/requests', (ctx) => S.createRequest(ctx.db, needUser(ctx), ctx.body)],

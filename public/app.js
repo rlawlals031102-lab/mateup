@@ -121,7 +121,8 @@ async function router() {
   const token = ++routeToken;
   const name = location.hash.replace(/^#\/?/, '') || 'home';
   window.scrollTo(0, 0);
-  const render = routes[name] ?? renderHome;
+  const pastId = name.match(/^history\/(\d+)$/)?.[1];
+  const render = pastId ? (alive) => renderPast(alive, Number(pastId)) : routes[name] ?? renderHome;
   try {
     if (!OPTIONS) OPTIONS = await api('/options');
     await render(() => token === routeToken);
@@ -536,10 +537,11 @@ const STATUS_PILL = {
   missed: '<span class="pill red">미참석</span>',
   open: '<span class="pill lime">출석 가능</span>',
   scheduled: '<span class="pill gray">예정</span>',
+  cancelled: '<span class="pill gray">취소</span>',
 };
 const MARK = {
   done: ['✓', '출석'], studying: ['✓', '공부중'], missed: ['✕', '미참석'],
-  open: ['', '예정'], scheduled: ['', '예정'], off: ['–', '휴식'],
+  open: ['', '예정'], scheduled: ['', '예정'], off: ['–', '휴식'], cancelled: ['–', '취소'],
 };
 
 async function renderMatch(alive) {
@@ -827,6 +829,91 @@ function renderReport(m, alive) {
   }
 }
 
+// ───────────────────────── 지난 스터디 다시 보기 ─────────────────────────
+
+const PAST_DEPOSIT = {
+  none: () => '보증금 없이 진행했어요.',
+  refunded: (n) => `보증금 ${won(n)}P를 돌려받았어요.`,
+  to_mate: (n) => `보증금 ${won(n)}P가 메이트에게 전달됐어요.`,
+  forfeited: (n) => `둘 다 약속을 지키지 못해 보증금 ${won(n)}P가 반환되지 않았어요.`,
+};
+
+async function renderPast(alive, id) {
+  setTop({ title: '지난 스터디', back: '#/me' });
+  setTabs('me');
+  loading();
+  const { match: m } = await api(`/matches/${id}`);
+  if (!alive()) return;
+  if (m.status !== 'closed') {
+    location.hash = '#/match'; // 아직 진행 중인 매칭은 매칭중 화면에서
+    return;
+  }
+  const r = m.report;
+  const headline = m.left === 'me' ? '내가 중간에 그만둔 스터디예요'
+    : m.left === 'mate' ? `${m.mate.name}님이 중간에 그만둔 스터디예요`
+    : r?.me?.kept ? '약속을 모두 지킨 주였어요 🎉' : '아쉬움이 남은 주였어요';
+
+  const weekRow = (who) => m.week.map((d) => {
+    const [sym, label] = MARK[d[who]];
+    return `<div class="d"><b>${WD[d.weekday]}</b><span class="muted">${Number(d.date.slice(8))}일</span>
+      <div class="mark ${d[who]}">${sym}</div><span class="tiny">${label}</span></div>`;
+  }).join('');
+  const col = (u, name) => `
+    <div class="col">
+      <div class="small muted">${esc(name)}</div>
+      <div class="big">${u.rate}%</div>
+      <div class="tiny muted">출석 ${u.attended}/${u.total}</div>
+      <div class="bar"><i style="width:${u.rate}%"></i></div>
+      <div class="small mt"><b>${fmtMinutes(u.minutes)}</b></div>
+      <div class="tiny muted">공부시간</div>
+    </div>`;
+
+  view.innerHTML = `
+    <section class="card hero">
+      <div class="small muted">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)} · ${m.round}주차 · ${esc(m.location)}</div>
+      <h2 style="font-size:18px;margin-top:4px">${esc(headline)}</h2>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>👥 메이트</h2></div>
+      <div class="profile">
+        <div class="avatar">${esc(m.mate.avatar)}</div>
+        <div>
+          <div class="name">${esc(m.mate.name)}${m.mate.age ? `<small>(${m.mate.age}세)</small>` : ''}${botBadge(m.mate)}</div>
+          <div class="tags">${m.mate.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
+        </div>
+      </div>
+      <div class="notice"><span>🤝</span><span>${esc(styleLabels(m.styles))} · ${m.stake ? `보증금 ${won(m.stake)}P` : '보증금 없음'}</span></div>
+    </section>
+
+    ${r ? `
+    <section class="card">
+      <div class="card-head"><h2>📈 출석률과 공부시간</h2></div>
+      <div class="vs">${col(r.me, '나')}${col(r.mate, m.mate.name)}</div>
+      <p class="small mt">💰 ${PAST_DEPOSIT[r.me.deposit.result](r.me.deposit.amount)}
+        ${r.me.reward ? ` 보상으로 <span class="plus">+${won(r.me.reward)}P</span>를 받았어요.` : ''}</p>
+    </section>` : ''}
+
+    <section class="card">
+      <div class="card-head"><h2>📅 약속</h2></div>
+      ${m.appointments.map((a) => `
+        <div class="appt">
+          <div class="date"><b>${fmtDate(a.date)}</b><span>(${WD[a.weekday]})</span></div>
+          <div class="meta"><div>🕒 ${fmtTime(a.startTime)} ~ ${fmtTime(a.endTime)}</div>
+            ${a.me.minutes ? `<div class="muted">공부 ${fmtMinutes(a.me.minutes)}</div>` : ''}</div>
+          <div>${STATUS_PILL[a.me.status]}</div>
+        </div>`).join('') || '<p class="small muted">약속이 없었어요.</p>'}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>📊 출석</h2></div>
+      <div class="week-label">나</div>
+      <div class="week">${weekRow('me')}</div>
+      <div class="week-label">${esc(m.mate.name)}</div>
+      <div class="week">${weekRow('mate')}</div>
+    </section>`;
+}
+
 // ───────────────────────── QR 스캐너 ─────────────────────────
 
 function closeModal() {
@@ -1032,13 +1119,13 @@ async function renderMe(alive) {
     <section class="card">
       <div class="card-head"><h2>📚 지난 스터디</h2></div>
       ${matches.length ? matches.map((h) => `
-        <div class="list-item">
+        <a class="list-item link-item" href="#/history/${h.id}">
           <div class="row">
             <div class="avatar sm">${esc(h.mate.avatar)}</div>
             <div><div><b>${esc(h.mate.name)}</b></div><div class="tiny muted">${fmtDate(h.weekStart)} ~ ${fmtDate(h.weekEnd)} · ${esc(h.location)}</div></div>
           </div>
-          ${h.left ? `<span class="pill red">${h.left === 'me' ? '내가 그만둠' : '메이트가 그만둠'}</span>` : h.report ? `<span class="pill">${h.report.me.rate}% · ${fmtMinutes(h.report.me.minutes)}</span>` : ''}
-        </div>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
+          <span class="row" style="gap:6px">${h.left ? `<span class="pill red">${h.left === 'me' ? '내가 그만둠' : '메이트가 그만둠'}</span>` : h.report ? `<span class="pill">${h.report.me.rate}% · ${fmtMinutes(h.report.me.minutes)}</span>` : ''}<span class="chev">›</span></span>
+        </a>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
     </section>
 
     <button class="btn ghost block mt-lg danger" id="logout">로그아웃</button>

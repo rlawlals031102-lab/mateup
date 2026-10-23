@@ -365,3 +365,8 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
   .list-item { padding: 8px 0; font-size: 13px; }
   .leave-box { margin-top: 18px; }
 }
+
+/* 지난 스터디 목록 → 상세 링크 */
+a.link-item { text-decoration: none; color: inherit; }
+a.link-item:hover { background: var(--soft); }
+.chev { color: var(--muted); font-size: 18px; line-height: 1; }

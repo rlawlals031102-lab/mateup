@@ -96,6 +96,10 @@ export function createApp({
 
   // 매칭
   api.get('/matches/current', auth, async (req, res) => res.json({ match: await S.currentMatch(db, req.user.id, opts) }));
+  // 지난 매칭 다시 보기 (/matches/current 보다 뒤에 둬야 'current'를 가로채지 않음)
+  api.get('/matches/:id', auth, async (req, res) => {
+    res.json({ match: await S.matchById(db, req.user.id, Number(req.params.id), opts) });
+  });
   api.post('/matches/:id/settle', auth, async (req, res) => {
     if (!demo) return res.status(403).json({ error: '데모 모드에서만 사용할 수 있어요.' });
     await S.forceSettle(db, req.user.id, Number(req.params.id));

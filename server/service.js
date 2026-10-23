@@ -465,9 +465,10 @@ function isCheckinWindow(appt) {
   return nowT >= open && nowT < close;
 }
 
-function appointmentStatus(appt, att, demo) {
+function appointmentStatus(appt, att, demo, active = true) {
   if (att) return att.checked_out_at ? 'done' : 'studying';
   if (T.at(appt.date, appt.end_time) <= T.now()) return 'missed';
+  if (!active) return 'cancelled'; // 중간에 끝난 매칭의 남은 약속
   if (demo || isCheckinWindow(appt)) return 'open';
   return 'scheduled';
 }
@@ -491,9 +492,9 @@ export async function matchDetail(db, userId, m, { demo = false } = {}) {
       endTime: a.end_time,
       location: m.location,
       code: a.code,
-      me: { status: appointmentStatus(a, mine, demo), checkedInAt: mine?.checked_in_at ?? null,
+      me: { status: appointmentStatus(a, mine, demo, m.status === 'active'), checkedInAt: mine?.checked_in_at ?? null,
         method: mine?.method ?? null, minutes: studiedMinutes(mine, a) },
-      mate: { status: appointmentStatus(a, mates, demo), minutes: studiedMinutes(mates, a) },
+      mate: { status: appointmentStatus(a, mates, demo, m.status === 'active'), minutes: studiedMinutes(mates, a) },
     };
   });
 
@@ -532,6 +533,7 @@ export async function matchDetail(db, userId, m, { demo = false } = {}) {
     myChoice: amA ? m.choice_a : m.choice_b,
     mateChoice: amA ? m.choice_b : m.choice_a,
     leavePolicy: m.status === 'active' ? leavePolicy(appts, atts.length > 0) : null,
+    left: m.report?.leftBy ? (m.report.leftBy === userId ? 'me' : 'mate') : null,
   };
 }
 
@@ -543,6 +545,12 @@ async function countRounds(db, m) {
     prev = (await db.get('SELECT prev_match_id FROM matches WHERE id = ?', prev))?.prev_match_id;
   }
   return n;
+}
+
+// 지난 매칭 포함, 내가 참여한 매칭 하나의 상세 (지난 스터디 다시 보기)
+export async function matchById(db, userId, matchId, opts) {
+  const m = await loadMatchForUser(db, userId, matchId);
+  return matchDetail(db, userId, m, opts);
 }
 
 export async function currentMatch(db, userId, opts) {
