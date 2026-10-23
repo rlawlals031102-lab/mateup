@@ -6,7 +6,7 @@ import initSqlJs from 'sql.js';
 import wasmBinary from 'sql.js/dist/sql-wasm.wasm';
 import QRCode from 'qrcode';
 import { openSqlite } from '../server/db.js';
-import { seedBots } from '../server/seed.js';
+import { seedBots, retireOldBots } from '../server/seed.js';
 import * as S from '../server/service.js';
 import { LOCATIONS, STYLES, DEPOSITS, CHECKIN_EARLY_MIN } from '../server/options.js';
 import { persist, clearSaved } from './shims/sqlite.js';
@@ -19,6 +19,7 @@ const ready = (async () => {
   globalThis.__SQL = await initSqlJs({ wasmBinary });
   const db = await openSqlite('browser');
   await seedBots(db);
+  await retireOldBots(db);
   await S.autoSettle(db);
   persist();
   return db;

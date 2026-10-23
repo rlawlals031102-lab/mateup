@@ -5,7 +5,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openSqlite } from './db.js';
-import { seedBots } from './seed.js';
+import { seedBots, retireOldBots } from './seed.js';
 import { autoSettle } from './service.js';
 import { createApp } from './app.js';
 import { createGmailMailer } from './mailer.js';
@@ -26,7 +26,10 @@ if (process.env.DATABASE_URL) {
   console.log(`DB: SQLite (${path.relative(ROOT, file)})`);
 }
 
-if (demo) await seedBots(db);
+if (demo) {
+  await seedBots(db);
+  await retireOldBots(db);
+}
 await autoSettle(db);
 // 주간이 끝난 매칭은 접속이 없어도 주기적으로 리포트를 만든다.
 setInterval(() => autoSettle(db).catch(console.error), 10 * 60 * 1000).unref();
