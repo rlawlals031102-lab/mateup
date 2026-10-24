@@ -1,4 +1,6 @@
 :root {
+  /* 앱 화면 폭 (PC에서는 아래 미디어쿼리에서 480px) */
+  --app-w: 440px;
   --paper: #f7f8f2;
   --surface: #ffffff;
   --ink: #203829;
@@ -31,7 +33,7 @@ a { color: inherit; }
 
 .phone {
   position: relative;
-  max-width: 440px;
+  max-width: var(--app-w);
   min-height: 100vh;
   margin: 0 auto;
   background: var(--paper);
@@ -62,7 +64,7 @@ a { color: inherit; }
 /* ── 하단 탭 ── */
 .tabbar {
   position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
-  width: 100%; max-width: 440px; height: var(--tabbar-h);
+  width: 100%; max-width: var(--app-w); height: var(--tabbar-h);
   display: grid; grid-template-columns: repeat(4, 1fr);
   background: var(--surface); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
@@ -228,7 +230,7 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 .bubble.me { align-self: flex-end; background: var(--green); color: #fff; border-bottom-right-radius: 4px; }
 .bubble.mate { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .bubble time { display: block; font-size: 10.5px; opacity: .65; margin-top: 2px; }
-.chat-dock { position: fixed; bottom: var(--tabbar-h); left: 50%; transform: translateX(-50%); width: 100%; max-width: 440px; background: var(--paper); border-top: 1px solid var(--line); z-index: 6; }
+.chat-dock { position: fixed; bottom: var(--tabbar-h); left: 50%; transform: translateX(-50%); width: 100%; max-width: var(--app-w); background: var(--paper); border-top: 1px solid var(--line); z-index: 6; }
 .chat-input { display: flex; gap: 8px; padding: 8px 12px 10px; }
 
 .quick { padding: 10px 0 0; }
@@ -278,7 +280,7 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 
 .modal { position: fixed; inset: 0; background: rgba(20, 30, 24, .5); display: grid; place-items: end center; z-index: 20; }
 .modal[hidden] { display: none; }
-.sheet { width: 100%; max-width: 440px; background: var(--paper); border-radius: 20px 20px 0 0; padding: 20px 16px 28px; max-height: 90vh; overflow: auto; }
+.sheet { width: 100%; max-width: var(--app-w); background: var(--paper); border-radius: 20px 20px 0 0; padding: 20px 16px 28px; max-height: 90vh; overflow: auto; }
 .sheet h3 { font-size: 18px; margin-bottom: 4px; }
 .scanner { position: relative; aspect-ratio: 1; background: #111; border-radius: 14px; overflow: hidden; margin-top: 12px; }
 .scanner video { width: 100%; height: 100%; object-fit: cover; }
@@ -375,3 +377,21 @@ a.link-item:hover { background: var(--soft); }
 .demo-login { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
 .demo-login .btn { border-style: dashed; }
 .demo-login p { margin-top: 6px; }
+
+/* ── PC: 폭 480px 앱 화면을 가운데에, 위아래에도 여백을 둔 카드 모양 (안쪽에서 스크롤) ── */
+@media (min-width: 600px) {
+  :root { --app-w: 480px; --app-gap: 24px; }
+  .phone {
+    height: calc(100vh - var(--app-gap) * 2);
+    min-height: 0;
+    margin: var(--app-gap) auto;
+    border-radius: 24px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none; /* 스크롤바가 내용 폭을 줄이지 않게 숨김 (휠·터치패드 스크롤은 그대로) */
+  }
+  .phone::-webkit-scrollbar { display: none; }
+  .tabbar { bottom: var(--app-gap); border-radius: 0 0 24px 24px; }
+  .chat-dock { bottom: calc(var(--tabbar-h) + var(--app-gap)); }
+  .toast { bottom: calc(var(--tabbar-h) + var(--app-gap) + 20px); }
+}

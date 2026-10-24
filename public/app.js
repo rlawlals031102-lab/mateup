@@ -5,6 +5,11 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const view = $('#view');
 const topbar = $('#topbar');
 const tabbar = $('#tabbar');
+// PC에서는 앱 화면(.phone) 안에서 스크롤되고, 휴대폰에서는 페이지 전체가 스크롤된다.
+const scroller = () => {
+  const phone = $('.phone');
+  return getComputedStyle(phone).overflowY === 'auto' ? phone : document.scrollingElement;
+};
 
 const WD = ['', '월', '화', '수', '목', '금', '토', '일'];
 const AVATARS = ['🙂', '😎', '🤓', '😺', '🐻', '🐰', '🦊', '🐼', '👩', '🧑', '👦', '👧', '👩‍🎓', '🧑‍💻', '🙋‍♀️', '🙋‍♂️', '🌱', '📚'];
@@ -120,7 +125,7 @@ async function router() {
   closeModal();
   const token = ++routeToken;
   const name = location.hash.replace(/^#\/?/, '') || 'home';
-  window.scrollTo(0, 0);
+  scroller().scrollTo(0, 0);
   const pastId = name.match(/^history\/(\d+)$/)?.[1];
   const render = pastId ? (alive) => renderPast(alive, Number(pastId)) : routes[name] ?? renderHome;
   try {
@@ -1047,7 +1052,7 @@ async function renderChat(alive) {
       box.insertAdjacentHTML('beforeend', `
         <div class="bubble ${msg.userId === user.id ? 'me' : 'mate'}">${esc(msg.body)}<time>${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}</time></div>`);
     }
-    window.scrollTo(0, document.body.scrollHeight);
+    scroller().scrollTo(0, scroller().scrollHeight);
   };
   await load();
   if (!box.children.length) box.innerHTML = `<p class="center small muted" id="hello">${esc(match.mate.name)}님께 먼저 인사해 보세요 👋</p>`;

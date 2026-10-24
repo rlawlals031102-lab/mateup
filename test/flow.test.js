@@ -281,6 +281,33 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(s3, 200);
     });
 
+    test('데모 메이트: 여러 명과 동시에 매칭, 포인트(보증금) 변화 없음', async () => {
+      const { seedBots } = await import('../server/seed.js');
+      await seedBots(db);
+      const bot = await db.get("SELECT id, points FROM users WHERE name = '김저녁'");
+      assert.equal(bot.points, 100000);
+      const req = { ...baseReq, days: [1], startTime: '19:00', endTime: '21:00', deposit: 5000 };
+      const [x, y] = [await signup('x'), await signup('y')];
+      const m1 = await S.createRequest(db, x, req);
+      const m2 = await S.createRequest(db, y, req);
+      assert.ok(m1.matchId && m2.matchId && m1.matchId !== m2.matchId, '둘 다 김저녁과 매칭');
+      assert.equal((await S.currentMatch(db, x)).mate.name, '김저녁');
+      assert.equal((await S.currentMatch(db, y)).mate.name, '김저녁');
+      assert.ok(await S.pendingRequest(db, bot.id), '김저녁은 계속 대기');
+
+      // x는 첫 약속(19:00) 전에 그만둠 → x 보증금 반환, y는 출석하고 주간 정산 → y 보증금 반환
+      await S.leaveMatch(db, x, m1.matchId);
+      const appt = (await S.currentMatch(db, y)).appointments[0];
+      setNow(kst(2026, 10, 12, 19, 0));
+      await S.checkIn(db, y, appt.id, { method: 'self' });
+      setNow(kst(2026, 10, 19, 9, 0));
+      assert.equal((await S.currentMatch(db, y)).report.me.deposit.result, 'refunded');
+      assert.equal(await points(x), 50000);
+      assert.equal(await points(y), 50000);
+      assert.equal((await db.get('SELECT points FROM users WHERE id = ?', bot.id)).points, 100000);
+      assert.equal((await db.get('SELECT COUNT(*) AS n FROM point_logs WHERE user_id = ?', bot.id)).n, 0);
+    });
+
     test('공용 데모 계정은 데모 메이트하고만 매칭', async () => {
       const { seedBots } = await import('../server/seed.js');
       await seedBots(db); // 김저녁: 성곡도서관, 평일 19~21시, 보증금 5천

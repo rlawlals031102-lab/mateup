@@ -249,12 +249,14 @@ export async function updateProfile(db, userId, input) {
 // ───────────────────────── 포인트 ─────────────────────────
 
 // 잔액 확인과 차감을 한 문장으로 처리해 동시에 요청이 와도 음수가 되지 않는다.
+// 데모 메이트(봇)의 포인트는 바뀌지 않는다. (보증금 예치·반환·보상 모두 없음)
 export async function adjustPoints(db, userId, amount, reason, matchId = null) {
   if (!amount) return;
   const { rows } = await db.run(
-    'UPDATE users SET points = points + ? WHERE id = ? AND points + ? >= 0 RETURNING points',
+    'UPDATE users SET points = points + ? WHERE id = ? AND is_bot = 0 AND points + ? >= 0 RETURNING points',
     amount, userId, amount,
   );
+  if (!rows.length && (await getUser(db, userId))?.is_bot) return;
   if (!rows.length) throw new AppError(400, '포인트가 부족합니다.');
   await db.run(
     'INSERT INTO point_logs (user_id, amount, balance, reason, match_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -370,11 +372,14 @@ async function tryMatch(db, requestId) {
     .sort((x, y) => y.compat.score - x.compat.score || x.c.id - y.c.id);
 
   for (const { c, compat } of ranked) {
-    // 다른 사람이 같은 상대를 먼저 데려갔으면 다음 후보로 넘어간다.
-    const claimed = await db.run(
-      "UPDATE match_requests SET status = 'matched' WHERE id = ? AND status = 'pending'", c.id,
-    );
-    if (!claimed.changes) continue;
+    // 데모 메이트는 여러 사람과 동시에 매칭되도록 신청을 그대로 대기 상태로 둔다.
+    // 실제 사용자는 다른 사람이 먼저 데려갔으면 다음 후보로 넘어간다.
+    if (!c.u_bot) {
+      const claimed = await db.run(
+        "UPDATE match_requests SET status = 'matched' WHERE id = ? AND status = 'pending'", c.id,
+      );
+      if (!claimed.changes) continue;
+    }
     await db.run("UPDATE match_requests SET status = 'matched' WHERE id = ?", req.id);
     return createMatch(db, {
       userA: c.user_id, // 먼저 기다리던 사람이 A
@@ -877,9 +882,8 @@ async function closeMatch(db, m) {
 export async function requeueBot(db, userId) {
   const u = await getUser(db, userId);
   if (!u.is_bot || !u.bot_template) return;
-  if (await pendingRequest(db, userId) || await currentMatchRow(db, userId)) return;
+  if (await pendingRequest(db, userId)) return;
   const t = JSON.parse(u.bot_template);
-  if (t.deposit) await adjustPoints(db, userId, -t.deposit, '보증금 예치');
   await db.run(
     `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

@@ -1,12 +1,12 @@
 import crypto from 'node:crypto';
-import { requeueBot, adjustPoints } from './service.js';
+import { requeueBot } from './service.js';
 import * as T from './time.js';
 
 // 데모(가상) 메이트. 사용자가 매칭을 신청하면 이 중 조건이 맞는 메이트와 연결된다.
 // 화면에는 "데모 메이트"로 표시된다. 목록을 고치면 다음 실행 때 기존 메이트 정보와 대기 신청에도 반영된다.
 const WEEKDAYS = [1, 2, 3, 4, 5];
 const ALL_STYLES = ['check', 'talk', 'social'];
-const START_POINTS = 100_000;
+const START_POINTS = 100_000; // 데모 메이트 포인트 (보증금이 차감되지 않아 항상 이 값)
 
 export const BOTS = [
   { email: 'bot-morning@studybuddy.local', name: '김아침', age: null, avatar: '🌅',
@@ -30,11 +30,10 @@ export async function seedBots(db) {
       }
       const { rows } = await t.run(
         `INSERT INTO users (email, password_hash, name, age, tags, bio, avatar, points, is_bot, bot_template, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?) RETURNING id`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?) RETURNING id`,
         b.email, `!${crypto.randomBytes(8).toString('hex')}`, b.name, b.age,
-        JSON.stringify(b.tags), b.bio, b.avatar, JSON.stringify(b.template), T.now().toISOString(),
+        JSON.stringify(b.tags), b.bio, b.avatar, START_POINTS, JSON.stringify(b.template), T.now().toISOString(),
       );
-      await adjustPoints(t, rows[0].id, START_POINTS, '데모 메이트 포인트');
       await requeueBot(t, rows[0].id);
     }
   });
@@ -68,8 +67,10 @@ export async function retireOldBots(db) {
 
 async function syncBot(db, id, b) {
   const t = b.template;
-  await db.run('UPDATE users SET name = ?, age = ?, tags = ?, bio = ?, avatar = ?, bot_template = ? WHERE id = ?',
-    b.name, b.age, JSON.stringify(b.tags), b.bio, b.avatar, JSON.stringify(t), id);
+  // 데모 메이트 포인트는 항상 고정 (예전 버전에서 차감된 보증금도 되돌림)
+  await db.run('UPDATE users SET name = ?, age = ?, tags = ?, bio = ?, avatar = ?, bot_template = ?, points = ? WHERE id = ?',
+    b.name, b.age, JSON.stringify(b.tags), b.bio, b.avatar, JSON.stringify(t), START_POINTS, id);
+  await requeueBot(db, id);
   await db.run(
     `UPDATE match_requests SET location = ?, days = ?, start_time = ?, end_time = ?, styles = ?
      WHERE user_id = ? AND status = 'pending'`,
