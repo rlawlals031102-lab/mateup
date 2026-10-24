@@ -215,6 +215,18 @@ export async function resetPassword(db, { email, code, password }, policy = NO_P
   });
 }
 
+// 데모 계정 로그인 (데모 모드 전용). 계정이 없으면 만든다.
+export const DEMO_ACCOUNT = { email: 'demo@studybuddy.local', name: '데모 사용자' };
+
+export async function demoLogin(db) {
+  let u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', DEMO_ACCOUNT.email);
+  if (!u) {
+    await signup(db, { ...DEMO_ACCOUNT, password: crypto.randomBytes(12).toString('hex') });
+    u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', DEMO_ACCOUNT.email);
+  }
+  return { user: privateUser(u), token: await issueToken(db, u.id) };
+}
+
 export async function logout(db, token) {
   await db.run('DELETE FROM auth_tokens WHERE token = ?', token);
 }
@@ -342,11 +354,17 @@ export async function cancelRequest(db, userId) {
 async function tryMatch(db, requestId) {
   const req = parseRequest(await db.get('SELECT * FROM match_requests WHERE id = ?', requestId));
   const candidates = (await db.all(
-    "SELECT * FROM match_requests WHERE status = 'pending' AND user_id != ? AND location = ? ORDER BY id",
+    `SELECT r.*, u.is_bot AS u_bot, u.email AS u_email FROM match_requests r JOIN users u ON u.id = r.user_id
+     WHERE r.status = 'pending' AND r.user_id != ? AND r.location = ? ORDER BY r.id`,
     req.user_id, req.location,
   )).map(parseRequest);
+  // 공용 데모 계정은 데모 메이트하고만, 실제 사용자는 공용 데모 계정과는 매칭하지 않는다.
+  const me = await getUser(db, req.user_id);
+  const iAmDemo = me.email === DEMO_ACCOUNT.email;
+  const allowed = (c) => (iAmDemo ? !!c.u_bot : c.u_email !== DEMO_ACCOUNT.email);
 
   const ranked = candidates
+    .filter(allowed)
     .map((c) => ({ c, compat: compatibility(req, c) }))
     .filter((x) => x.compat)
     .sort((x, y) => y.compat.score - x.compat.score || x.c.id - y.c.id);

@@ -43,7 +43,7 @@ const needUser = (ctx) => {
 };
 
 const routes = [
-  ['GET', '/options', async () => ({ locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo })],
+  ['GET', '/options', async () => ({ locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, demoLogin: true })],
 
   ['POST', '/auth/signup', async ({ db, body }) => {
     const { user, token } = await S.signup(db, body);
@@ -52,6 +52,11 @@ const routes = [
   }],
   ['POST', '/auth/login', async ({ db, body }) => {
     const { user, token } = await S.login(db, body);
+    setToken(token);
+    return { user };
+  }],
+  ['POST', '/auth/demo', async ({ db }) => {
+    const { user, token } = await S.demoLogin(db);
     setToken(token);
     return { user };
   }],

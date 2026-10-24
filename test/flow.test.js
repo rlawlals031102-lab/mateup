@@ -259,6 +259,49 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       await assert.rejects(S.resetPassword(db, { email, code: lastCode(), password: 'another1' }, policy), /다시 받아/);
     });
 
+    test('데모 계정 로그인: 데모 모드에서만, 같은 계정 재사용', async () => {
+      const { createApp } = await import('../server/app.js');
+      const call = async (app, path) => {
+        const server = app.listen(0);
+        const { port } = server.address();
+        const res = await fetch(`http://127.0.0.1:${port}/api${path}`, { method: 'POST' });
+        server.close();
+        return [res.status, await res.json()];
+      };
+      const [prodStatus] = await call(createApp({ db, demo: false, serveStatic: false }), '/auth/demo');
+      assert.equal(prodStatus, 403);
+      const [s1, b1] = await call(createApp({ db, demo: true, serveStatic: false }), '/auth/demo');
+      const [, b2] = await call(createApp({ db, demo: true, serveStatic: false }), '/auth/demo');
+      assert.equal(s1, 200);
+      assert.equal(b1.user.email, 'demo@studybuddy.local');
+      assert.equal(b1.user.id, b2.user.id);
+      assert.equal(b1.user.points, 50000);
+      // 실서비스에서도 demoLogin 을 켜면 허용
+      const [s3] = await call(createApp({ db, demo: false, demoLogin: true, serveStatic: false }), '/auth/demo');
+      assert.equal(s3, 200);
+    });
+
+    test('공용 데모 계정은 데모 메이트하고만 매칭', async () => {
+      const { seedBots } = await import('../server/seed.js');
+      await seedBots(db); // 김저녁: 성곡도서관, 평일 19~21시, 보증금 5천
+      const demoId = (await S.demoLogin(db)).user.id;
+      const real = await signup('real');
+      const req = { ...baseReq, days: [1], startTime: '19:00', endTime: '21:00', deposit: 5000 };
+
+      // 데모 계정은 데모 메이트(김저녁)와 매칭
+      const { matchId } = await S.createRequest(db, demoId, req);
+      assert.equal((await S.currentMatch(db, demoId)).mate.name, '김저녁');
+      await S.leaveMatch(db, demoId, matchId);
+
+      // 데모 메이트가 없는 조건: 실제 사용자가 먼저 기다려도 데모 계정과는 매칭되지 않음
+      const other = { ...baseReq, location: '북악관 1층 라운지' };
+      await S.createRequest(db, real, other);
+      assert.equal((await S.createRequest(db, demoId, other)).matchId, null);
+      // 반대로 데모 계정이 기다리는 중에 실제 사용자가 신청해도 매칭되지 않음
+      await S.cancelRequest(db, real);
+      assert.equal((await S.createRequest(db, real, other)).matchId, null);
+    });
+
     test('로그인 / 토큰', async () => {
       await signup('a');
       await assert.rejects(S.signup(db, { email: 'a@test.dev', password: 'secret1', name: 'x' }), /이미 가입/);

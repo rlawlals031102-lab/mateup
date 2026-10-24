@@ -25,6 +25,7 @@ function readCookie(req, name) {
 export function createApp({
   db, demo = false, secureCookies = false, cronSecret = null, serveStatic = true,
   emailPolicy = { domain: null, verify: false }, mailer = null,
+  demoLogin = demo, // '데모 계정으로 로그인' 버튼 허용 (공용 체험 계정, 데모 메이트와만 매칭)
 }) {
   const app = express();
   const opts = { demo };
@@ -52,7 +53,7 @@ export function createApp({
   api.get('/options', (req, res) => {
     res.json({
       locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo,
-      emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify,
+      emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, demoLogin,
     });
   });
 
@@ -72,6 +73,13 @@ export function createApp({
   });
   api.post('/auth/login', async (req, res) => {
     const { user, token } = await S.login(db, req.body ?? {}, emailPolicy);
+    setSession(res, token);
+    res.json({ user });
+  });
+  // 데모 계정으로 바로 로그인 (개발·시연용, 실서비스에서는 막힘)
+  api.post('/auth/demo', async (req, res) => {
+    if (!demoLogin) return res.status(403).json({ error: '데모 계정을 사용할 수 없어요.' });
+    const { user, token } = await S.demoLogin(db);
     setSession(res, token);
     res.json({ user });
   });

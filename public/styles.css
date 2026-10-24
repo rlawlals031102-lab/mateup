@@ -370,3 +370,8 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 a.link-item { text-decoration: none; color: inherit; }
 a.link-item:hover { background: var(--soft); }
 .chev { color: var(--muted); font-size: 18px; line-height: 1; }
+
+/* 데모 계정 로그인 (데모 모드 전용) */
+.demo-login { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.demo-login .btn { border-style: dashed; }
+.demo-login p { margin-top: 6px; }

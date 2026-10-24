@@ -219,7 +219,18 @@ async function renderLogin() {
       <label class="field"><span>비밀번호</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn primary block mt-lg">로그인</button>
     </form>
-    <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a>${OPTIONS.emailVerification ? ' · <a href="#/reset">비밀번호 찾기</a>' : ''}</p>`);
+    <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a>${OPTIONS.emailVerification ? ' · <a href="#/reset">비밀번호 찾기</a>' : ''}</p>
+    ${OPTIONS.demoLogin ? `
+      <div class="demo-login">
+        <button type="button" class="btn block" id="demo-login">🧪 데모 계정으로 로그인</button>
+        <p class="tiny muted center">가입 없이 둘러볼 수 있는 체험용 계정이에요.</p>
+      </div>` : ''}`);
+  $('#demo-login')?.addEventListener('click', async () => {
+    try {
+      await api('/auth/demo', { method: 'POST' });
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
   $('#f').addEventListener('submit', async (e) => {
     e.preventDefault();
     e.target.email.value = withDomain(e.target.email.value);
