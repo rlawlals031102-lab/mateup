@@ -33,7 +33,12 @@ test('compatibility: 장소·요일·시간·스타일·보증금 조건', () =>
 
 test('신청 검증', () => {
   assert.throws(() => S.validateRequest({ ...baseReq, days: [] }), /요일/);
-  assert.throws(() => S.validateRequest({ ...baseReq, endTime: '19:30' }), /1시간/);
+  // 정해진 시간대만: 09:00~10:30 … 16:30~18:00 (1시간 30분), 18:00~19:00 … 23:00~24:00 (1시간)
+  assert.throws(() => S.validateRequest({ ...baseReq, endTime: '19:30' }), /시간대를 골라/);
+  assert.throws(() => S.validateRequest({ ...baseReq, startTime: '09:30', endTime: '12:00' }), /시간대를 골라/);
+  assert.throws(() => S.validateRequest({ ...baseReq, startTime: '21:00', endTime: '20:00' }), /시간대를 골라/);
+  assert.doesNotThrow(() => S.validateRequest({ ...baseReq, startTime: '16:30', endTime: '20:00' }), '낮·저녁 이어서 선택');
+  assert.doesNotThrow(() => S.validateRequest({ ...baseReq, startTime: '23:00', endTime: '24:00' }));
   assert.throws(() => S.validateRequest({ ...baseReq, styles: ['x'] }), /스타일/);
   assert.throws(() => S.validateRequest({ ...baseReq, deposit: 777 }), /보증금/);
 });
@@ -42,7 +47,7 @@ test('한국 시간 기준 날짜 계산 (서버가 UTC여도)', () => {
   setNow(kst(2026, 10, 12, 0, 30)); // 한국 월요일 00:30 = UTC 일요일 15:30
   const week = S.planWeek([1], '09:00', '10:00');
   assert.equal(week.weekStart, '2026-10-12');
-  assert.deepEqual(week.dates, ['2026-10-12']);
+  assert.deepEqual(week.dates, [{ date: '2026-10-12', start: '09:00', end: '10:00' }]);
   setNow(null);
 });
 
@@ -132,13 +137,13 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       const b = await signup('b');
       await S.createRequest(db, a, baseReq);
       const { matchId } = await S.createRequest(db, b, baseReq);
-      await assert.rejects(S.createRequest(db, a, baseReq), /진행 중/);
+      await assert.rejects(S.createRequest(db, a, baseReq), /겹쳐요/);
       await S.settleMatch(db, matchId);
       assert.equal((await S.chooseNext(db, a, matchId, 'new')).next, 'new');
       assert.equal(await S.currentMatch(db, a), null);
       assert.equal(await S.currentMatch(db, b), null);
       await S.createRequest(db, a, baseReq);
-      await assert.rejects(S.createRequest(db, a, baseReq), /대기 중/);
+      await assert.rejects(S.createRequest(db, a, baseReq), /겹쳐요/);
     });
 
     test('세 명이 동시에 신청해도 한 쌍만 매칭', async () => {
@@ -334,6 +339,81 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       m = await S.currentMatch(db, a);
       assert.equal(m.appointments[0].me.status, 'studying');
       assert.equal(matchId, m.id);
+    });
+
+    test('시간표 칸으로 신청: 요일마다 다른 시간, 공통 칸으로 약속', async () => {
+      // 시간대 번호: 0=09:00~10:30 1=10:30~12:00 … 6=18:00~19:00 7=19:00~20:00 8=20:00~21:00 9=21:00~22:00
+      const [a, b] = [await signup('a'), await signup('b')];
+      const base = { location: '국민대 성곡도서관', styles: ['check'], deposit: 0 };
+      // a: 월 09:00~12:00, 수 19:00~22:00 / b: 월 10:30~13:30, 수 20:00~21:00, 금 19:00~20:00
+      await S.createRequest(db, a, { ...base, cells: ['1-0', '1-1', '3-7', '3-8', '3-9'] });
+      assert.deepEqual((await S.pendingRequest(db, a)).schedule.map((r) => [r.day, r.start, r.end]),
+        [[1, '09:00', '12:00'], [3, '19:00', '22:00']]);
+      const { matchId } = await S.createRequest(db, b, { ...base, cells: ['1-1', '1-2', '3-8', '5-7'] });
+      assert.ok(matchId);
+      const m = await S.currentMatch(db, a);
+      // 공통: 월 10:30~12:00, 수 20:00~21:00 (금은 a가 안 골라서 없음)
+      assert.deepEqual(m.schedule, [{ day: 1, start: '10:30', end: '12:00' }, { day: 3, start: '20:00', end: '21:00' }]);
+      assert.deepEqual(m.appointments.map((x) => [x.date, x.startTime, x.endTime]),
+        [['2026-10-12', '10:30', '12:00'], ['2026-10-14', '20:00', '21:00']]);
+
+      await assert.rejects(S.createRequest(db, await signup('c'), { ...base, cells: [] }), /하나 이상/);
+      await assert.rejects(S.createRequest(db, await signup('d'), { ...base, cells: ['8-0'] }), /다시 골라/);
+    });
+
+    test('겹치지 않는 시간대로 여러 번 신청 → 여러 메이트와 동시에 매칭', async () => {
+      const base = { location: '국민대 성곡도서관', styles: ['check'], deposit: 0 };
+      const [me, p, q] = [await signup('me'), await signup('p'), await signup('q')];
+      await S.createRequest(db, p, { ...base, cells: ['1-0', '1-1'] }); // 월 오전
+      await S.createRequest(db, q, { ...base, cells: ['3-7', '3-8'] }); // 수 저녁
+
+      const m1 = await S.createRequest(db, me, { ...base, cells: ['1-0', '1-1'] });
+      const m2 = await S.createRequest(db, me, { ...base, cells: ['3-7', '3-8'] });
+      assert.ok(m1.matchId && m2.matchId && m1.matchId !== m2.matchId);
+      const home = await S.homeState(db, me);
+      assert.deepEqual(home.matches.map((m) => m.mate.name).sort(), ['p', 'q']);
+
+      // 이미 매칭된 칸과 겹치면 거절, 겹치지 않으면 대기
+      await assert.rejects(S.createRequest(db, me, { ...base, cells: ['1-1', '1-2'] }), /겹쳐요/);
+      const w1 = await S.createRequest(db, me, { ...base, cells: ['5-7'] });
+      const w2 = await S.createRequest(db, me, { ...base, cells: ['6-7'] });
+      assert.equal((await S.pendingRequests(db, me)).length, 2);
+      await assert.rejects(S.createRequest(db, me, { ...base, cells: ['5-7'] }), /겹쳐요/, '대기 중인 칸과도 겹치면 안 됨');
+      await S.cancelRequest(db, me, w2.request.id);
+      assert.deepEqual((await S.pendingRequests(db, me)).map((r) => r.id), [w1.request.id]);
+
+      // 개인 일정
+      const saved = await S.setPersonalSchedule(db, me, [{ cell: '2-0', title: '마케팅' }, { cell: '2-1', title: '' }]);
+      assert.deepEqual(saved, [{ cell: '2-0', title: '마케팅' }, { cell: '2-1', title: '개인 일정' }]);
+      assert.deepEqual((await S.homeState(db, me)).personal, saved);
+      await assert.rejects(S.setPersonalSchedule(db, me, [{ cell: '9-0' }]), /올바르지/);
+    });
+
+    test('매칭 우선순위: 겹치는 칸 수 → 먼저 기다린 순서', async () => {
+      const base = { location: '국민대 성곡도서관', styles: ['check'], deposit: 0 };
+      const [p, q, r, me] = [await signup('p'), await signup('q'), await signup('r'), await signup('me')];
+      // 기다리는 셋은 스타일이 서로 달라 자기들끼리는 매칭되지 않고, me(모든 스타일)와만 맞는다
+      await S.createRequest(db, p, { ...base, styles: ['check'], cells: ['1-7'] }); // 1칸 겹침 (가장 먼저 기다림)
+      await S.createRequest(db, q, { ...base, styles: ['talk'], cells: ['1-7', '2-7', '2-8'] }); // 3칸 겹침
+      await S.createRequest(db, r, { ...base, styles: ['social'], cells: ['1-7', '2-7', '2-8'] }); // 3칸 (q보다 늦게)
+      await S.createRequest(db, me, { ...base, styles: ['check', 'talk', 'social'], cells: ['1-7', '2-7', '2-8', '3-7'] });
+      assert.equal((await S.currentMatch(db, me)).mate.name, 'q');
+    });
+
+    test('홈: 기말고사 디데이, 국민대 통계(실제 사용자만)', async () => {
+      const { seedBots } = await import('../server/seed.js');
+      await seedBots(db);
+      const [a, b, c] = [await signup('a'), await signup('b'), await signup('c')];
+      await S.createRequest(db, a, baseReq);
+      await S.createRequest(db, b, baseReq); // a·b 매칭
+      await S.createRequest(db, c, { ...baseReq, location: '북악관 1층 라운지' }); // 대기
+      const demo = (await S.demoLogin(db)).user.id;
+      await S.createRequest(db, demo, { ...baseReq, days: [1], startTime: '19:00', endTime: '21:00' }); // 데모끼리 매칭 → 제외
+      const home = await S.homeState(db, a);
+      assert.deepEqual(home.community, { studying: 2, waiting: 1 });
+      assert.deepEqual(home.exam, { name: '기말고사', date: '2026-12-08', dday: 57 }); // 10/12 기준
+      setNow(kst(2026, 12, 9, 9, 0));
+      assert.equal((await S.homeState(db, a)).exam, null, '시험이 지나면 숨김');
     });
 
     test('데모 메이트는 보증금이 있든 없든 매칭', async () => {

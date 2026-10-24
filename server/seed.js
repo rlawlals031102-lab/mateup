@@ -17,7 +17,7 @@ export const BOTS = [
     template: { location: '국민대 성곡도서관', days: WEEKDAYS, startTime: '19:00', endTime: '21:00', styles: ALL_STYLES, deposit: 5000 } },
   { email: 'bot-weekend@studybuddy.local', name: '김주말', age: null, avatar: '☀️',
     tags: ['#주말공부', '#카페공부'], bio: '주말 오후에 카페에서 공부해요',
-    template: { location: '정릉 근처 카페', days: [6, 7], startTime: '13:00', endTime: '18:00', styles: ALL_STYLES, deposit: 20000 } },
+    template: { location: '정릉 근처 카페', days: [6, 7], startTime: '13:30', endTime: '18:00', styles: ALL_STYLES, deposit: 20000 } },
 ];
 
 export async function seedBots(db) {

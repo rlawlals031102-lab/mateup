@@ -8,7 +8,7 @@ import QRCode from 'qrcode';
 import { openSqlite } from '../server/db.js';
 import { seedBots, retireOldBots } from '../server/seed.js';
 import * as S from '../server/service.js';
-import { LOCATIONS, STYLES, DEPOSITS, CHECKIN_EARLY_MIN } from '../server/options.js';
+import { LOCATIONS, STYLES, DEPOSITS, CHECKIN_EARLY_MIN, TIME_SLOTS } from '../server/options.js';
 import { persist, clearSaved } from './shims/sqlite.js';
 
 const TOKEN_KEY = 'studybuddy-standalone-token';
@@ -43,7 +43,7 @@ const needUser = (ctx) => {
 };
 
 const routes = [
-  ['GET', '/options', async () => ({ locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, demoLogin: true })],
+  ['GET', '/options', async () => ({ locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, demoLogin: true, timeSlots: TIME_SLOTS })],
 
   ['POST', '/auth/signup', async ({ db, body }) => {
     const { user, token } = await S.signup(db, body);
@@ -74,16 +74,22 @@ const routes = [
   ['GET', '/me/history', async (ctx) => ({ matches: await S.matchHistory(ctx.db, needUser(ctx)) })],
 
   ['POST', '/requests', (ctx) => S.createRequest(ctx.db, needUser(ctx), ctx.body)],
+  ['DELETE', '/requests/:id', async (ctx) => {
+    await S.cancelRequest(ctx.db, needUser(ctx), ctx.id);
+    return { ok: true };
+  }],
   ['DELETE', '/requests/current', async (ctx) => {
     await S.cancelRequest(ctx.db, needUser(ctx));
     return { ok: true };
   }],
 
+  ['GET', '/matches/active', async (ctx) => ({ matches: await S.activeMatches(ctx.db, needUser(ctx), opts) })],
+  ['PUT', '/me/personal', async (ctx) => ({ personal: await S.setPersonalSchedule(ctx.db, needUser(ctx), ctx.body.entries) })],
   ['GET', '/matches/current', async (ctx) => ({ match: await S.currentMatch(ctx.db, needUser(ctx), opts) })],
   ['POST', '/matches/:id/settle', async (ctx) => {
     const uid = needUser(ctx);
     await S.forceSettle(ctx.db, uid, ctx.id);
-    return { match: await S.currentMatch(ctx.db, uid, opts) };
+    return { match: await S.matchById(ctx.db, uid, ctx.id, opts) };
   }],
   ['POST', '/matches/:id/leave', (ctx) => S.leaveMatch(ctx.db, needUser(ctx), ctx.id)],
   ['POST', '/matches/:id/choice', (ctx) => S.chooseNext(ctx.db, needUser(ctx), ctx.id, ctx.body.choice)],
@@ -96,12 +102,12 @@ const routes = [
   ['POST', '/appointments/:id/confirm', async (ctx) => {
     const uid = needUser(ctx);
     await S.confirmMate(ctx.db, uid, ctx.id, ctx.body.code, opts);
-    return { match: await S.currentMatch(ctx.db, uid, opts) };
+    return { match: await S.matchForAppointment(ctx.db, uid, ctx.id, opts) };
   }],
   ['POST', '/appointments/:id/checkout', async (ctx) => {
     const uid = needUser(ctx);
     const { minutes } = await S.checkOut(ctx.db, uid, ctx.id, opts);
-    return { minutes, match: await S.currentMatch(ctx.db, uid, opts) };
+    return { minutes, match: await S.matchForAppointment(ctx.db, uid, ctx.id, opts) };
   }],
 ].map(([method, pattern, handler]) => ({
   method,

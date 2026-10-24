@@ -3,7 +3,7 @@ import { isUniqueViolation } from './db.js';
 import * as T from './time.js';
 import {
   LOCATIONS, STYLES, DEPOSITS, SIGNUP_POINTS, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
-  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC,
+  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS,
 } from './options.js';
 
 // 모든 함수는 첫 인자로 db(server/db.js 인터페이스)를 받는다.
@@ -21,13 +21,74 @@ const iso = () => T.now().toISOString();
 
 // ───────────────────────── 직렬화 ─────────────────────────
 
-const parseRequest = (r) => r && { ...r, days: JSON.parse(r.days), styles: JSON.parse(r.styles) };
+const parseRequest = (r) => {
+  if (!r) return r;
+  const days = JSON.parse(r.days);
+  // cells: 시간표에서 고른 칸 ["요일-시간대번호", ...]. 예전 신청·데모 메이트는 요일 × 시간 범위로 만든다.
+  const cells = r.cells ? JSON.parse(r.cells) : cellsFromRange(days, r.start_time, r.end_time);
+  return { ...r, days, styles: JSON.parse(r.styles), cells, schedule: runsOf(cells) };
+};
 const parseMatch = (m) => m && {
   ...m,
   days: JSON.parse(m.days),
   styles: JSON.parse(m.styles),
   report: m.report ? JSON.parse(m.report) : null,
+  // 요일별 약속 시간 [{ day, start, end }]. 예전 매칭은 모든 요일이 같은 시간.
+  schedule: m.schedule ? JSON.parse(m.schedule)
+    : JSON.parse(m.days).map((day) => ({ day, start: m.start_time, end: m.end_time })),
 };
+
+// ───────────────────────── 시간표 칸 ─────────────────────────
+// 칸 = 요일(1=월…7=일) × 시간대 번호(TIME_SLOTS 순서). 문자열 "요일-번호"로 다룬다.
+
+const cellKey = (day, slot) => `${day}-${slot}`;
+const parseCell = (c) => c.split('-').map(Number);
+
+// 요일들 × [start, end] 안에 완전히 들어가는 시간대 칸
+function cellsFromRange(days, start, end) {
+  const s = T.toMin(start);
+  const e = T.toMin(end);
+  const out = [];
+  for (const day of days) {
+    TIME_SLOTS.forEach((slot, i) => {
+      if (T.toMin(slot.start) >= s && T.toMin(slot.end) <= e) out.push(cellKey(day, i));
+    });
+  }
+  return out;
+}
+
+// 요일별로 이어진 칸 묶음 → [{ day, start, end, minutes }] (요일 순, 같은 요일은 시간 순)
+function runsOf(cells) {
+  const byDay = new Map();
+  for (const c of cells) {
+    const [d, i] = parseCell(c);
+    byDay.set(d, [...(byDay.get(d) ?? []), i]);
+  }
+  const runs = [];
+  for (const day of [...byDay.keys()].sort((a, b) => a - b)) {
+    const idx = [...new Set(byDay.get(day))].sort((a, b) => a - b);
+    let from = idx[0];
+    for (let k = 1; k <= idx.length; k++) {
+      const continues = k < idx.length && idx[k] === idx[k - 1] + 1 && TIME_SLOTS[idx[k - 1]].end === TIME_SLOTS[idx[k]].start;
+      if (continues) continue;
+      const start = TIME_SLOTS[from].start;
+      const end = TIME_SLOTS[idx[k - 1]].end;
+      runs.push({ day, start, end, minutes: T.toMin(end) - T.toMin(start) });
+      if (k < idx.length) from = idx[k];
+    }
+  }
+  return runs;
+}
+
+// 공통 칸으로 요일별 약속 시간 정하기: 요일마다 가장 긴(같으면 이른) 묶음 하나
+function scheduleFromCells(cells) {
+  const best = new Map();
+  for (const r of runsOf(cells)) {
+    const cur = best.get(r.day);
+    if (!cur || r.minutes > cur.minutes) best.set(r.day, r);
+  }
+  return [...best.values()].filter((r) => r.minutes >= MIN_OVERLAP_MIN);
+}
 
 export const publicUser = (u) => u && {
   id: u.id,
@@ -320,6 +381,26 @@ export async function updateProfile(db, userId, input) {
   return privateUser(await getUser(db, userId));
 }
 
+// ───────────────────────── 개인 일정 ─────────────────────────
+
+// 홈 시간표에 보이는 내 개인 일정 (수업 등). [{ cell: "요일-시간대번호", title }]
+export async function setPersonalSchedule(db, userId, entries) {
+  if (!Array.isArray(entries)) throw new AppError(400, '일정 형식이 올바르지 않습니다.');
+  const seen = new Set();
+  const clean = [];
+  for (const e of entries) {
+    const cell = String(e?.cell ?? '');
+    const [d, i] = parseCell(cell);
+    if (!/^\d-\d+$/.test(cell) || d < 1 || d > 7 || !TIME_SLOTS[i]) throw new AppError(400, '시간표 칸이 올바르지 않습니다.');
+    if (seen.has(cell)) continue;
+    seen.add(cell);
+    const title = String(e?.title ?? '').trim().slice(0, 20) || '개인 일정';
+    clean.push({ cell, title });
+  }
+  await db.run('UPDATE users SET personal = ? WHERE id = ?', JSON.stringify(clean), userId);
+  return clean;
+}
+
 // ───────────────────────── 포인트 ─────────────────────────
 
 // 잔액 확인과 차감을 한 문장으로 처리해 동시에 요청이 와도 음수가 되지 않는다.
@@ -344,19 +425,35 @@ export function pointLogs(db, userId) {
 
 // ───────────────────────── 매칭 신청 ─────────────────────────
 
+// 신청은 시간표 칸(cells: ["요일-시간대번호"])으로 받는다. (요일 + 시작·끝 시간으로 보내도 칸으로 바꿔 받음)
 export function validateRequest(input) {
-  const days = [...new Set((input.days ?? []).map(Number))].sort();
-  if (!days.length || days.some((d) => !Number.isInteger(d) || d < 1 || d > 7)) {
-    throw new AppError(400, '공부할 요일을 하나 이상 골라 주세요.');
+  let cells;
+  if (Array.isArray(input.cells)) {
+    cells = [...new Set(input.cells.map(String))];
+    const bad = cells.some((c) => {
+      const [d, i] = parseCell(c);
+      return !/^\d-\d+$/.test(c) || d < 1 || d > 7 || !TIME_SLOTS[i];
+    });
+    if (bad) throw new AppError(400, '시간표에서 칸을 다시 골라 주세요.');
+  } else {
+    const days = [...new Set((input.days ?? []).map(Number))];
+    if (!days.length || days.some((d) => !Number.isInteger(d) || d < 1 || d > 7)) {
+      throw new AppError(400, '공부할 요일을 하나 이상 골라 주세요.');
+    }
+    // 정해진 시간대(TIME_SLOTS)의 이어진 묶음만 허용: 시작은 어떤 시간대의 시작, 끝은 어떤 시간대의 끝
+    const startIdx = TIME_SLOTS.findIndex((s) => s.start === input.startTime);
+    const endIdx = TIME_SLOTS.findIndex((s) => s.end === input.endTime);
+    if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+      throw new AppError(400, '시간대를 골라 주세요.');
+    }
+    cells = cellsFromRange(days, input.startTime, input.endTime);
   }
-  const timeOk = (t) => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)
-    && T.toMin(t) % 30 === 0 && T.toMin(t) >= 0 && T.toMin(t) <= 24 * 60;
-  if (!timeOk(input.startTime) || !timeOk(input.endTime)) {
-    throw new AppError(400, '시간을 30분 단위로 골라 주세요.');
-  }
-  if (T.toMin(input.endTime) - T.toMin(input.startTime) < MIN_OVERLAP_MIN) {
-    throw new AppError(400, '공부 시간은 1시간 이상으로 설정해 주세요.');
-  }
+  if (!cells.length) throw new AppError(400, '시간표에서 공부할 시간을 하나 이상 골라 주세요.');
+  cells.sort((a, b) => parseCell(a)[0] - parseCell(b)[0] || parseCell(a)[1] - parseCell(b)[1]);
+  const runs = runsOf(cells);
+  const days = [...new Set(runs.map((r) => r.day))];
+  const startTime = T.fromMin(Math.min(...runs.map((r) => T.toMin(r.start))));
+  const endTime = T.fromMin(Math.max(...runs.map((r) => T.toMin(r.end))));
   if (!LOCATIONS.includes(input.location)) throw new AppError(400, '장소를 골라 주세요.');
   const styles = [...new Set(input.styles ?? [])];
   if (!styles.length || styles.some((s) => !STYLES[s])) {
@@ -364,7 +461,7 @@ export function validateRequest(input) {
   }
   const deposit = Number(input.deposit ?? 0);
   if (deposit !== 0 && !DEPOSITS.includes(deposit)) throw new AppError(400, '보증금 금액이 올바르지 않습니다.');
-  return { days, startTime: input.startTime, endTime: input.endTime, location: input.location, styles, deposit };
+  return { cells, days, startTime, endTime, location: input.location, styles, deposit };
 }
 
 // 두 신청이 매칭 가능한지 판단하고, 가능하면 합의 조건과 점수를 돌려준다.
@@ -375,42 +472,64 @@ export function compatibility(a, b) {
   // 보증금 사용 여부가 같아야 한다. 단, 데모 메이트(u_bot)는 보증금이 있든 없든 매칭된다.
   // (보증금은 둘 중 낮은 금액으로 정해지므로, 사용자가 보증금 없이 신청하면 보증금 없는 매칭이 된다)
   if (!a.u_bot && !b.u_bot && (a.deposit > 0) !== (b.deposit > 0)) return null;
-  const days = a.days.filter((d) => b.days.includes(d));
-  if (!days.length) return null;
-  const start = Math.max(T.toMin(a.start_time ?? a.startTime), T.toMin(b.start_time ?? b.startTime));
-  const end = Math.min(T.toMin(a.end_time ?? a.endTime), T.toMin(b.end_time ?? b.endTime));
-  if (end - start < MIN_OVERLAP_MIN) return null;
+  // 시간표에서 둘 다 고른 칸 → 요일마다 가장 길게 이어진 시간이 그날 약속 (1시간 이상)
+  const cellsA = a.cells ?? cellsFromRange(a.days, a.start_time ?? a.startTime, a.end_time ?? a.endTime);
+  const cellsB = new Set(b.cells ?? cellsFromRange(b.days, b.start_time ?? b.startTime, b.end_time ?? b.endTime));
+  const common = cellsA.filter((c) => cellsB.has(c));
+  const schedule = scheduleFromCells(common);
+  if (!schedule.length) return null;
   const styles = a.styles.filter((s) => b.styles.includes(s));
   if (!styles.length) return null;
   return {
-    days,
-    startTime: T.fromMin(start),
-    endTime: T.fromMin(end),
+    days: schedule.map((r) => r.day),
+    schedule: schedule.map(({ day, start, end }) => ({ day, start, end })),
+    startTime: T.fromMin(Math.min(...schedule.map((r) => T.toMin(r.start)))),
+    endTime: T.fromMin(Math.max(...schedule.map((r) => T.toMin(r.end)))),
     location: a.location,
     styles,
-    overlapMin: end - start,
+    overlapMin: schedule.reduce((sum, r) => sum + r.minutes, 0), // 약속으로 잡히는 시간 합계
+    overlapCells: common.length, // 시간표에서 겹치는 칸 수 (매칭 우선순위)
   };
 }
 
 export async function pendingRequest(db, userId) {
-  return parseRequest(await db.get("SELECT * FROM match_requests WHERE user_id = ? AND status = 'pending'", userId));
+  return (await pendingRequests(db, userId))[0] ?? null;
+}
+
+// 대기 중인 신청 모두 (겹치지 않는 시간대로 여러 개 신청할 수 있다)
+export async function pendingRequests(db, userId) {
+  return (await db.all("SELECT * FROM match_requests WHERE user_id = ? AND status = 'pending' ORDER BY id", userId))
+    .map(parseRequest);
+}
+
+// 이미 신청했거나 매칭된 시간표 칸 (새 신청은 이 칸과 겹칠 수 없다)
+export async function busyCells(db, userId) {
+  const set = new Set();
+  for (const r of await pendingRequests(db, userId)) r.cells.forEach((c) => set.add(c));
+  for (const m of await activeMatchRows(db, userId)) {
+    for (const s of m.schedule) cellsFromRange([s.day], s.start, s.end).forEach((c) => set.add(c));
+  }
+  return set;
 }
 
 export async function createRequest(db, userId, input) {
   const req = validateRequest(input);
   try {
     return await db.tx(async (t) => {
-      if (await pendingRequest(t, userId)) throw new AppError(409, '이미 대기 중인 매칭 신청이 있어요.');
-      if (await currentMatchRow(t, userId)) throw new AppError(409, '진행 중인 매칭이 있어요.');
+      const busy = await busyCells(t, userId);
+      if (req.cells.some((c) => busy.has(c))) {
+        throw new AppError(409, '이미 신청했거나 매칭된 시간과 겹쳐요. 겹치지 않는 칸만 골라 주세요.');
+      }
       if (req.deposit) await adjustPoints(t, userId, -req.deposit, '보증금 예치');
       const { rows } = await t.run(
-        `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, cells, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
         userId, JSON.stringify(req.days), req.startTime, req.endTime, req.location,
-        JSON.stringify(req.styles), req.deposit, iso(),
+        JSON.stringify(req.styles), req.deposit, JSON.stringify(req.cells), iso(),
       );
       const match = await tryMatch(t, rows[0].id);
-      return { request: await pendingRequest(t, userId), matchId: match?.id ?? null };
+      const request = match ? null : parseRequest(await t.get('SELECT * FROM match_requests WHERE id = ?', rows[0].id));
+      return { request, matchId: match?.id ?? null };
     });
   } catch (err) {
     if (isUniqueViolation(err)) throw new AppError(409, '이미 대기 중인 매칭 신청이 있어요.');
@@ -418,11 +537,13 @@ export async function createRequest(db, userId, input) {
   }
 }
 
-export async function cancelRequest(db, userId) {
+// requestId 를 주면 그 신청만, 없으면 가장 먼저 한 대기 신청을 취소한다.
+export async function cancelRequest(db, userId, requestId = null) {
   return db.tx(async (t) => {
+    const target = requestId ?? (await pendingRequest(t, userId))?.id ?? 0;
     const { rows } = await t.run(
-      "UPDATE match_requests SET status = 'cancelled' WHERE user_id = ? AND status = 'pending' RETURNING deposit",
-      userId,
+      "UPDATE match_requests SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'pending' RETURNING deposit",
+      target, userId,
     );
     if (!rows.length) throw new AppError(404, '대기 중인 매칭 신청이 없어요.');
     if (rows[0].deposit) await adjustPoints(t, userId, rows[0].deposit, '매칭 취소 보증금 반환');
@@ -445,10 +566,8 @@ async function tryMatch(db, requestId) {
     .filter(allowed)
     .map((c) => ({ c, compat: compatibility(req, c) }))
     .filter((x) => x.compat)
-    // 우선순위: 겹치는 요일 수 → 겹치는 시간 길이 → 먼저 기다린 사람
-    .sort((x, y) => y.compat.days.length - x.compat.days.length
-      || y.compat.overlapMin - x.compat.overlapMin
-      || x.c.id - y.c.id);
+    // 우선순위: 시간표에서 겹치는 칸 수 → 먼저 기다린 사람
+    .sort((x, y) => y.compat.overlapCells - x.compat.overlapCells || x.c.id - y.c.id);
 
   for (const { c, compat } of ranked) {
     // 데모 메이트는 여러 사람과 동시에 매칭되도록 신청을 그대로 대기 상태로 둔다.
@@ -473,15 +592,19 @@ async function tryMatch(db, requestId) {
 
 // 이번 주 약속 날짜를 계산한다. 오늘부터 7일이 기본이고,
 // 오늘 약속이 이미 끝났다면 건너뛴다. 남는 약속이 없으면 내일부터 7일로 잡는다.
-export function planWeek(days, startTime, endTime) {
+// schedule: [{ day, start, end }] 요일별 약속 시간 (예전 방식: planWeek(days, start, end)도 됨)
+// 반환하는 dates 는 [{ date, start, end }]
+export function planWeek(schedule, startTime, endTime) {
+  if (typeof schedule[0] === 'number') schedule = schedule.map((day) => ({ day, start: startTime, end: endTime }));
   const t = T.today();
   const build = (offset) => {
     const dates = [];
     for (let i = 0; i < 7; i++) {
       const date = T.addDays(t, offset + i);
-      if (!days.includes(T.isoWeekday(date))) continue;
-      if (T.at(date, endTime) <= T.now()) continue;
-      dates.push(date);
+      const slot = schedule.find((s) => s.day === T.isoWeekday(date));
+      if (!slot) continue;
+      if (T.at(date, slot.end) <= T.now()) continue;
+      dates.push({ date, start: slot.start, end: slot.end });
     }
     return dates;
   };
@@ -499,23 +622,24 @@ const makeCode = () => Array.from(crypto.randomBytes(6), (b) => CODE_CHARS[b % C
 
 async function createMatch(db, { userA, userB, stakeA, stakeB, terms, prevMatchId = null }) {
   const stake = Math.min(stakeA, stakeB);
-  const { weekStart, weekEnd, dates } = planWeek(terms.days, terms.startTime, terms.endTime);
+  const schedule = terms.schedule ?? terms.days.map((day) => ({ day, start: terms.startTime, end: terms.endTime }));
+  const { weekStart, weekEnd, dates } = planWeek(schedule);
   const { rows } = await db.run(
     `INSERT INTO matches (user_a, user_b, days, start_time, end_time, location, styles, stake,
-                          week_start, week_end, prev_match_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-    userA, userB, JSON.stringify(terms.days), terms.startTime, terms.endTime, terms.location,
-    JSON.stringify(terms.styles), stake, weekStart, weekEnd, prevMatchId, iso(),
+                          week_start, week_end, prev_match_id, schedule, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    userA, userB, JSON.stringify(schedule.map((s) => s.day)), terms.startTime, terms.endTime, terms.location,
+    JSON.stringify(terms.styles), stake, weekStart, weekEnd, prevMatchId, JSON.stringify(schedule), iso(),
   );
   const matchId = rows[0].id;
 
   if (stakeA > stake) await adjustPoints(db, userA, stakeA - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
   if (stakeB > stake) await adjustPoints(db, userB, stakeB - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
 
-  for (const date of dates) {
+  for (const { date, start, end } of dates) {
     const { rows: ap } = await db.run(
       'INSERT INTO appointments (match_id, date, start_time, end_time, code) VALUES (?, ?, ?, ?, ?) RETURNING id',
-      matchId, date, terms.startTime, terms.endTime, makeCode(),
+      matchId, date, start, end, makeCode(),
     );
     await ensureCodes(db, [ap[0].id], [userA, userB]);
   }
@@ -537,6 +661,27 @@ async function ensureCodes(db, appointmentIds, userIds) {
 // ───────────────────────── 매칭 조회 ─────────────────────────
 
 const getMatchRow = async (db, id) => parseMatch(await db.get('SELECT * FROM matches WHERE id = ?', id));
+
+// 진행 중인 매칭 모두 (리포트 대기 포함)
+async function activeMatchRows(db, userId) {
+  return (await db.all(
+    `SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status IN ('active', 'reported') ORDER BY id`,
+    userId, userId,
+  )).map(parseMatch);
+}
+
+export async function activeMatches(db, userId, opts) {
+  await autoSettle(db);
+  const out = [];
+  for (const m of await activeMatchRows(db, userId)) out.push(await matchDetail(db, userId, m, opts));
+  return out;
+}
+
+// 약속이 속한 매칭의 상세 (출석·공부 종료 후 화면 갱신용)
+export async function matchForAppointment(db, userId, appointmentId, opts) {
+  const { m } = await loadAppointment(db, userId, appointmentId);
+  return matchDetail(db, userId, await getMatchRow(db, m.id), opts);
+}
 
 async function currentMatchRow(db, userId) {
   return parseMatch(await db.get(
@@ -642,6 +787,7 @@ export async function matchDetail(db, userId, m, { demo = false } = {}) {
     status: m.status,
     location: m.location,
     days: m.days,
+    schedule: m.schedule, // 요일별 약속 시간 [{ day, start, end }]
     startTime: m.start_time,
     endTime: m.end_time,
     styles: m.styles,
@@ -709,13 +855,39 @@ export async function matchHistory(db, userId) {
 }
 
 export async function homeState(db, userId, opts) {
-  const match = await currentMatch(db, userId, opts);
+  const matches = await activeMatches(db, userId, opts);
+  const pendings = await pendingRequests(db, userId);
+  const u = await getUser(db, userId);
   return {
-    user: privateUser(await getUser(db, userId)),
-    pendingRequest: await pendingRequest(db, userId),
-    match,
-    mateLeft: match ? null : await recentMateLeft(db, userId),
+    user: privateUser(u),
+    matches, // 진행 중인 매칭 모두
+    pendingRequests: pendings, // 대기 중인 신청 모두
+    match: matches.at(-1) ?? null, // (예전 화면 호환) 가장 최근 매칭
+    pendingRequest: pendings[0] ?? null,
+    personal: u.personal ? JSON.parse(u.personal) : [], // 내 개인 일정
+    mateLeft: matches.length ? null : await recentMateLeft(db, userId),
+    community: await communityStats(db),
+    exam: examDday(),
   };
+}
+
+// 국민대 전체 통계: 실제 사용자만 (데모 메이트·공용 데모 계정 제외)
+async function communityStats(db) {
+  const real = `u.is_bot = 0 AND u.email <> '${DEMO_ACCOUNT.email}'`;
+  const studying = await db.get(
+    `SELECT COUNT(DISTINCT u.id) AS n FROM matches m JOIN users u ON u.id IN (m.user_a, m.user_b)
+     WHERE m.status = 'active' AND ${real}`,
+  );
+  const waiting = await db.get(
+    `SELECT COUNT(*) AS n FROM match_requests r JOIN users u ON u.id = r.user_id WHERE r.status = 'pending' AND ${real}`,
+  );
+  return { studying: Number(studying.n), waiting: Number(waiting.n) };
+}
+
+// 시험 디데이 (한국 날짜 기준). 시험일이 지나면 null.
+function examDday() {
+  const days = Math.round((Date.parse(EXAM.date) - Date.parse(T.today())) / 86400000);
+  return days < 0 ? null : { name: EXAM.name, date: EXAM.date, dday: days };
 }
 
 // 메이트가 최근(3일 안)에 매칭을 그만뒀으면 홈에서 알려 준다.
@@ -995,7 +1167,7 @@ async function continueMatch(db, m) {
     stakeA: stake,
     stakeB: stake,
     prevMatchId: m.id,
-    terms: { days: m.days, startTime: m.start_time, endTime: m.end_time, location: m.location, styles: m.styles },
+    terms: { schedule: m.schedule, startTime: m.start_time, endTime: m.end_time, location: m.location, styles: m.styles },
   });
 }
 

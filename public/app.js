@@ -101,6 +101,37 @@ const loading = () => { view.innerHTML = '<div class="spinner"></div>'; };
 // 데모(가상) 메이트 표시
 const botBadge = (u) => (u?.isBot ? ' <span class="pill gray" title="실제 사람이 아닌 체험용 메이트">데모 메이트</span>' : '');
 
+// 시간표 칸("요일-시간대번호") → 요일별 이어진 시간 [{ day, start, end }]
+function runsOfCells(cells) {
+  const S = OPTIONS.timeSlots;
+  const byDay = {};
+  for (const c of cells) {
+    const [d, i] = c.split('-').map(Number);
+    (byDay[d] ??= []).push(i);
+  }
+  const runs = [];
+  for (const d of Object.keys(byDay).map(Number).sort((x, y) => x - y)) {
+    const idx = [...new Set(byDay[d])].sort((x, y) => x - y);
+    let from = idx[0];
+    for (let k = 1; k <= idx.length; k++) {
+      if (k < idx.length && idx[k] === idx[k - 1] + 1) continue;
+      runs.push({ day: d, start: S[from].start, end: S[idx[k - 1]].end });
+      if (k < idx.length) from = idx[k];
+    }
+  }
+  return runs;
+}
+
+// 요일별 시간 → 짧은 요약. 같은 시간인 요일끼리 묶는다.
+function scheduleText(runs) {
+  const groups = new Map();
+  for (const r of runs) {
+    const key = `${fmtTime(r.start)}~${fmtTime(r.end)}`;
+    groups.set(key, [...(groups.get(key) ?? []), r.day]);
+  }
+  return [...groups].map(([time, days]) => `${[...new Set(days)].map((d) => WD[d]).join('·')} ${time}`).join(' · ');
+}
+
 function styleLabels(keys) {
   return keys.map((k) => OPTIONS.styles[k]?.label ?? k).join(' · ');
 }
@@ -127,7 +158,11 @@ async function router() {
   const name = location.hash.replace(/^#\/?/, '') || 'home';
   scroller().scrollTo(0, 0);
   const pastId = name.match(/^history\/(\d+)$/)?.[1];
-  const render = pastId ? (alive) => renderPast(alive, Number(pastId)) : routes[name] ?? renderHome;
+  const [, sub, subId] = name.match(/^(match|chat)\/(\d+)$/) ?? [];
+  const render = pastId ? (alive) => renderPast(alive, Number(pastId))
+    : sub === 'match' ? (alive) => renderMatch(alive, Number(subId))
+      : sub === 'chat' ? (alive) => renderChat(alive, Number(subId))
+        : routes[name] ?? renderHome;
   try {
     if (!OPTIONS) OPTIONS = await api('/options');
     await render(() => token === routeToken);
@@ -303,6 +338,92 @@ async function renderReset() {
   });
 }
 
+// ───────────────────────── 시간표 (신청 화면·홈 공용) ─────────────────────────
+
+const toMinutes = (t) => {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+};
+
+// 요일 + 시간 범위 → 그 안에 들어가는 시간표 칸들
+function cellsOfRun(day, start, end) {
+  return OPTIONS.timeSlots
+    .map((s, i) => [s, i])
+    .filter(([s]) => toMinutes(s.start) >= toMinutes(start) && toMinutes(s.end) <= toMinutes(end))
+    .map(([, i]) => `${day}-${i}`);
+}
+
+// 내 시간표: 칸 → { kind: match|pending|personal, label, matchId }
+// 이어진 칸 묶음의 첫 칸에만 이름(label)을 단다.
+function myTimetable({ matches = [], pendingRequests = [], personal = [] }) {
+  const map = new Map();
+  const put = (cells, info) => cells.forEach((c, k) => map.set(c, { ...info, label: k === 0 ? info.label : '' }));
+  for (const m of matches) {
+    for (const r of m.schedule) put(cellsOfRun(r.day, r.start, r.end), { kind: 'match', label: m.mate.name, matchId: m.id });
+  }
+  for (const req of pendingRequests) {
+    for (const r of runsOfCells(req.cells)) put(cellsOfRun(r.day, r.start, r.end), { kind: 'pending', label: '대기' });
+  }
+  const byTitle = new Map();
+  for (const p of personal) byTitle.set(p.title, [...(byTitle.get(p.title) ?? []), p.cell]);
+  for (const [title, cells] of byTitle) {
+    for (const r of runsOfCells(cells)) put(cellsOfRun(r.day, r.start, r.end), { kind: 'personal', label: title });
+  }
+  return map;
+}
+
+// 시간표 HTML. cellInfo(cell) → { cls, label, on, disabled }
+function timetableHTML(id, cellInfo) {
+  const SLOTS = OPTIONS.timeSlots;
+  const days = [1, 2, 3, 4, 5, 6, 7];
+  return `
+    <div class="tt" id="${id}">
+      <div class="tt-corner"></div>${days.map((d) => `<div class="tt-day${d > 5 ? ' weekend' : ''}">${WD[d]}</div>`).join('')}
+      ${SLOTS.map((s, i) => `${i === 6 ? '<div class="tt-divider"></div>' : ''}
+        <div class="tt-time${i >= 6 ? ' evening' : ''}">${s.start}</div>
+        ${days.map((d) => {
+          const info = cellInfo(`${d}-${i}`) ?? {};
+          return `<button type="button" class="tt-cell${i >= 6 ? ' evening' : ''}${info.cls ? ` ${info.cls}` : ''}" data-cell="${d}-${i}"
+            aria-pressed="${!!info.on}"${info.disabled ? ' disabled' : ''} aria-label="${WD[d]} ${s.start}~${s.end}${info.label ? ` ${esc(info.label)}` : ''}">${info.label ? `<span>${esc(info.label)}</span>` : ''}</button>`;
+        }).join('')}`).join('')}
+    </div>`;
+}
+
+// 시간표 칸 누르기·끌기. get(cell) → 켜짐 여부, set(cell, on, btn) 으로 바꾼다. 막힌(disabled) 칸은 건너뛴다.
+function attachPaint(tt, { get, set }) {
+  let paint = null;
+  let last = null;
+  const btnOf = (d, i) => tt.querySelector(`[data-cell="${d}-${i}"]`);
+  const paintTo = (btn) => {
+    const [d, i] = btn.dataset.cell.split('-').map(Number);
+    const cells = [[d, i]];
+    // 빠르게 끌어도 빠지는 칸이 없도록, 같은 요일/같은 시간대로 움직이면 사이 칸도 모두 칠한다
+    if (last && last[0] === d) for (let k = Math.min(last[1], i); k <= Math.max(last[1], i); k++) cells.push([d, k]);
+    if (last && last[1] === i) for (let k = Math.min(last[0], d); k <= Math.max(last[0], d); k++) cells.push([k, i]);
+    for (const [cd, ci] of cells) {
+      const b = btnOf(cd, ci);
+      if (b && !b.disabled && get(b.dataset.cell) !== paint) set(b.dataset.cell, paint, b);
+    }
+    last = [d, i];
+  };
+  tt.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest('.tt-cell');
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    paint = !get(btn.dataset.cell);
+    last = null;
+    paintTo(btn);
+  });
+  tt.addEventListener('pointermove', (e) => {
+    if (paint === null) return;
+    const btn = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.tt-cell');
+    if (btn && tt.contains(btn)) paintTo(btn);
+  });
+  const stop = () => { paint = null; last = null; };
+  window.addEventListener('pointerup', stop);
+  window.addEventListener('pointercancel', stop);
+}
+
 // ───────────────────────── 홈 ─────────────────────────
 
 async function renderHome(alive) {
@@ -311,100 +432,191 @@ async function renderHome(alive) {
   loading();
   const state = await api('/me');
   if (!alive()) return;
-  const { user, pendingRequest: req, match, mateLeft } = state;
+  const { user, matches, pendingRequests, personal, mateLeft, community, exam } = state;
 
-  let main;
-  if (match?.status === 'reported') {
-    main = `
+  const reportCard = (m) => `
       <div class="card lime">
         <div class="card-head"><h2>📊 주간 리포트가 도착했어요</h2></div>
-        <p class="small">${esc(match.mate.name)}님과의 ${match.round}주차 결과를 확인하고, 다음 주를 골라 주세요.</p>
-        <a class="btn primary block mt" href="#/match">리포트 보기</a>
+        <p class="small">${esc(m.mate.name)}님과의 ${m.round}주차 결과를 확인하고, 다음 주를 골라 주세요.</p>
+        <a class="btn primary block mt" href="#/match/${m.id}">리포트 보기</a>
       </div>`;
-  } else if (match) {
-    const next = match.appointments.find((a) => ['open', 'studying', 'scheduled'].includes(a.me.status));
-    main = `
+  const matchCard = (m) => {
+    const next = m.appointments.find((x) => ['open', 'studying', 'scheduled'].includes(x.me.status));
+    return `
       <div class="card">
-        <div class="card-head"><h2>👥 이번 주 메이트</h2><span class="pill">${match.round}주차</span></div>
+        <div class="card-head"><h2>👥 이번 주 메이트</h2><span class="pill">${m.round}주차</span></div>
         <div class="profile">
-          <div class="avatar">${esc(match.mate.avatar)}</div>
+          <div class="avatar">${esc(m.mate.avatar)}</div>
           <div>
-            <div class="name">${esc(match.mate.name)}${match.mate.age ? `<small>(${match.mate.age}세)</small>` : ''}${botBadge(match.mate)}</div>
-            <div class="small muted">출석 ${match.stats.me.attended}/${match.stats.me.total} · 공부 ${fmtMinutes(match.stats.me.minutes)}</div>
+            <div class="name">${esc(m.mate.name)}${m.mate.age ? `<small>(${m.mate.age}세)</small>` : ''}${botBadge(m.mate)}</div>
+            <div class="small muted">${esc(scheduleText(m.schedule))}</div>
+            <div class="small muted">출석 ${m.stats.me.attended}/${m.stats.me.total} · 공부 ${fmtMinutes(m.stats.me.minutes)}</div>
           </div>
         </div>
         ${next ? `
           <div class="notice"><span>📅</span><span>다음 약속 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b> · ${esc(next.location)}</span></div>`
         : '<div class="notice"><span>✅</span><span>이번 주 약속을 모두 마쳤어요. 주간이 끝나면 리포트가 도착해요.</span></div>'}
-        <a class="btn primary block mt" href="#/match">${next && ['open', 'studying'].includes(next.me.status) ? '지금 출석하러 가기' : '매칭 정보 보기'}</a>
+        <a class="btn primary block mt" href="#/match/${m.id}">${next && ['open', 'studying'].includes(next.me.status) ? '지금 출석하러 가기' : '매칭 정보 보기'}</a>
       </div>`;
-  } else if (req) {
-    main = `
-      <div class="card center">
-        <div class="pulse">🔍</div>
-        <h2 style="font-size:18px">조건이 맞는 메이트를 찾는 중</h2>
-        <p class="small muted mt">새 신청이 들어오면 바로 연결해 드릴게요.</p>
-        <div class="notice" style="text-align:left">
-          <span>📋</span>
-          <span>${req.days.map((d) => WD[d]).join('·')} · ${fmtTime(req.start_time)} ~ ${fmtTime(req.end_time)}<br>
-          ${esc(req.location)} · ${styleLabels(req.styles)}${req.deposit ? ` · 보증금 ${won(req.deposit)}원` : ''}</span>
+  };
+  const pendingCard = (req) => `
+      <div class="card">
+        <div class="row" style="gap:12px">
+          <div class="pulse sm">🔍</div>
+          <div style="flex:1">
+            <b>메이트를 찾는 중</b>
+            <p class="tiny muted">${esc(scheduleText(req.schedule))}<br>${esc(req.location)} · ${styleLabels(req.styles)}${req.deposit ? ` · 보증금 ${won(req.deposit)}P` : ''}</p>
+          </div>
         </div>
-        <button class="btn ghost block mt danger" id="cancel">신청 취소하기</button>
+        <button class="btn ghost block mt danger sm" data-cancel="${req.id}">신청 취소하기</button>
       </div>`;
-  } else {
-    let leftNote = '';
-    if (mateLeft) {
-      const detail = mateLeft.reward
-        ? `보증금 ${won(mateLeft.refunded)}P를 돌려받고, 보상으로 <span class="plus">+${won(mateLeft.reward)}P</span>를 받았어요.`
-        : mateLeft.refunded ? `보증금 ${won(mateLeft.refunded)}P를 돌려받았어요.` : '';
-      leftNote = `
+
+  let leftNote = '';
+  if (mateLeft) {
+    const detail = mateLeft.reward
+      ? `보증금 ${won(mateLeft.refunded)}P를 돌려받고, 보상으로 <span class="plus">+${won(mateLeft.reward)}P</span>를 받았어요.`
+      : mateLeft.refunded ? `보증금 ${won(mateLeft.refunded)}P를 돌려받았어요.` : '';
+    leftNote = `
       <div class="card">
         <div class="card-head"><h2>👋 메이트가 매칭을 그만뒀어요</h2></div>
         <p class="small">${esc(mateLeft.mateName)}님이 이번 주 매칭을 중간에 그만뒀어요. ${detail}</p>
       </div>`;
-    }
-    main = `${leftNote}
-      <div class="card hero">
-        <h2 style="font-size:20px;line-height:1.4">이번 주, 같이 공부할<br>메이트를 찾아볼까요?</h2>
-        <p class="small muted mt">요일·시간·장소만 고르면 조건이 맞는 1:1 메이트와 연결돼요.</p>
-        <a class="btn lime block mt-lg" href="#/apply">매칭 신청하기 →</a>
-      </div>`;
   }
+  const hasAny = matches.length || pendingRequests.length;
+  // 기말고사 디데이 · 국민대 통계 (매칭 전에는 첫 카드 안에, 매칭 후에는 매칭 카드 아래에)
+  const dday = exam ? (exam.dday === 0 ? 'D-DAY' : `D-${exam.dday}`) : '';
+  const heroStats = `
+        <div class="hero-stats">
+          ${exam ? `<div><span>📅 ${esc(exam.name)}까지</span><b>${dday}</b><span>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</span></div>` : ''}
+          <div><span>🎓 국민대생</span><b>${community.studying}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></div>
+        </div>`;
+  const homeStats = `
+    <div class="home-stats">
+      ${exam ? `<div class="stat"><span>📅 ${esc(exam.name)}까지</span><b>${dday}</b><span>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</span></div>` : ''}
+      <div class="stat"><span>🎓 국민대생</span><b>${community.studying}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></div>
+    </div>`;
+  const ttCard = '<section class="card" id="my-tt-card"></section>';
+  // 매칭·신청이 있으면: 시간표 → 매칭 상태 카드들 → 통계
+  // 없으면: 매칭 신청 카드(통계 포함) → 시간표 (첫 화면에서 시간표가 잘리지 않게 위쪽을 작게)
+  const main = hasAny
+    ? ttCard
+      + [...matches.map((m) => (m.status === 'reported' ? reportCard(m) : matchCard(m))), ...pendingRequests.map(pendingCard)].join('')
+      + '<a class="btn block mt" href="#/apply">＋ 다른 시간에 매칭 추가 신청</a>'
+      + homeStats
+    : `${leftNote}
+      <div class="card hero compact">
+        <h2>이번 주, 같이 공부할 메이트를 찾아볼까요?</h2>
+        <p class="tiny muted">시간표에서 시간을 고르면 조건이 맞는 1:1 메이트와 연결돼요.</p>
+        ${heroStats}
+        <a class="btn lime block" href="#/apply">매칭 신청하기 →</a>
+      </div>
+      ${ttCard}`;
 
   view.innerHTML = `
-    <div class="row between mt">
-      <div>
-        <div class="small muted">안녕하세요,</div>
-        <div style="font-size:22px;font-weight:800">${esc(user.name)}님 👋</div>
-      </div>
+    <div class="row between home-hello">
+      <div style="font-size:19px;font-weight:800">${esc(user.name)}님 👋</div>
       <a href="#/me" class="pill lime" style="text-decoration:none">💰 ${won(user.points)}P</a>
     </div>
     ${main}
     <div class="card">
       <div class="card-head"><h2>스터디버디는 이렇게 진행돼요</h2></div>
       <ol class="steps">
-        <li><b>매칭 신청</b><span class="small muted">요일·시간, 장소, 교류 방식을 고르면 1:1로 연결돼요.</span></li>
+        <li><b>매칭 신청</b><span class="small muted">시간표에서 시간을 고르고 장소, 교류 방식을 정하면 1:1로 연결돼요.</span></li>
         <li><b>약속 보증금 (선택)</b><span class="small muted">약속을 지키면 돌려받고, 어기면 지킨 메이트에게 보상으로 가요.</span></li>
         <li><b>약속 이행</b><span class="small muted">1주일 동안 만나서 각자 공부하고 출석·공부시간을 기록해요.</span></li>
         <li><b>주간 리포트와 재매칭</b><span class="small muted">같은 메이트와 계속할지, 새 메이트를 만날지 골라요.</span></li>
       </ol>
     </div>`;
 
-  $('#cancel')?.addEventListener('click', async () => {
-    if (!confirm('매칭 신청을 취소할까요? 걸어둔 보증금은 돌려드려요.')) return;
+  // ── 내 시간표 (매칭 · 대기 · 개인 일정) + 개인 일정 편집
+  let mine = personal.map((p) => ({ ...p }));
+  let editing = false;
+  let editTitle = '수업';
+  // 편집 중에는 칸 모양과 이름만 다시 칠한다 (끌기 상태 유지)
+  const redrawCells = () => {
+    const map = myTimetable({ matches, pendingRequests, personal: mine });
+    $$('#my-tt .tt-cell').forEach((b) => {
+      const info = map.get(b.dataset.cell);
+      b.classList.remove('match', 'pending', 'personal');
+      if (info) b.classList.add(info.kind);
+      b.innerHTML = info?.label ? `<span>${esc(info.label)}</span>` : '';
+    });
+  };
+  const drawTimetable = () => {
+    const map = myTimetable({ matches, pendingRequests, personal: mine });
+    const card = $('#my-tt-card');
+    const empty = !matches.length && !pendingRequests.length && !mine.length;
+    card.innerHTML = `
+      <div class="card-head"><h2>🗓 내 시간표</h2>
+        ${editing ? '' : '<button class="btn sm ghost" id="tt-edit">✏️ 개인 일정</button>'}</div>
+      <div class="tt-legend tiny">
+        <span><i class="lg match"></i>매칭</span><span><i class="lg pending"></i>대기</span><span><i class="lg personal"></i>개인 일정</span>
+      </div>
+      ${editing ? `
+        <div class="notice"><span>✏️</span><span>일정 이름을 적고 칸을 누르거나 끌어서 넣어요. 같은 칸을 다시 누르면 빠져요.</span></div>
+        <div class="row mt"><input class="input" id="tt-title" maxlength="20" value="${esc(editTitle)}" placeholder="예: 마케팅 수업"></div>` : ''}
+      ${timetableHTML('my-tt', (cell) => {
+        const info = map.get(cell);
+        if (!info) return editing ? {} : { cls: 'ro' };
+        if (editing) return { cls: info.kind, label: info.label, disabled: info.kind !== 'personal' };
+        return { cls: `${info.kind} ${info.kind === 'match' ? 'link' : 'ro'}`, label: info.label };
+      })}
+      ${editing ? `
+        <div class="btn-row mt">
+          <button class="btn" id="tt-cancel">취소</button>
+          <button class="btn primary" id="tt-save">저장</button>
+        </div>` : (empty ? '<p class="tiny muted mt">매칭이나 개인 일정이 생기면 여기에 보여요.</p>' : '')}`;
+
+    const tt = $('#my-tt');
+    if (!editing) {
+      // 매칭 칸을 누르면 그 매칭 화면으로
+      tt.addEventListener('click', (e) => {
+        const btn = e.target.closest('.tt-cell.match');
+        const info = btn && map.get(btn.dataset.cell);
+        if (info) location.hash = `#/match/${info.matchId}`;
+      });
+      $('#tt-edit').addEventListener('click', () => { editing = true; drawTimetable(); });
+      return;
+    }
+    $('#tt-title').addEventListener('input', (e) => { editTitle = e.target.value; });
+    attachPaint(tt, {
+      get: (cell) => mine.some((p) => p.cell === cell),
+      set: (cell, on) => {
+        mine = mine.filter((p) => p.cell !== cell);
+        if (on) mine.push({ cell, title: editTitle.trim() || '개인 일정' });
+        redrawCells();
+      },
+    });
+    $('#tt-cancel').addEventListener('click', () => { mine = personal.map((p) => ({ ...p })); editing = false; drawTimetable(); });
+    $('#tt-save').addEventListener('click', async () => {
+      try {
+        const res = await api('/me/personal', { method: 'PUT', body: { entries: mine } });
+        personal.splice(0, personal.length, ...res.personal);
+        mine = res.personal.map((p) => ({ ...p }));
+        editing = false;
+        toast('개인 일정을 저장했어요.');
+        drawTimetable();
+      } catch (err) { toast(err.message, true); }
+    });
+  };
+  drawTimetable();
+
+  $$('[data-cancel]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('이 매칭 신청을 취소할까요? 걸어둔 보증금은 돌려드려요.')) return;
     try {
-      await api('/requests/current', { method: 'DELETE' });
+      await api(`/requests/${b.dataset.cancel}`, { method: 'DELETE' });
       toast('신청을 취소했어요.');
       router();
     } catch (err) { toast(err.message, true); }
-  });
+  }));
 
-  if (req) {
+  if (pendingRequests.length) {
+    const before = matches.length;
     every(4000, async () => {
       const s = await api('/me').catch(() => null);
-      if (s?.match && alive()) {
+      if (s && s.matches.length > before && alive()) {
         toast('🎉 메이트를 찾았어요!');
-        location.hash = '#/match';
+        location.hash = `#/match/${s.matches.at(-1).id}`;
       }
     });
   }
@@ -416,23 +628,20 @@ async function renderApply(alive) {
   setTop({ title: '매칭 신청', back: '#/home' });
   setTabs(null);
   loading();
-  const { user, pendingRequest: req, match } = await api('/me');
+  const state = await api('/me');
   if (!alive()) return;
-  if (req || match) {
-    toast(req ? '이미 매칭을 기다리는 중이에요.' : '진행 중인 매칭이 있어요.');
-    location.hash = req ? '#/home' : '#/match';
-    return;
-  }
+  const { user } = state;
+  // 이미 매칭·신청한 칸과 개인 일정 칸은 고를 수 없다
+  const taken = myTimetable(state);
+  const defaults = ['1-7', '1-8', '3-7', '3-8', '5-7', '5-8'].filter((c) => !taken.has(c));
 
-  const form = { days: new Set([1, 3, 5]), startTime: '19:00', endTime: '22:00', location: OPTIONS.locations[0], styles: new Set(), depositOn: false, deposit: 10000 };
-  const timeOpts = (sel) => {
-    let html = '';
-    for (let m = 6 * 60; m <= 24 * 60; m += 30) {
-      const t = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-      html += `<option value="${t}"${t === sel ? ' selected' : ''}>${fmtTime(t)}</option>`;
-    }
-    return html;
-  };
+  const form = { cells: new Set(defaults), location: OPTIONS.locations[0], styles: new Set(), depositOn: false, deposit: 10000 };
+  // 시간표: 칸을 누르거나 끌어서 고른다. form.cells = "요일-시간대번호" 모음
+  const grid = () => timetableHTML('tt', (cell) => {
+    const info = taken.get(cell);
+    if (info) return { cls: `${info.kind} ro`, label: info.label, disabled: true };
+    return { on: form.cells.has(cell) };
+  });
 
   view.innerHTML = `
     <section class="card">
@@ -448,17 +657,10 @@ async function renderApply(alive) {
 
     <section class="card">
       <div class="card-head"><h2>📅 공부 일정 및 장소 설정</h2></div>
-      <div class="field"><span>요일 선택</span>
-        <div class="day-picker" id="days">
-          ${[1, 2, 3, 4, 5, 6, 7].map((d) => `<button type="button" data-day="${d}" aria-pressed="${form.days.has(d)}">${WD[d]}</button>`).join('')}
-        </div>
-      </div>
-      <div class="field"><span>시간 설정</span>
-        <div class="time-range">
-          <select class="select" id="start">${timeOpts(form.startTime)}</select>
-          <span class="muted">~</span>
-          <select class="select" id="end">${timeOpts(form.endTime)}</select>
-        </div>
+      <div class="field"><span>공부할 시간</span>
+        ${grid()}
+        <p class="tiny muted tt-hint"><span class="one-line">칸을 누르거나 끌어서 골라요 · 낮 1시간 30분, 저녁(18시~) 1시간</span>${taken.size ? '회색 빗금 칸은 이미 매칭·신청했거나 개인 일정이 있는 시간이에요' : ''}</p>
+        <button type="button" class="btn sm ghost" id="tt-clear">모두 지우기</button>
       </div>
       <label class="field"><span>장소 설정</span>
         <select class="select" id="loc">${OPTIONS.locations.map((l) => `<option>${esc(l)}</option>`).join('')}</select>
@@ -491,13 +693,6 @@ async function renderApply(alive) {
 
     <div class="sticky-cta"><button class="btn primary block" id="submit">매칭 신청하기 →</button></div>`;
 
-  $('#days').addEventListener('click', (e) => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    const d = Number(b.dataset.day);
-    form.days.has(d) ? form.days.delete(d) : form.days.add(d);
-    b.setAttribute('aria-pressed', form.days.has(d));
-  });
   $('#styles').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -512,8 +707,18 @@ async function renderApply(alive) {
     $$('#dep button').forEach((x) => x.setAttribute('aria-pressed', x === b));
     $('#dep-amount').hidden = !form.depositOn;
   });
-  $('#start').addEventListener('change', (e) => { form.startTime = e.target.value; });
-  $('#end').addEventListener('change', (e) => { form.endTime = e.target.value; });
+  // 시간표 칸: 누르면 켜고/끄고, 누른 채 끌면 같은 상태로 여러 칸을 칠한다 (마우스·터치 모두)
+  attachPaint($('#tt'), {
+    get: (cell) => form.cells.has(cell),
+    set: (cell, on, btn) => {
+      on ? form.cells.add(cell) : form.cells.delete(cell);
+      btn.setAttribute('aria-pressed', on);
+    },
+  });
+  $('#tt-clear').addEventListener('click', () => {
+    form.cells.clear();
+    $$('#tt .tt-cell').forEach((b) => b.setAttribute('aria-pressed', false));
+  });
   $('#loc').addEventListener('change', (e) => { form.location = e.target.value; });
   $('#amount').addEventListener('change', (e) => { form.deposit = Number(e.target.value); });
 
@@ -523,9 +728,7 @@ async function renderApply(alive) {
       const res = await api('/requests', {
         method: 'POST',
         body: {
-          days: [...form.days],
-          startTime: form.startTime,
-          endTime: form.endTime,
+          cells: [...form.cells],
           location: form.location,
           styles: [...form.styles],
           deposit: form.depositOn ? form.deposit : 0,
@@ -533,7 +736,7 @@ async function renderApply(alive) {
       });
       if (res.matchId) {
         toast('🎉 바로 메이트를 찾았어요!');
-        location.hash = '#/match';
+        location.hash = `#/match/${res.matchId}`;
       } else {
         toast('신청 완료! 조건이 맞는 메이트를 기다리는 중이에요.');
         location.hash = '#/home';
@@ -560,12 +763,21 @@ const MARK = {
   open: ['', '예정'], scheduled: ['', '예정'], off: ['–', '휴식'], cancelled: ['–', '취소'],
 };
 
-async function renderMatch(alive) {
+// 메이트가 여럿이면 화면 위에 메이트 고르는 버튼을 보여 준다
+let mateTabs = '';
+const mateTabsHTML = (matches, current, base) => (matches.length < 2 ? '' : `
+  <div class="mate-tabs">${matches.map((m) => `
+    <a href="#/${base}/${m.id}" class="${m.id === current ? 'on' : ''}">${esc(m.mate.avatar)} ${esc(m.mate.name)}<small>${esc(scheduleText(m.schedule))}</small></a>`).join('')}
+  </div>`);
+
+async function renderMatch(alive, id) {
   setTop({ title: '매칭중' });
   setTabs('match');
   loading();
-  const { match } = await api('/matches/current');
+  const { matches } = await api('/matches/active');
   if (!alive()) return;
+  const match = matches.find((m) => m.id === id) ?? matches[0];
+  mateTabs = mateTabsHTML(matches, match?.id, 'match');
   if (!match) {
     view.innerHTML = `
       <div class="empty">
@@ -582,6 +794,7 @@ async function renderMatch(alive) {
 
 function drawMatch(m, alive) {
   const today = todayStr();
+  const tabs = mateTabs;
   const target = m.appointments.find((a) => a.me.status === 'studying' || a.mate.status === 'studying')
     ?? m.appointments.find((a) => a.me.status === 'open' || a.mate.status === 'open');
   const next = m.appointments.find((a) => a.me.status === 'scheduled');
@@ -638,7 +851,7 @@ function drawMatch(m, alive) {
     </div>`;
   }).join('');
 
-  view.innerHTML = `
+  view.innerHTML = `${tabs}
     <section class="card">
       <div class="card-head"><h2>👥 메이트 프로필</h2><span class="pill">${m.round}주차</span></div>
       <div class="profile">
@@ -809,7 +1022,7 @@ function renderReport(m, alive) {
       </div>`;
   }
 
-  view.innerHTML = `
+  view.innerHTML = `${mateTabs}
     <section class="card hero">
       <div class="small muted">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)} · ${m.round}주차</div>
       <h2 style="font-size:20px;margin-top:4px">${me.kept ? '이번 주 약속을 모두 지켰어요 🎉' : '이번 주는 아쉬웠어요'}</h2>
@@ -1015,12 +1228,13 @@ function openScanner(appointmentId, onDone) {
 
 // ───────────────────────── 채팅 ─────────────────────────
 
-async function renderChat(alive) {
+async function renderChat(alive, id) {
   setTop({ title: '채팅' });
   setTabs('chat');
   loading();
-  const [{ match }, { user }] = await Promise.all([api('/matches/current'), api('/me')]);
+  const [{ matches }, { user }] = await Promise.all([api('/matches/active'), api('/me')]);
   if (!alive()) return;
+  const match = matches.find((m) => m.id === id) ?? matches[0];
   if (!match) {
     view.innerHTML = `
       <div class="empty"><div class="em">💬</div><h3>대화할 메이트가 없어요</h3>
@@ -1029,8 +1243,8 @@ async function renderChat(alive) {
   }
   setTop({ title: `${match.mate.avatar} ${match.mate.name}` });
   const quick = quickMessages(match);
-  view.innerHTML = `
-    <div class="notice"><span>📌</span><span>${esc(match.location)} · ${match.days.map((d) => WD[d]).join('·')} ${fmtTime(match.startTime)}~${fmtTime(match.endTime)}</span></div>
+  view.innerHTML = `${mateTabsHTML(matches, match.id, 'chat')}
+    <div class="notice"><span>📌</span><span>${esc(match.location)} · ${esc(scheduleText(match.schedule))}</span></div>
     <div class="chat mt" id="chat"></div>
     <div class="chat-dock">
       <div class="quick">

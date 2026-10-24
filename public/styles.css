@@ -405,3 +405,79 @@ a.link-item:hover { background: var(--soft); }
 /* 현장 출석 확인: 내 코드 / 메이트 확인 구역 */
 .att-part { padding: 12px 0; border-top: 1px dashed var(--line); }
 .att-part:first-of-type { border-top: 0; padding-top: 6px; }
+
+/* 홈: 시험 디데이 · 국민대 전체 통계 */
+.home-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.home-stats .stat { background: var(--surface); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.home-stats .stat b { font-size: 20px; }
+
+/* 매칭 신청: 시간대 버튼 */
+.slot-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 6px; }
+.slot-picker button { border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 7px 4px; font-weight: 700; font-size: 13.5px; line-height: 1.2; }
+.slot-picker button small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+.slot-picker button[aria-pressed="true"] { background: var(--green); border-color: var(--green); color: #fff; }
+.slot-picker button[aria-pressed="true"] small { color: #d6e6dc; }
+.slot-sum { font-style: normal; color: var(--green); margin-left: 6px; }
+
+/* 매칭 신청: 시간표 (요일 × 시간대) */
+.tt { display: grid; grid-template-columns: 40px repeat(7, 1fr); gap: 3px; margin-top: 8px; user-select: none; touch-action: none; }
+.tt-corner { }
+.tt-day { text-align: center; font-size: 12px; font-weight: 800; color: var(--muted); padding: 2px 0; }
+.tt-day.weekend { color: var(--red); }
+.tt-time { font-size: 10.5px; color: var(--muted); text-align: right; padding-right: 4px; line-height: 1; display: flex; align-items: flex-start; justify-content: flex-end; }
+.tt-cell { height: 34px; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 0; cursor: pointer; }
+.tt-cell.evening { height: 26px; }
+.tt-cell[aria-pressed="true"] { background: var(--green); border-color: var(--green); }
+.tt-time.evening { }
+
+.tt-divider { grid-column: 1 / -1; height: 2px; background: #c9cfc4; border-radius: 1px; margin: 3px 0; }
+.tt-hint { margin: 10px 0 6px; }
+
+/* 시간표 칸 상태 (홈·신청 공용) */
+.tt-cell { position: relative; overflow: hidden; }
+.tt-cell span { position: absolute; left: 2px; right: 2px; top: 2px; font-size: 9.5px; line-height: 1.15; font-weight: 700; text-align: left; word-break: break-all; pointer-events: none; }
+.tt-cell.match { background: var(--green); border-color: var(--green); color: #fff; }
+.tt-cell.pending { background: #eef7cf; border-color: #c4e070; border-style: dashed; color: var(--ink); }
+.tt-cell.personal { background: #e4e7e0; border-color: #cfd4ca; color: var(--muted); }
+.tt-cell.ro { cursor: default; }
+.tt-cell.link { cursor: pointer; }
+.tt-cell:disabled { cursor: not-allowed; }
+#my-tt .tt-cell { height: 26px; }
+#my-tt .tt-cell.evening { height: 20px; }
+.tt-legend { display: flex; gap: 12px; color: var(--muted); margin-bottom: 6px; }
+.tt-legend .lg { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+.lg.match { background: var(--green); }
+.lg.pending { background: #eef7cf; border: 1px dashed #c4e070; }
+.lg.personal { background: #e4e7e0; }
+.pulse.sm { width: 40px; height: 40px; font-size: 18px; margin: 0; flex: none; }
+
+/* 매칭중·채팅: 메이트 고르기 */
+.mate-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 2px; scrollbar-width: none; }
+.mate-tabs::-webkit-scrollbar { display: none; }
+.mate-tabs a { flex: none; text-decoration: none; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 6px 10px; font-size: 13px; font-weight: 700; }
+.mate-tabs a small { display: block; font-size: 10.5px; font-weight: 500; color: var(--muted); }
+.mate-tabs a.on { background: var(--green); border-color: var(--green); color: #fff; }
+.mate-tabs a.on small { color: #d6e6dc; }
+/* 신청 화면: 이미 매칭·신청했거나 개인 일정이 있는 칸은 회색 빗금 (고르는 칸 초록과 구분) */
+#tt .tt-cell:disabled { background: repeating-linear-gradient(45deg, #eef0ea, #eef0ea 4px, #e3e6de 4px, #e3e6de 8px); border-color: #d8dcd2; color: var(--muted); border-style: solid; }
+.tt-hint .one-line { display: block; white-space: nowrap; font-size: min(11px, 2.85vw); letter-spacing: -0.4px; }
+
+/* 홈: 첫 화면에서 시간표까지 보이도록 위쪽을 작게 */
+.home-hello { margin-top: 8px; }
+.card.hero.compact { padding: 14px; }
+.card.hero.compact h2 { font-size: 16.5px; line-height: 1.35; }
+.card.hero.compact p { margin-top: 4px; }
+.card.hero.compact .btn { height: 40px; margin-top: 10px; }
+.hero-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; }
+.hero-stats > div { background: rgba(255, 255, 255, .12); border-radius: 10px; padding: 6px 8px; display: flex; flex-direction: column; }
+.hero-stats span { font-size: 10.5px; color: #cfe0d4; line-height: 1.3; }
+.hero-stats b { font-size: 17px; color: #fff; line-height: 1.25; }
+#my-tt .tt-cell { height: 22px; }
+#my-tt .tt-cell.evening { height: 18px; }
+#my-tt-card .tt { gap: 2px; margin-top: 4px; }
+#my-tt-card .tt-time { font-size: 9.5px; }
+#my-tt-card .card-head { margin-bottom: 4px; }
+/* 초록 카드 안의 디데이·통계 칸도 기존처럼 흰색 칸으로 */
+.hero-stats > div { background: var(--surface); border: 1px solid var(--line); }
+.hero-stats span { color: var(--muted); }
+.hero-stats b { color: var(--green); }

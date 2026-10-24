@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import * as S from './service.js';
-import { LOCATIONS, STYLES, DEPOSITS, CHECKIN_EARLY_MIN } from './options.js';
+import { LOCATIONS, STYLES, DEPOSITS, CHECKIN_EARLY_MIN, TIME_SLOTS } from './options.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const COOKIE = 'sb_token';
@@ -52,7 +52,7 @@ export function createApp({
 
   api.get('/options', (req, res) => {
     res.json({
-      locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo,
+      locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, timeSlots: TIME_SLOTS,
       emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, demoLogin,
     });
   });
@@ -92,11 +92,19 @@ export function createApp({
   // 내 정보
   api.get('/me', auth, async (req, res) => res.json(await S.homeState(db, req.user.id, opts)));
   api.put('/me', auth, async (req, res) => res.json({ user: await S.updateProfile(db, req.user.id, req.body ?? {}) }));
+  api.put('/me/personal', auth, async (req, res) => {
+    res.json({ personal: await S.setPersonalSchedule(db, req.user.id, req.body?.entries) });
+  });
   api.get('/me/points', auth, async (req, res) => res.json({ logs: await S.pointLogs(db, req.user.id) }));
   api.get('/me/history', auth, async (req, res) => res.json({ matches: await S.matchHistory(db, req.user.id) }));
 
   // 매칭 신청
   api.post('/requests', auth, async (req, res) => res.status(201).json(await S.createRequest(db, req.user.id, req.body ?? {})));
+  api.delete('/requests/:id', auth, async (req, res, next) => {
+    if (req.params.id === 'current') return next();
+    await S.cancelRequest(db, req.user.id, Number(req.params.id));
+    res.json({ ok: true });
+  });
   api.delete('/requests/current', auth, async (req, res) => {
     await S.cancelRequest(db, req.user.id);
     res.json({ ok: true });
@@ -104,6 +112,7 @@ export function createApp({
 
   // 매칭
   api.get('/matches/current', auth, async (req, res) => res.json({ match: await S.currentMatch(db, req.user.id, opts) }));
+  api.get('/matches/active', auth, async (req, res) => res.json({ matches: await S.activeMatches(db, req.user.id, opts) }));
   // 지난 매칭 다시 보기 (/matches/current 보다 뒤에 둬야 'current'를 가로채지 않음)
   api.get('/matches/:id', auth, async (req, res) => {
     res.json({ match: await S.matchById(db, req.user.id, Number(req.params.id), opts) });
@@ -111,7 +120,7 @@ export function createApp({
   api.post('/matches/:id/settle', auth, async (req, res) => {
     if (!demo) return res.status(403).json({ error: '데모 모드에서만 사용할 수 있어요.' });
     await S.forceSettle(db, req.user.id, Number(req.params.id));
-    res.json({ match: await S.currentMatch(db, req.user.id, opts) });
+    res.json({ match: await S.matchById(db, req.user.id, Number(req.params.id), opts) });
   });
   api.post('/matches/:id/leave', auth, async (req, res) => {
     res.json(await S.leaveMatch(db, req.user.id, Number(req.params.id)));
@@ -139,11 +148,11 @@ export function createApp({
   // 상대방 출석 확인하기 (혼자 하는 출석은 없음)
   api.post('/appointments/:id/confirm', auth, async (req, res) => {
     await S.confirmMate(db, req.user.id, Number(req.params.id), req.body?.code, opts);
-    res.json({ match: await S.currentMatch(db, req.user.id, opts) });
+    res.json({ match: await S.matchForAppointment(db, req.user.id, Number(req.params.id), opts) });
   });
   api.post('/appointments/:id/checkout', auth, async (req, res) => {
     const { minutes } = await S.checkOut(db, req.user.id, Number(req.params.id), opts);
-    res.json({ minutes, match: await S.currentMatch(db, req.user.id, opts) });
+    res.json({ minutes, match: await S.matchForAppointment(db, req.user.id, Number(req.params.id), opts) });
   });
 
   // 주간이 끝난 매칭 일괄 정산 (Vercel Cron이 매일 호출)

@@ -10,6 +10,23 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
+// 나중에 추가된 열. 이미 있는 DB에도 붙인다.
+const ADDED_COLUMNS = [
+  ['match_requests', 'cells', 'TEXT'], // 시간표에서 고른 칸
+  ['matches', 'schedule', 'TEXT'], // 요일별 약속 시간
+  ['users', 'personal', 'TEXT'], // 내 개인 일정 [{ cell, title }]
+];
+
+export function migrations(dialect) {
+  return [
+    ...ADDED_COLUMNS.map(([table, col, type]) => (dialect === 'pg'
+      ? `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${type}`
+      : `ALTER TABLE ${table} ADD COLUMN ${col} ${type}`)),
+    // 겹치지 않는 시간대라면 여러 개 신청할 수 있게 '한 사람 한 신청' 제한을 없앤다
+    'DROP INDEX IF EXISTS idx_requests_one_pending',
+  ];
+}
+
 export function schema(dialect) {
   const ID = dialect === 'pg' ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY';
   return `
@@ -125,7 +142,6 @@ CREATE TABLE IF NOT EXISTS email_codes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_status ON match_requests(status);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_one_pending ON match_requests(user_id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_matches_users ON matches(user_a, user_b);
 CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
 CREATE INDEX IF NOT EXISTS idx_appointments_match ON appointments(match_id);
@@ -193,5 +209,8 @@ export async function openSqlite(file) {
   raw.exec('PRAGMA foreign_keys = ON;');
   if (file !== ':memory:') raw.exec('PRAGMA journal_mode = WAL;');
   raw.exec(schema('sqlite'));
+  for (const sql of migrations('sqlite')) {
+    try { raw.exec(sql); } catch (err) { if (!/duplicate column/i.test(err.message)) throw err; }
+  }
   return wrapSqlite(raw);
 }

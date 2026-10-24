@@ -1,7 +1,7 @@
 // PostgreSQL 드라이버 — 실서비스(Neon)는 pg, 테스트는 PGlite(메모리 속 PostgreSQL)를 쓴다.
 // 인터페이스는 server/db.js 설명 참고. '?' 자리표시자를 $1, $2 ...로 바꿔 실행한다.
 
-import { schema } from './db.js';
+import { schema, migrations } from './db.js';
 
 const toDollar = (sql) => {
   let i = 0;
@@ -54,6 +54,7 @@ export async function openPg(connectionString) {
   };
   db.close = () => pool.end();
   await db.exec(schema('pg'));
+  for (const sql of migrations('pg')) await db.exec(sql);
   return db;
 }
 
@@ -68,5 +69,6 @@ export async function openPglite() {
   });
   db.close = () => pglite.close();
   await db.exec(schema('pg'));
+  for (const sql of migrations('pg')) await db.exec(sql);
   return db;
 }
