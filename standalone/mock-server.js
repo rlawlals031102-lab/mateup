@@ -93,9 +93,9 @@ const routes = [
     return { ok: true };
   }],
 
-  ['POST', '/appointments/:id/checkin', async (ctx) => {
+  ['POST', '/appointments/:id/confirm', async (ctx) => {
     const uid = needUser(ctx);
-    await S.checkIn(ctx.db, uid, ctx.id, ctx.body, opts);
+    await S.confirmMate(ctx.db, uid, ctx.id, ctx.body.code, opts);
     return { match: await S.currentMatch(ctx.db, uid, opts) };
   }],
   ['POST', '/appointments/:id/checkout', async (ctx) => {
@@ -145,8 +145,8 @@ window.__mockQr = serial(async (appointmentId) => {
   const db = await ready;
   const user = await S.userByToken(db, getToken());
   if (!user) throw new Error('로그인이 필요해요.');
-  const appt = await S.appointmentForQr(db, user.id, appointmentId);
-  const svg = await QRCode.toString(`SB:${appt.id}:${appt.code}`, { type: 'svg', margin: 1, color: { dark: '#203829', light: '#ffffff' } });
+  const { appt, code } = await S.myAttendanceCode(db, user.id, appointmentId);
+  const svg = await QRCode.toString(`SB:${appt.id}:${code}`, { type: 'svg', margin: 1, color: { dark: '#203829', light: '#ffffff' } });
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 });
 

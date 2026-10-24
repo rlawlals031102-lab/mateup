@@ -582,33 +582,47 @@ async function renderMatch(alive) {
 
 function drawMatch(m, alive) {
   const today = todayStr();
-  const target = m.appointments.find((a) => a.me.status === 'studying')
-    ?? m.appointments.find((a) => a.me.status === 'open');
+  const target = m.appointments.find((a) => a.me.status === 'studying' || a.mate.status === 'studying')
+    ?? m.appointments.find((a) => a.me.status === 'open' || a.mate.status === 'open');
   const next = m.appointments.find((a) => a.me.status === 'scheduled');
 
+  // 현장 출석 확인: 내 코드는 메이트가 입력해서 내 출석을 확인해 주고, 나는 메이트의 코드를 입력해서 메이트 출석을 확인한다.
   let checkin;
-  if (target?.me.status === 'studying') {
+  if (target) {
+    const meIn = ['studying', 'done'].includes(target.me.status);
+    const mateIn = ['studying', 'done'].includes(target.mate.status);
+    const myPart = meIn
+      ? (target.me.status === 'studying' ? `
+        <div class="center">
+          <p class="small muted">✅ 메이트가 내 출석을 확인했어요</p>
+          <div class="timer mt" id="timer" data-since="${esc(target.me.checkedInAt)}">00:00:00</div>
+          <p class="tiny muted">공부 시간 기록 중</p>
+          <button class="btn primary block mt" id="checkout" data-id="${target.id}">공부 종료하고 기록하기</button>
+        </div>` : '<p class="small">✅ 오늘 내 출석 완료 · 공부 기록을 마쳤어요</p>')
+      : `
+        <div class="checkin">
+          <div>
+            <p class="small"><b>내 출석 코드</b></p>
+            <div class="code">${esc(target.myCode ?? '')}</div>
+            <p class="tiny muted mt">메이트가 이 코드를 입력하거나 QR을 스캔하면 내 출석이 확인돼요.</p>
+          </div>
+          <div class="qr-box"><img data-qr="${target.id}" alt="내 출석 QR 코드"></div>
+        </div>`;
+    const matePart = mateIn
+      ? `<p class="small">✅ ${esc(m.mate.name)}님 출석 확인 완료</p>`
+      : `
+        <p class="small"><b>${esc(m.mate.name)}님 출석 확인하기</b></p>
+        <p class="tiny muted">메이트 화면에 보이는 출석 코드를 입력하거나 QR을 스캔해 주세요.</p>
+        ${target.mateCode ? `<p class="tiny muted">🤖 데모 메이트 코드: <b class="code" style="font-size:12px">${esc(target.mateCode)}</b></p>` : ''}
+        <form class="row mt" id="confirm-form" data-id="${target.id}">
+          <input class="input code" name="code" maxlength="6" placeholder="메이트 코드" autocomplete="off" style="text-transform:uppercase" required>
+          <button type="button" class="btn inline-btn" id="scan" data-id="${target.id}">⌗ QR</button>
+        </form>
+        <button class="btn primary block mt" id="confirm" data-id="${target.id}">✓ 상대방 출석 확인하기</button>`;
     checkin = `
-      <div class="center">
-        <p class="small muted">${fmtDate(target.date, true)} 약속 · ${target.me.method === 'qr' ? 'QR 출석' : '직접 출석'} 완료</p>
-        <div class="timer mt" id="timer" data-since="${esc(target.me.checkedInAt)}">00:00:00</div>
-        <p class="tiny muted">공부 시간 기록 중</p>
-        <button class="btn primary block mt" id="checkout" data-id="${target.id}">공부 종료하고 기록하기</button>
-      </div>`;
-  } else if (target) {
-    checkin = `
-      <div class="checkin">
-        <div>
-          <p class="small muted">함께 있는 장소에서 메이트의 QR을 스캔하거나 직접 출석을 완료해 주세요.</p>
-          <p class="tiny muted mt">내 출석 코드</p>
-          <div class="code">${esc(target.code)}</div>
-        </div>
-        <div class="qr-box"><img data-qr="${target.id}" alt="출석 QR 코드"></div>
-      </div>
-      <div class="btn-row mt">
-        <button class="btn primary" id="scan" data-id="${target.id}">⌗ QR 스캔하기</button>
-        <button class="btn" id="self" data-id="${target.id}">✓ 출석하기</button>
-      </div>`;
+      <p class="tiny muted">${fmtDate(target.date, true)} ${fmtTime(target.startTime)} ~ ${fmtTime(target.endTime)} 약속</p>
+      <div class="att-part">${myPart}</div>
+      <div class="att-part">${matePart}</div>`;
   } else if (next) {
     checkin = `<div class="notice" style="margin-top:0"><span>⏰</span><span>다음 약속은 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b>이에요. 시작 ${OPTIONS.checkinEarlyMin}분 전부터 출석할 수 있어요.</span></div>`;
   } else {
@@ -707,12 +721,17 @@ function drawMatch(m, alive) {
     match.status === 'reported' ? renderReport(match, alive) : drawMatch(match, alive);
   };
 
-  $('#self')?.addEventListener('click', async (e) => {
+  const confirmMate = async (id, code) => {
     try {
-      const res = await api(`/appointments/${e.target.dataset.id}/checkin`, { method: 'POST', body: { method: 'self' } });
-      toast('출석 완료! 오늘도 화이팅 💪');
+      const res = await api(`/appointments/${id}/confirm`, { method: 'POST', body: { code } });
+      toast(`✅ ${m.mate.name}님 출석을 확인했어요. 함께 시작해요 📚`);
       refresh(res.match);
     } catch (err) { toast(err.message, true); }
+  };
+  $('#confirm')?.addEventListener('click', (e) => confirmMate(e.target.dataset.id, $('#confirm-form').code.value));
+  $('#confirm-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    confirmMate(e.target.dataset.id, e.target.code.value);
   });
   $('#scan')?.addEventListener('click', (e) => openScanner(Number(e.target.dataset.id), refresh));
   $('#checkout')?.addEventListener('click', async (e) => {
@@ -731,9 +750,9 @@ function drawMatch(m, alive) {
         router();
         return;
       }
-      toast(res.result === 'left_free' || !res.stake
-        ? '매칭을 그만뒀어요.'
-        : `매칭을 그만뒀어요. 보증금 ${won(res.stake)}P는 메이트에게 전달됐어요.`);
+      toast(!res.stake ? '매칭을 그만뒀어요.'
+        : res.lostTo === 'mate' ? `매칭을 그만뒀어요. 보증금 ${won(res.stake)}P는 메이트에게 전달됐어요.`
+          : `매칭을 그만뒀어요. 보증금 ${won(res.stake)}P는 돌려받지 못해요.`);
       location.hash = '#/home';
     } catch (err) { toast(err.message, true); }
   });
@@ -748,21 +767,13 @@ function drawMatch(m, alive) {
 
 // 매칭 그만두기 규칙 안내 (server/service.js leavePolicy 와 같은 규칙)
 const LEAVE_HINT = {
-  free: (m) => (m.stake ? `첫 약속 전이라 지금 그만두면 둘 다 보증금 ${won(m.stake)}P를 돌려받아요.` : '첫 약속 전이에요.'),
-  penalty: (m) => (m.stake ? `지금 그만두면 내 보증금 ${won(m.stake)}P는 메이트에게 보상으로 전달돼요.` : '지금 그만두면 이번 주 매칭이 바로 끝나요.'),
+  penalty: (m) => (m.stake ? '지금 그만두면 내 보증금은 돌려받을 수 없어요.' : '지금 그만두면 이번 주 매칭이 바로 끝나요.'),
   settle: () => '남은 약속이 없어서, 지금까지 출석으로 이번 주를 정산해요.',
 };
 const LEAVE_CONFIRM = {
-  free: (m) => `매칭을 그만둘까요?
-
-첫 약속 전이라 나와 메이트 모두 보증금${m.stake ? ` ${won(m.stake)}P` : ''}를 돌려받아요.`,
   penalty: (m) => (m.stake
-    ? `정말 매칭을 그만둘까요?
-
-약속이 이미 시작돼서 내 보증금 ${won(m.stake)}P는 ${m.mate.name}님에게 보상으로 전달되고, 돌려받을 수 없어요.`
-    : `정말 매칭을 그만둘까요?
-
-${m.mate.name}님과의 이번 주 매칭이 바로 끝나요.`),
+    ? '정말 매칭을 그만둘까요?\n\n내 보증금은 돌려받을 수 없어요.'
+    : `정말 매칭을 그만둘까요?\n\n${m.mate.name}님과의 이번 주 매칭이 바로 끝나요.`),
   settle: () => '남은 약속이 없어요. 지금까지 출석으로 이번 주를 정산하고 리포트를 받을까요?',
 };
 
@@ -865,7 +876,7 @@ async function renderPast(alive, id) {
     return;
   }
   const r = m.report;
-  const headline = m.left === 'me' ? '내가 중간에 그만둔 스터디예요'
+  const headline = m.headline ? m.headline : m.left === 'me' ? '내가 중간에 그만둔 스터디예요'
     : m.left === 'mate' ? `${m.mate.name}님이 중간에 그만둔 스터디예요`
     : r?.me?.kept ? '약속을 모두 지킨 주였어요 🎉' : '아쉬움이 남은 주였어요';
 
@@ -886,7 +897,7 @@ async function renderPast(alive, id) {
 
   view.innerHTML = `
     <section class="card hero">
-      <div class="small muted">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)} · ${m.round}주차 · ${esc(m.location)}</div>
+      <div class="small muted">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)} · ${esc(m.label ?? `${m.round}주차`)} · ${esc(m.location)}</div>
       <h2 style="font-size:18px;margin-top:4px">${esc(headline)}</h2>
     </section>
 
@@ -945,11 +956,11 @@ function openScanner(appointmentId, onDone) {
   modal.innerHTML = `
     <div class="sheet">
       <div class="row between"><h3>QR 스캔하기</h3><button class="btn sm ghost" id="close">닫기</button></div>
-      <p class="small muted">메이트 화면의 출석 QR을 비추거나, 아래에 코드를 입력하세요.</p>
+      <p class="small muted">메이트 화면의 출석 QR을 비추거나, 아래에 메이트의 코드를 입력하세요.</p>
       ${canScan ? '<div class="scanner"><video id="video" playsinline muted></video></div>' : '<div class="notice">이 브라우저는 카메라 QR 인식을 지원하지 않아요. 메이트 화면의 6자리 코드를 입력해 주세요.</div>'}
       <form id="code-form" class="row mt">
-        <input class="input code" name="code" maxlength="6" placeholder="출석 코드" autocomplete="off" style="text-transform:uppercase" required>
-        <button class="btn primary">확인</button>
+        <input class="input code" name="code" maxlength="6" placeholder="메이트 코드" autocomplete="off" style="text-transform:uppercase" required>
+        <button class="btn primary">출석 확인</button>
       </form>
     </div>`;
   modal.hidden = false;
@@ -966,9 +977,9 @@ function openScanner(appointmentId, onDone) {
 
   const submit = async (code) => {
     try {
-      const res = await api(`/appointments/${appointmentId}/checkin`, { method: 'POST', body: { method: 'qr', code } });
+      const res = await api(`/appointments/${appointmentId}/confirm`, { method: 'POST', body: { code } });
       closeModal();
-      toast('QR 출석 완료! 함께 시작해요 📚');
+      toast('✅ 메이트 출석을 확인했어요. 함께 시작해요 📚');
       onDone(res.match);
     } catch (err) { toast(err.message, true); }
   };

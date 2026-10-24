@@ -130,13 +130,15 @@ export function createApp({
   });
 
   // 출석
+  // 내 출석 QR (메이트가 스캔하면 내 출석이 확인됨)
   api.get('/appointments/:id/qr', auth, async (req, res) => {
-    const appt = await S.appointmentForQr(db, req.user.id, Number(req.params.id));
-    const svg = await QRCode.toString(`SB:${appt.id}:${appt.code}`, { type: 'svg', margin: 1, color: { dark: '#203829', light: '#ffffff' } });
+    const { appt, code } = await S.myAttendanceCode(db, req.user.id, Number(req.params.id));
+    const svg = await QRCode.toString(`SB:${appt.id}:${code}`, { type: 'svg', margin: 1, color: { dark: '#203829', light: '#ffffff' } });
     res.type('image/svg+xml').set('Cache-Control', 'no-store').send(svg);
   });
-  api.post('/appointments/:id/checkin', auth, async (req, res) => {
-    await S.checkIn(db, req.user.id, Number(req.params.id), req.body ?? {}, opts);
+  // 상대방 출석 확인하기 (혼자 하는 출석은 없음)
+  api.post('/appointments/:id/confirm', auth, async (req, res) => {
+    await S.confirmMate(db, req.user.id, Number(req.params.id), req.body?.code, opts);
     res.json({ match: await S.currentMatch(db, req.user.id, opts) });
   });
   api.post('/appointments/:id/checkout', auth, async (req, res) => {

@@ -42,7 +42,8 @@ export async function seedBots(db) {
 // 위 목록에 없는 예전 데모 메이트를 정리한다.
 //   매칭 기록이 없으면 완전히 삭제, 있으면(다른 사용자의 지난 스터디에 남아 있음) 대기에서만 빼고 기록용으로 남긴다.
 export async function retireOldBots(db) {
-  const keep = BOTS.map((b) => b.email);
+  // 데모 계정의 고정 '지난 스터디' 상대(기록용)도 정리하지 않는다.
+  const keep = [...BOTS.map((b) => b.email), 'beta-history@studybuddy.local'];
   const olds = (await db.all('SELECT id, name, email FROM users WHERE is_bot = 1'))
     .filter((u) => !keep.includes(u.email));
   const result = { deleted: [], retired: [] };

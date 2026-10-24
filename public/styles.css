@@ -395,7 +395,13 @@ a.link-item:hover { background: var(--soft); }
     scrollbar-width: none; /* 스크롤바가 내용 폭을 줄이지 않게 숨김 (휠·터치패드 스크롤은 그대로) */
   }
   .phone::-webkit-scrollbar { display: none; }
+  /* 카드 높이가 고정이라, 상단바·내용이 눌려 줄어들지 않게 한다 (줄어들면 '매칭중' 제목이 위로 붙음) */
+  .phone > * { flex-shrink: 0; }
   .tabbar { bottom: var(--app-gap); border-radius: 0 0 24px 24px; }
   .chat-dock { bottom: calc(var(--tabbar-h) + var(--app-gap)); }
   .toast { bottom: calc(var(--tabbar-h) + var(--app-gap) + 20px); }
 }
+
+/* 현장 출석 확인: 내 코드 / 메이트 확인 구역 */
+.att-part { padding: 12px 0; border-top: 1px dashed var(--line); }
+.att-part:first-of-type { border-top: 0; padding-top: 6px; }
