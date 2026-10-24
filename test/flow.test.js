@@ -372,8 +372,16 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       setNow(kst(2026, 10, 24, 9, 0)); // 그 주가 지난 뒤
       const id = (await S.demoLogin(db)).user.id;
       await S.demoLogin(db); // 두 번 로그인해도 기록은 하나
-      const hist = await S.matchHistory(db, id);
-      assert.equal(hist.length, 1);
+      // 나중에 생긴 기록이 있어도 첫 베타 기록은 맨 아래(가장 오래된 기록)
+      const { seedBots } = await import('../server/seed.js');
+      await seedBots(db);
+      const r = await S.createRequest(db, id, { ...baseReq, days: [1], startTime: '19:00', endTime: '21:00', deposit: 0 });
+      await S.settleMatch(db, r.matchId);
+      await S.chooseNext(db, id, r.matchId, 'new');
+      const all = await S.matchHistory(db, id);
+      assert.equal(all.length, 2);
+      assert.equal(all.at(-1).mate.name, '실제 첫 베타 서비스');
+      const hist = all.slice(-1);
       assert.equal(hist[0].mate.name, '실제 첫 베타 서비스');
       assert.deepEqual(hist[0].mate.tags, ['#5일간', '#17명 신청', '#6회 매칭 성사']);
       assert.equal(hist[0].location, '경상관 102A호');

@@ -687,7 +687,8 @@ export async function currentMatch(db, userId, opts) {
 
 export async function matchHistory(db, userId) {
   const rows = await db.all(
-    `SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status = 'closed' ORDER BY id DESC LIMIT 20`,
+    // 스터디 기간이 최근인 순서 (데모 계정의 첫 베타 기록은 기간이 가장 이르므로 항상 맨 아래)
+    `SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status = 'closed' ORDER BY week_start DESC, id DESC LIMIT 20`,
     userId, userId,
   );
   const out = [];
