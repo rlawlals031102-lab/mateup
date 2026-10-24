@@ -381,10 +381,14 @@ a.link-item:hover { background: var(--soft); }
 /* ── PC: 폭 480px 앱 화면을 가운데에, 위아래에도 여백을 둔 카드 모양 (안쪽에서 스크롤) ── */
 @media (min-width: 600px) {
   :root { --app-w: 480px; --app-gap: 24px; }
+  /* 페이지 자체는 움직이지 않고, 내용이 많을 때만 카드 안쪽이 스크롤된다 */
+  html, body { height: 100%; overflow: hidden; }
+  body { padding: var(--app-gap) 0; }
   .phone {
-    height: calc(100vh - var(--app-gap) * 2);
+    height: 100%;
     min-height: 0;
-    margin: var(--app-gap) auto;
+    margin: 0 auto;
+    overscroll-behavior: contain;
     border-radius: 24px;
     overflow-x: hidden;
     overflow-y: auto;
