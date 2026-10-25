@@ -501,6 +501,6 @@ a.link-item:hover { background: var(--soft); }
 
 /* 모바일 매칭 신청: '모두 지우기'까지 한 화면에 보이게 시간표 칸을 줄인다 */
 @media (max-width: 599px) {
-  #tt .tt-cell { height: 27px; }
-  #tt .tt-cell.evening { height: 21px; }
+  #tt .tt-cell { height: 24px; }
+  #tt .tt-cell.evening { height: 19px; }
 }

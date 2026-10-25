@@ -660,7 +660,7 @@ async function renderApply(alive) {
       <div class="card-head"><h2>📅 공부 일정 및 장소 설정</h2></div>
       <div class="field"><span>공부할 시간</span>
         ${grid()}
-        <p class="tiny muted tt-hint"><span class="one-line">칸을 누르거나 끌어서 골라요 · 낮 1시간 30분, 저녁(18시~) 1시간</span>${taken.size ? '회색 빗금 칸은 이미 매칭·신청했거나 개인 일정이 있는 시간이에요' : ''}</p>
+        <p class="tiny muted tt-hint"><span class="one-line">칸을 누르거나 끌어서 골라요 · 낮 1시간 30분, 저녁(18시~) 1시간</span></p>
         <button type="button" class="btn sm ghost" id="tt-clear">모두 지우기</button>
       </div>
       <label class="field"><span>장소 설정</span>
