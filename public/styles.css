@@ -504,3 +504,6 @@ a.link-item:hover { background: var(--soft); }
   #tt .tt-cell { height: 24px; }
   #tt .tt-cell.evening { height: 19px; }
 }
+
+/* 매칭 신청 시간표: 손가락으로 끌면 스크롤 (칠하기는 꾹 누른 뒤) */
+#tt { touch-action: pan-y; }

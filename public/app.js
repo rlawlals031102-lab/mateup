@@ -406,15 +406,40 @@ function attachPaint(tt, { get, set }) {
     }
     last = [d, i];
   };
-  tt.addEventListener('pointerdown', (e) => {
-    const btn = e.target.closest('.tt-cell');
-    if (!btn || btn.disabled) return;
-    e.preventDefault();
+  const start = (btn) => {
     paint = !get(btn.dataset.cell);
     last = null;
     paintTo(btn);
+  };
+  // 스크롤이 되는 시간표(touch-action ≠ none)에서 손가락은: 끌면 스크롤, 탭하면 한 칸, 꾹 누른 뒤 끌면 칠하기
+  const scrollable = () => getComputedStyle(tt).touchAction !== 'none';
+  let pending = null;
+  let timer = null;
+  const clearPending = () => { clearTimeout(timer); timer = null; pending = null; };
+  tt.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest('.tt-cell');
+    if (!btn || btn.disabled) return;
+    if (e.pointerType === 'touch' && scrollable()) {
+      pending = { btn, x: e.clientX, y: e.clientY };
+      timer = setTimeout(() => {
+        if (!pending) return;
+        start(pending.btn);
+        navigator.vibrate?.(15);
+        pending = null;
+      }, 300);
+      return;
+    }
+    e.preventDefault();
+    start(btn);
   });
+  tt.addEventListener('pointerup', () => {
+    if (pending) { const { btn } = pending; clearPending(); start(btn); paint = null; last = null; }
+  });
+  tt.addEventListener('pointercancel', clearPending);
+  // 꾹 눌러 칠하는 중에는 화면이 스크롤되지 않게 막는다
+  tt.addEventListener('touchmove', (e) => { if (paint !== null && e.cancelable) e.preventDefault(); }, { passive: false });
   tt.addEventListener('pointermove', (e) => {
+    if (pending && Math.hypot(e.clientX - pending.x, e.clientY - pending.y) > 8) clearPending();
     if (paint === null) return;
     const btn = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.tt-cell');
     if (btn && tt.contains(btn)) paintTo(btn);
@@ -660,7 +685,7 @@ async function renderApply(alive) {
       <div class="card-head"><h2>📅 공부 일정 및 장소 설정</h2></div>
       <div class="field"><span>공부할 시간</span>
         ${grid()}
-        <p class="tiny muted tt-hint"><span class="one-line">칸을 누르거나 끌어서 골라요 · 낮 1시간 30분, 저녁(18시~) 1시간</span></p>
+        <p class="tiny muted tt-hint"><span class="one-line">칸을 누르거나 꾹 눌러 끌어서 골라요 · 낮 1시간 30분, 저녁(18시~) 1시간</span></p>
         <button type="button" class="btn sm ghost" id="tt-clear">모두 지우기</button>
       </div>
       <label class="field"><span>장소 설정</span>
