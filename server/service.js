@@ -1106,6 +1106,12 @@ export async function leaveMatch(db, userId, matchId) {
       users[mateId].deposit = none;
     } else {
       await adjustPoints(t, mateId, m.stake * 2, '메이트 중도 종료 · 보증금 반환 + 보상', m.id); // 데모 메이트면 변화 없음
+      // 그만둔 사람: 보증금은 이미 예치 때 빠졌으므로 잔액 변화 없이 내역만 남긴다
+      const { points } = await getUser(t, userId);
+      await t.run(
+        'INSERT INTO point_logs (user_id, amount, balance, reason, match_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        userId, 0, points, mateIsBot ? `중도 종료 · 보증금 ${m.stake.toLocaleString()}P 소멸` : `중도 종료 · 보증금 ${m.stake.toLocaleString()}P 메이트에게 보상`, m.id, iso(),
+      );
       users[userId].deposit = { result: mateIsBot ? 'forfeited' : 'to_mate', amount: m.stake };
       users[mateId].deposit = { result: 'refunded', amount: m.stake };
     }
