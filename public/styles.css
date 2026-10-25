@@ -488,8 +488,9 @@ a.link-item:hover { background: var(--soft); }
 .card.hero.compact p { font-size: 11px; }
 .card.hero.compact .btn { height: 34px; font-size: 13.5px; margin-top: 8px; }
 .hero-stats { margin-top: 8px; }
-.hero-stats > div { flex-direction: row; align-items: center; justify-content: space-between; padding: 5px 9px; }
-.hero-stats b { font-size: 15px; }
+.hero-stats > div { flex-direction: column; padding: 4px 9px; }
+.hero-stats span { font-size: 10px; line-height: 1.25; }
+.hero-stats b { font-size: 15px; line-height: 1.2; }
 #my-tt .tt-cell { height: 19px; }
 #my-tt .tt-cell.evening { height: 16px; }
 #my-tt-card { padding: 12px; }
