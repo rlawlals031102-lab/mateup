@@ -498,3 +498,9 @@ a.link-item:hover { background: var(--soft); }
 /* 홈 시간표는 보기만 할 때 손가락으로 스크롤되게 (편집할 때만 끌어서 칠하기) */
 #my-tt { touch-action: pan-y; }
 #my-tt.editing { touch-action: none; }
+
+/* 모바일 매칭 신청: '모두 지우기'까지 한 화면에 보이게 시간표 칸을 줄인다 */
+@media (max-width: 599px) {
+  #tt .tt-cell { height: 27px; }
+  #tt .tt-cell.evening { height: 21px; }
+}
