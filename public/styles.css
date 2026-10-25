@@ -481,3 +481,19 @@ a.link-item:hover { background: var(--soft); }
 .hero-stats > div { background: var(--surface); border: 1px solid var(--line); }
 .hero-stats span { color: var(--muted); }
 .hero-stats b { color: var(--green); }
+
+/* 홈 첫 화면을 더 작게: 초록 카드 한 줄 통계, 시간표 칸 낮게 */
+.card.hero.compact { padding: 12px 14px; }
+.card.hero.compact h2 { font-size: 15px; }
+.card.hero.compact p { font-size: 11px; }
+.card.hero.compact .btn { height: 34px; font-size: 13.5px; margin-top: 8px; }
+.hero-stats { margin-top: 8px; }
+.hero-stats > div { flex-direction: row; align-items: center; justify-content: space-between; padding: 5px 9px; }
+.hero-stats b { font-size: 15px; }
+#my-tt .tt-cell { height: 19px; }
+#my-tt .tt-cell.evening { height: 16px; }
+#my-tt-card { padding: 12px; }
+#my-tt-card .tt-legend { margin-bottom: 2px; }
+/* 홈 시간표는 보기만 할 때 손가락으로 스크롤되게 (편집할 때만 끌어서 칠하기) */
+#my-tt { touch-action: pan-y; }
+#my-tt.editing { touch-action: none; }

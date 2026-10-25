@@ -487,8 +487,8 @@ async function renderHome(alive) {
   const dday = exam ? (exam.dday === 0 ? 'D-DAY' : `D-${exam.dday}`) : '';
   const heroStats = `
         <div class="hero-stats">
-          ${exam ? `<div><span>📅 ${esc(exam.name)}까지</span><b>${dday}</b><span>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</span></div>` : ''}
-          <div><span>🎓 국민대생</span><b>${community.studying}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></div>
+          ${exam ? `<div><span>📅 ${esc(exam.name)}</span><b>${dday}</b></div>` : ''}
+          <div><span>🎓 함께 공부 중</span><b>${community.studying}명</b></div>
         </div>`;
   const homeStats = `
     <div class="home-stats">
@@ -579,6 +579,7 @@ async function renderHome(alive) {
       return;
     }
     $('#tt-title').addEventListener('input', (e) => { editTitle = e.target.value; });
+    tt.classList.add('editing');
     attachPaint(tt, {
       get: (cell) => mine.some((p) => p.cell === cell),
       set: (cell, on) => {
