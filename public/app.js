@@ -531,7 +531,6 @@ async function renderHome(alive) {
     : `${leftNote}
       <div class="card hero compact">
         <h2>이번 주, 같이 공부할 메이트를 찾아볼까요?</h2>
-        <p class="tiny muted">시간표에서 시간을 고르면 조건이 맞는 1:1 메이트와 연결돼요.</p>
         ${heroStats}
         <a class="btn lime block" href="#/apply">매칭 신청하기 →</a>
       </div>
