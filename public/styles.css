@@ -519,3 +519,6 @@ a.link-item:hover { background: var(--soft); }
 .card.hero.compact { background: var(--surface); color: var(--ink); border-color: var(--line); }
 .card.hero.compact .muted { color: var(--muted); }
 .card.hero.compact .hero-stats > div { background: #f2f5ef; border-color: #f2f5ef; }
+
+/* 홈 통계 칸: 큰 숫자 옆에 작은 설명 */
+.hero-stats .stat-row { display: flex; align-items: baseline; gap: 6px; margin: 2px 0 0; flex-wrap: wrap; }

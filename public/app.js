@@ -512,8 +512,8 @@ async function renderHome(alive) {
   const dday = exam ? (exam.dday === 0 ? 'D-DAY' : `D-${exam.dday}`) : '';
   const heroStats = `
         <div class="hero-stats">
-          ${exam ? `<div><span>📅 ${esc(exam.name)}까지</span><b>${dday}</b><span>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</span></div>` : ''}
-          <div><span>🎓 국민대생</span><b>${community.studying}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></div>
+          ${exam ? `<div><span>📅 ${esc(exam.name)}까지</span><p class="stat-row"><b>${dday}</b><span>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</span></p></div>` : ''}
+          <div><span>🎓 국민대생</span><p class="stat-row"><b>${community.studying}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></p></div>
         </div>`;
   const homeStats = `
     <div class="home-stats">
@@ -538,7 +538,7 @@ async function renderHome(alive) {
 
   view.innerHTML = `
     <div class="row between home-hello">
-      <div style="font-size:19px;font-weight:800">${esc(user.name)}님 👋</div>
+      <div style="font-size:19px;font-weight:800">${esc(user.name)}님</div>
       <a href="#/me" class="pill points" style="text-decoration:none">💰 ${won(user.points)}P</a>
     </div>
     ${main}
