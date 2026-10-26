@@ -540,7 +540,7 @@ async function renderHome(alive) {
   view.innerHTML = `
     <div class="row between home-hello">
       <div style="font-size:19px;font-weight:800">${esc(user.name)}님 👋</div>
-      <a href="#/me" class="pill lime" style="text-decoration:none">💰 ${won(user.points)}P</a>
+      <a href="#/me" class="pill points" style="text-decoration:none">💰 ${won(user.points)}P</a>
     </div>
     ${main}
     <div class="card">

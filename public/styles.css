@@ -507,3 +507,15 @@ a.link-item:hover { background: var(--soft); }
 
 /* 매칭 신청 시간표: 손가락으로 끌면 스크롤 (칠하기는 꾹 누른 뒤) */
 #tt { touch-action: pan-y; }
+
+/* 홈: 연두는 '매칭 신청하기' 버튼에만 쓰고, 숫자는 크고 굵게 */
+.pill.points { background: var(--surface); border: 1px solid var(--line); color: var(--green); }
+.steps li::before { color: #fff; }
+.hero-stats > div { padding: 5px 10px 6px; }
+.hero-stats span { font-size: 10px; line-height: 1.2; }
+.hero-stats b { font-size: 26px; font-weight: 800; line-height: 1.05; letter-spacing: -0.5px; margin: 1px 0; }
+
+/* 홈 상단 카드: 진한 초록 대신 흰색 */
+.card.hero.compact { background: var(--surface); color: var(--ink); border-color: var(--line); }
+.card.hero.compact .muted { color: var(--muted); }
+.card.hero.compact .hero-stats > div { background: #f2f5ef; border-color: #f2f5ef; }
