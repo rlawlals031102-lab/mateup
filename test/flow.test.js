@@ -416,21 +416,20 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal((await S.homeState(db, a)).exam, null, '시험이 지나면 숨김');
     });
 
-    test('데모 메이트는 보증금이 있든 없든 매칭', async () => {
+    test('데모 메이트는 보증금을 건 신청만 매칭', async () => {
       const { seedBots } = await import('../server/seed.js');
       await seedBots(db); // 김저녁: 보증금 5천
       const req = { ...baseReq, days: [1], startTime: '19:00', endTime: '21:00' };
       const [p, q] = [await signup('p'), await signup('q')];
-      // 보증금 없이 신청 → 김저녁과 보증금 없는 매칭
-      assert.ok((await S.createRequest(db, p, { ...req, deposit: 0 })).matchId);
-      const mp = await S.currentMatch(db, p);
-      assert.deepEqual([mp.mate.name, mp.stake], ['김저녁', 0]);
+      // 보증금 없이 신청 → 데모 메이트와 매칭되지 않고 대기
+      assert.equal((await S.createRequest(db, p, { ...req, deposit: 0 })).matchId ?? null, null);
+      assert.equal(await S.currentMatch(db, p), null);
       assert.equal(await points(p), 50000);
       // 2만 걸고 신청 → 낮은 쪽(5천)에 맞추고 1만5천 반환
       assert.ok((await S.createRequest(db, q, { ...req, deposit: 20000 })).matchId);
       assert.equal((await S.currentMatch(db, q)).stake, 5000);
       assert.equal(await points(q), 45000);
-      // 실제 사용자끼리는 여전히 보증금 사용 여부가 같아야 함
+      // 실제 사용자끼리도 보증금 사용 여부가 같아야 함
       assert.equal(S.compatibility({ ...req, deposit: 0 }, { ...req, deposit: 5000 }), null);
     });
 
@@ -455,7 +454,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       // 나중에 생긴 기록이 있어도 첫 베타 기록은 맨 아래(가장 오래된 기록)
       const { seedBots } = await import('../server/seed.js');
       await seedBots(db);
-      const r = await S.createRequest(db, id, { ...baseReq, days: [1], startTime: '19:00', endTime: '21:00', deposit: 0 });
+      const r = await S.createRequest(db, id, { ...baseReq, days: [1], startTime: '19:00', endTime: '21:00', deposit: 5000 });
       await S.settleMatch(db, r.matchId);
       await S.chooseNext(db, id, r.matchId, 'new');
       const all = await S.matchHistory(db, id);

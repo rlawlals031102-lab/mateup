@@ -466,12 +466,11 @@ export function validateRequest(input) {
 
 // 두 신청이 매칭 가능한지 판단하고, 가능하면 합의 조건과 점수를 돌려준다.
 // 조건: 같은 장소, 겹치는 요일 1개 이상, 겹치는 시간 1시간 이상, 공통 스타일 1개 이상,
-//       보증금 사용 여부 일치 (금액이 다르면 작은 쪽에 맞춘다, 데모 메이트는 예외).
+//       보증금 사용 여부 일치 (금액이 다르면 작은 쪽에 맞춘다).
 export function compatibility(a, b) {
   if (a.location !== b.location) return null;
-  // 보증금 사용 여부가 같아야 한다. 단, 데모 메이트(u_bot)는 보증금이 있든 없든 매칭된다.
-  // (보증금은 둘 중 낮은 금액으로 정해지므로, 사용자가 보증금 없이 신청하면 보증금 없는 매칭이 된다)
-  if (!a.u_bot && !b.u_bot && (a.deposit > 0) !== (b.deposit > 0)) return null;
+  // 보증금 사용 여부가 같아야 한다. 데모 메이트는 모두 보증금을 걸고 있으므로 보증금을 건 신청만 매칭된다.
+  if ((a.deposit > 0) !== (b.deposit > 0)) return null;
   // 시간표에서 둘 다 고른 칸 → 요일마다 가장 길게 이어진 시간이 그날 약속 (1시간 이상)
   const cellsA = a.cells ?? cellsFromRange(a.days, a.start_time ?? a.startTime, a.end_time ?? a.endTime);
   const cellsB = new Set(b.cells ?? cellsFromRange(b.days, b.start_time ?? b.startTime, b.end_time ?? b.endTime));
