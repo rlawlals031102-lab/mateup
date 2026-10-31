@@ -681,7 +681,7 @@ async function renderApply(alive) {
     const busy = [...taken.keys()].some((c) => c.startsWith(`${day}-`) && taken.get(c).kind !== 'personal');
     return { date, day, disabled: over || busy, note: over ? '지남' : busy ? '신청함' : '' };
   });
-  const form = { location: OPTIONS.locations[0], styles: new Set(), days: new Set(studyDays.filter((d) => !d.disabled).map((d) => d.day)) };
+  const form = { location: OPTIONS.locations[0], styles: new Set(), days: new Set() };
 
   view.innerHTML = `
     <section class="card">
