@@ -280,6 +280,9 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 
 .modal { position: fixed; inset: 0; background: rgba(20, 30, 24, .5); display: grid; place-items: end center; z-index: 20; }
 .modal[hidden] { display: none; }
+/* 가입·매칭 신청·취소·프로필 저장 중 로딩 화면 (가운데 카드) */
+.modal:has(.finding) { place-items: center; }
+.finding { background: var(--paper); border-radius: 20px; padding: 24px 32px 28px; text-align: center; }
 .sheet { width: 100%; max-width: var(--app-w); background: var(--paper); border-radius: 20px 20px 0 0; padding: 20px 16px 28px; max-height: 90vh; overflow: auto; }
 .sheet h3 { font-size: 18px; margin-bottom: 4px; }
 .scanner { position: relative; aspect-ratio: 1; background: #111; border-radius: 14px; overflow: hidden; margin-top: 12px; }

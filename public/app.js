@@ -79,6 +79,25 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => { el.className = 'toast'; }, 2600);
 }
 
+// 일이 빨리 끝나도 로딩 화면을 최소 ms 동안 보여 준다 (오류는 기다리지 않고 바로 알림)
+async function withLoading(icon, text, task, ms = 3000) {
+  const modal = $('#modal');
+  modal.innerHTML = `
+    <div class="finding">
+      <div class="pulse">${icon}</div>
+      <b>${text}</b>
+    </div>`;
+  modal.hidden = false;
+  const minWait = new Promise((r) => setTimeout(r, ms));
+  try {
+    const res = await task();
+    await minWait;
+    return res;
+  } finally {
+    closeModal();
+  }
+}
+
 function every(ms, fn) {
   timers.push(setInterval(fn, ms));
 }
@@ -302,7 +321,7 @@ async function renderSignup() {
     if (OPTIONS.emailVerification && $('#code-field').hidden) return toast("먼저 '인증번호 받기'를 눌러 주세요.", true);
     const fd = Object.fromEntries(new FormData(form));
     try {
-      await api('/auth/signup', { method: 'POST', body: fd });
+      await withLoading('📝', '가입하는 중이에요', () => api('/auth/signup', { method: 'POST', body: fd }));
       toast('환영해요! 이번 주 메이트를 찾아볼까요?');
       location.hash = '#/home';
     } catch (err) { toast(err.message, true); }
@@ -629,7 +648,7 @@ async function renderHome(alive) {
   $$('[data-cancel]').forEach((b) => b.addEventListener('click', async () => {
     if (!confirm('이 매칭 신청을 취소할까요? 걸어둔 보증금은 돌려드려요.')) return;
     try {
-      await api(`/requests/${b.dataset.cancel}`, { method: 'DELETE' });
+      await withLoading('↩️', '신청을 취소하는 중이에요', () => api(`/requests/${b.dataset.cancel}`, { method: 'DELETE' }));
       toast('신청을 취소했어요.');
       router();
     } catch (err) { toast(err.message, true); }
@@ -750,7 +769,8 @@ async function renderApply(alive) {
   $('#submit').addEventListener('click', async (e) => {
     e.target.disabled = true;
     try {
-      const res = await api('/requests', {
+      // 바로 매칭되더라도 메이트를 찾는 화면을 3초 동안 보여 준다
+      const res = await withLoading('🔍', '메이트를 찾는 중이에요', () => api('/requests', {
         method: 'POST',
         body: {
           cells: [...form.cells],
@@ -758,7 +778,7 @@ async function renderApply(alive) {
           styles: [...form.styles],
           deposit: form.depositOn ? form.deposit : 0,
         },
-      });
+      }));
       if (res.matchId) {
         toast('🎉 바로 메이트를 찾았어요!');
         location.hash = `#/match/${res.matchId}`;
@@ -1443,10 +1463,10 @@ async function renderEditProfile(alive) {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
     try {
-      await api('/me', {
+      await withLoading('💾', '프로필을 저장하는 중이에요', () => api('/me', {
         method: 'PUT',
         body: { ...fd, avatar, tags: fd.tags.split(/[,\s]+/).filter(Boolean) },
-      });
+      }));
       toast('프로필을 저장했어요.');
       history.back();
     } catch (err) { toast(err.message, true); }
