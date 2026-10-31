@@ -304,11 +304,13 @@ async function renderLogin() {
 async function renderSignup() {
   authShell(`
     <h2>공부 약속이<br>지켜지는 구조</h2>
-    <p class="lead">${OPTIONS.emailDomain ? '국민대학교 메일로 가입할 수 있어요. ' : ''}가입하면 보증금으로 쓸 수 있는 50,000P를 드려요.</p>
+    <p class="lead">${OPTIONS.emailDomain ? '국민대학교 메일로 가입할 수 있어요.' : ''}</p>
     <form id="f" class="card">
       ${emailCodeFields()}
-      <label class="field"><span>이름 (닉네임)</span><input class="input" name="name" maxlength="20" required></label>
-      <label class="field"><span>나이</span><input class="input" name="age" type="number" min="14" max="100" inputmode="numeric"></label>
+      <label class="field"><span>이름</span><input class="input" name="name" maxlength="20" autocomplete="name" required></label>
+      <label class="field"><span>학과</span><input class="input" name="department" maxlength="30" placeholder="예: 경영정보학부" required></label>
+      <label class="field"><span>전화번호</span><input class="input" name="phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="010-1234-5678" required></label>
+      <p class="tiny muted">학과와 전화번호는 운영 연락용으로만 쓰고, 메이트에게는 보이지 않아요.</p>
       <label class="field"><span>비밀번호 (6자 이상)</span><input class="input" name="password" type="password" minlength="6" autocomplete="new-password" required></label>
       <button class="btn primary block mt-lg">가입하고 시작하기</button>
     </form>
@@ -517,13 +519,10 @@ async function renderHome(alive) {
 
   let leftNote = '';
   if (mateLeft) {
-    const detail = mateLeft.reward
-      ? `보증금 ${won(mateLeft.refunded)}P를 돌려받고, 보상으로 <span class="plus">+${won(mateLeft.reward)}P</span>를 받았어요.`
-      : mateLeft.refunded ? `보증금 ${won(mateLeft.refunded)}P를 돌려받았어요.` : '';
     leftNote = `
       <div class="card">
         <div class="card-head"><h2>👋 메이트가 매칭을 그만뒀어요</h2></div>
-        <p class="small">${esc(mateLeft.mateName)}님이 이번 주 매칭을 중간에 그만뒀어요. ${detail}</p>
+        <p class="small">${esc(mateLeft.mateName)}님이 이번 주 매칭을 중간에 그만뒀어요.</p>
       </div>`;
   }
   const hasAny = matches.length || pendingRequests.length;
@@ -545,7 +544,6 @@ async function renderHome(alive) {
   const main = hasAny
     ? ttCard
       + [...matches.map((m) => (m.status === 'reported' ? reportCard(m) : matchCard(m))), ...pendingRequests.map(pendingCard)].join('')
-      + '<a class="btn block mt" href="#/apply">＋ 다른 시간에 매칭 추가 신청</a>'
       + homeStats
     : `${leftNote}
       <div class="card hero compact">
@@ -558,15 +556,13 @@ async function renderHome(alive) {
   view.innerHTML = `
     <div class="row between home-hello">
       <div style="font-size:19px;font-weight:800">${esc(user.name)}님</div>
-      <a href="#/me" class="pill points" style="text-decoration:none">💰 ${won(user.points)}P</a>
     </div>
     ${main}
     <div class="card">
       <div class="card-head"><h2>스터디버디는 이렇게 진행돼요</h2></div>
       <ol class="steps">
-        <li><b>매칭 신청</b><span class="small muted">시간표에서 시간을 고르고 장소, 교류 방식을 정하면 1:1로 연결돼요.</span></li>
-        <li><b>약속 보증금 (선택)</b><span class="small muted">약속을 지키면 돌려받고, 어기면 지킨 메이트에게 보상으로 가요.</span></li>
-        <li><b>약속 이행</b><span class="small muted">1주일 동안 만나서 각자 공부하고 출석·공부시간을 기록해요.</span></li>
+        <li><b>매칭 신청</b><span class="small muted">장소와 교류 방식을 정하면 1:1로 연결돼요.</span></li>
+        <li><b>약속 이행</b><span class="small muted">정해진 날짜에 만나서 각자 공부하고, 서로의 QR을 찍어 출석을 확인해요.</span></li>
         <li><b>주간 리포트와 재매칭</b><span class="small muted">같은 메이트와 계속할지, 새 메이트를 만날지 골라요.</span></li>
       </ol>
     </div>`;
@@ -646,7 +642,7 @@ async function renderHome(alive) {
   drawTimetable();
 
   $$('[data-cancel]').forEach((b) => b.addEventListener('click', async () => {
-    if (!confirm('이 매칭 신청을 취소할까요? 걸어둔 보증금은 돌려드려요.')) return;
+    if (!confirm('이 매칭 신청을 취소할까요?')) return;
     try {
       await withLoading('↩️', '신청을 취소하는 중이에요', () => api(`/requests/${b.dataset.cancel}`, { method: 'DELETE' }));
       toast('신청을 취소했어요.');
@@ -675,17 +671,17 @@ async function renderApply(alive) {
   const state = await api('/me');
   if (!alive()) return;
   const { user } = state;
-  // 이미 매칭·신청한 칸과 개인 일정 칸은 고를 수 없다
+  // 스터디 날짜(11월 3일 화 · 4일 수 · 5일 목) 중 원하는 날을 여러 개 고른다. 시간은 19~21시 고정.
+  // 이미 지난 날짜, 이미 신청·매칭한 날짜는 고를 수 없다.
+  const period = OPTIONS.studyPeriod;
   const taken = myTimetable(state);
-  const defaults = ['1-7', '1-8', '3-7', '3-8', '5-7', '5-8'].filter((c) => !taken.has(c));
-
-  const form = { cells: new Set(defaults), location: OPTIONS.locations[0], styles: new Set(), depositOn: false, deposit: 10000 };
-  // 시간표: 칸을 누르거나 끌어서 고른다. form.cells = "요일-시간대번호" 모음
-  const grid = () => timetableHTML('tt', (cell) => {
-    const info = taken.get(cell);
-    if (info) return { cls: `${info.kind} ro`, label: info.label, disabled: true };
-    return { on: form.cells.has(cell) };
+  const studyDays = period.dates.map((date) => {
+    const day = new Date(`${date}T00:00:00`).getDay() || 7;
+    const over = new Date(`${date}T${period.end}:00+09:00`) <= new Date();
+    const busy = [...taken.keys()].some((c) => c.startsWith(`${day}-`) && taken.get(c).kind !== 'personal');
+    return { date, day, disabled: over || busy, note: over ? '지남' : busy ? '신청함' : '' };
   });
+  const form = { location: OPTIONS.locations[0], styles: new Set(), days: new Set(studyDays.filter((d) => !d.disabled).map((d) => d.day)) };
 
   view.innerHTML = `
     <section class="card">
@@ -701,10 +697,13 @@ async function renderApply(alive) {
 
     <section class="card">
       <div class="card-head"><h2>📅 공부 일정 및 장소 설정</h2></div>
-      <div class="field"><span>공부할 시간</span>
-        ${grid()}
-        <p class="tiny muted tt-hint"><span class="one-line">칸을 누르거나 꾹 눌러 끌어서 골라요 · 낮 1시간 30분, 저녁(18시~) 1시간</span></p>
-        <button type="button" class="btn sm ghost" id="tt-clear">모두 지우기</button>
+      <div class="field"><span>공부할 날짜 (중복 선택 가능) · ${fmtTime(period.start)} ~ ${fmtTime(period.end)}</span>
+        <div class="style-picker" id="days">
+          ${studyDays.map((d) => `
+            <button type="button" data-day="${d.day}" aria-pressed="${form.days.has(d.day)}"${d.disabled ? ' disabled' : ''}>
+              <b>${Number(d.date.slice(5, 7))}월 ${Number(d.date.slice(8))}일 (${WD[d.day]})</b><small>${d.note || `${fmtTime(period.start)} ~ ${fmtTime(period.end)}`}</small>
+            </button>`).join('')}
+        </div>
       </div>
       <label class="field"><span>장소 설정</span>
         <select class="select" id="loc">${OPTIONS.locations.map((l) => `<option>${esc(l)}</option>`).join('')}</select>
@@ -721,20 +720,6 @@ async function renderApply(alive) {
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-head"><h2>💰 보증금 설정</h2><span class="hint">노쇼 방지를 위해 걸 수 있어요</span></div>
-      <div class="toggle-pair" id="dep">
-        <button type="button" data-on="1" aria-pressed="false"><span class="switch"></span>보증금 사용</button>
-        <button type="button" data-on="0" aria-pressed="true"><span class="switch"></span>사용 안함</button>
-      </div>
-      <div id="dep-amount" hidden>
-        <label class="field"><span>보증금 금액 (보유 ${won(user.points)}P)</span>
-          <select class="select" id="amount">${OPTIONS.deposits.map((d) => `<option value="${d}"${d === form.deposit ? ' selected' : ''}>${won(d)}원</option>`).join('')}</select>
-        </label>
-        <div class="notice"><span>🛡️</span><span>매칭이 성사되면 보증금이 안전하게 보관돼요. 약속을 모두 지키면 돌려받고, 지키지 못하면 약속을 지킨 메이트에게 보상으로 전달돼요. 메이트와 금액이 다르면 낮은 금액에 맞추고 차액은 바로 돌려드려요.</span></div>
-      </div>
-    </section>
-
     <div class="sticky-cta"><button class="btn primary block" id="submit">매칭 신청하기 →</button></div>`;
 
   $('#styles').addEventListener('click', (e) => {
@@ -744,27 +729,14 @@ async function renderApply(alive) {
     form.styles.has(s) ? form.styles.delete(s) : form.styles.add(s);
     b.setAttribute('aria-pressed', form.styles.has(s));
   });
-  $('#dep').addEventListener('click', (e) => {
+  $('#days').addEventListener('click', (e) => {
     const b = e.target.closest('button');
-    if (!b) return;
-    form.depositOn = b.dataset.on === '1';
-    $$('#dep button').forEach((x) => x.setAttribute('aria-pressed', x === b));
-    $('#dep-amount').hidden = !form.depositOn;
-  });
-  // 시간표 칸: 누르면 켜고/끄고, 누른 채 끌면 같은 상태로 여러 칸을 칠한다 (마우스·터치 모두)
-  attachPaint($('#tt'), {
-    get: (cell) => form.cells.has(cell),
-    set: (cell, on, btn) => {
-      on ? form.cells.add(cell) : form.cells.delete(cell);
-      btn.setAttribute('aria-pressed', on);
-    },
-  });
-  $('#tt-clear').addEventListener('click', () => {
-    form.cells.clear();
-    $$('#tt .tt-cell').forEach((b) => b.setAttribute('aria-pressed', false));
+    if (!b || b.disabled) return;
+    const d = Number(b.dataset.day);
+    form.days.has(d) ? form.days.delete(d) : form.days.add(d);
+    b.setAttribute('aria-pressed', form.days.has(d));
   });
   $('#loc').addEventListener('change', (e) => { form.location = e.target.value; });
-  $('#amount').addEventListener('change', (e) => { form.deposit = Number(e.target.value); });
 
   $('#submit').addEventListener('click', async (e) => {
     e.target.disabled = true;
@@ -772,12 +744,7 @@ async function renderApply(alive) {
       // 바로 매칭되더라도 메이트를 찾는 화면을 3초 동안 보여 준다
       const res = await withLoading('🔍', '메이트를 찾는 중이에요', () => api('/requests', {
         method: 'POST',
-        body: {
-          cells: [...form.cells],
-          location: form.location,
-          styles: [...form.styles],
-          deposit: form.depositOn ? form.deposit : 0,
-        },
+        body: { days: [...form.days], location: form.location, styles: [...form.styles] },
       }));
       if (res.matchId) {
         toast('🎉 바로 메이트를 찾았어요!');
@@ -862,7 +829,7 @@ function drawMatch(m, alive) {
           <div>
             <p class="small"><b>내 출석 코드</b></p>
             <div class="code">${esc(target.myCode ?? '')}</div>
-            <p class="tiny muted mt">메이트가 이 코드를 입력하거나 QR을 스캔하면 내 출석이 확인돼요.</p>
+            <p class="tiny muted mt">메이트가 이 QR을 찍으면 내 출석이 바로 확인돼요. QR이 안 되면 이 코드를 알려 주세요.</p>
           </div>
           <div class="qr-box"><img data-qr="${target.id}" alt="내 출석 QR 코드"></div>
         </div>`;
@@ -870,13 +837,14 @@ function drawMatch(m, alive) {
       ? `<p class="small">✅ ${esc(m.mate.name)}님 출석 확인 완료</p>`
       : `
         <p class="small"><b>${esc(m.mate.name)}님 출석 확인하기</b></p>
-        <p class="tiny muted">메이트 화면에 보이는 출석 코드를 입력하거나 QR을 스캔해 주세요.</p>
+        <p class="tiny muted">메이트 화면의 QR을 찍으면 메이트 출석이 바로 확인돼요.</p>
+        <button class="btn primary block mt" id="scan" data-id="${target.id}">📷 메이트 QR 찍기</button>
+        <p class="tiny muted mt">QR이 안 되면 메이트 화면의 출석 코드를 입력해 주세요.</p>
         ${target.mateCode ? `<p class="tiny muted">🤖 데모 메이트 코드: <b class="code" style="font-size:12px">${esc(target.mateCode)}</b></p>` : ''}
         <form class="row mt" id="confirm-form" data-id="${target.id}">
           <input class="input code" name="code" maxlength="6" placeholder="메이트 코드" autocomplete="off" style="text-transform:uppercase" required>
-          <button type="button" class="btn inline-btn" id="scan" data-id="${target.id}">⌗ QR</button>
-        </form>
-        <button class="btn primary block mt" id="confirm" data-id="${target.id}">✓ 상대방 출석 확인하기</button>`;
+          <button class="btn inline-btn">확인</button>
+        </form>`;
     checkin = `
       <p class="tiny muted">${fmtDate(target.date, true)} ${fmtTime(target.startTime)} ~ ${fmtTime(target.endTime)} 약속</p>
       <div class="att-part">${myPart}</div>
@@ -910,7 +878,7 @@ function drawMatch(m, alive) {
       ${m.mate.isBot ? '<div class="notice"><span>🤖</span><span>체험용 <b>가상 메이트</b>예요. 실제로 약속 장소에 나오지 않아요. 내가 출석하면 함께 출석하고, 채팅에 자동으로 답해요.</span></div>' : ''}
       <div class="notice">
         <span>🤝</span>
-        <span>${esc(styleLabels(m.styles))} · ${esc(m.location)}${m.stake ? ` · 보증금 ${won(m.stake)}원` : ' · 보증금 없음'}</span>
+        <span>${esc(styleLabels(m.styles))} · ${esc(m.location)}${m.stake ? ` · 보증금 ${won(m.stake)}원` : ''}</span>
       </div>
     </section>
 
@@ -986,7 +954,6 @@ function drawMatch(m, alive) {
       refresh(res.match);
     } catch (err) { toast(err.message, true); }
   };
-  $('#confirm')?.addEventListener('click', (e) => confirmMate(e.target.dataset.id, $('#confirm-form').code.value));
   $('#confirm-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     confirmMate(e.target.dataset.id, e.target.code.value);
@@ -1078,11 +1045,12 @@ function renderReport(m, alive) {
       <div class="vs">${col('me', me, '나')}${col('mate', mate, m.mate.name)}</div>
     </section>
 
+    ${me.deposit.result !== 'none' ? `
     <section class="card">
       <div class="card-head"><h2>💰 보증금 정산</h2></div>
       <p class="small">${DEPOSIT_TEXT[me.deposit.result](me.deposit.amount)}</p>
       ${me.reward ? `<p class="small mt"><span class="plus">+${won(me.reward)}P</span> 메이트의 미이행 보상을 받았어요.</p>` : ''}
-    </section>
+    </section>` : ''}
 
     <section class="card">
       <div class="card-head"><h2>🔁 다음 주 선택</h2></div>
@@ -1168,15 +1136,15 @@ async function renderPast(alive, id) {
           <div class="tags">${m.mate.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
         </div>
       </div>
-      <div class="notice"><span>🤝</span><span>${esc(styleLabels(m.styles))} · ${m.stake ? `보증금 ${won(m.stake)}P` : '보증금 없음'}</span></div>
+      <div class="notice"><span>🤝</span><span>${esc(styleLabels(m.styles))}${m.stake ? ` · 보증금 ${won(m.stake)}P` : ''}</span></div>
     </section>
 
     ${r ? `
     <section class="card">
       <div class="card-head"><h2>📈 출석률과 공부시간</h2></div>
       <div class="vs">${col(r.me, '나')}${col(r.mate, m.mate.name)}</div>
-      <p class="small mt">💰 ${PAST_DEPOSIT[r.me.deposit.result](r.me.deposit.amount)}
-        ${r.me.reward ? ` 보상으로 <span class="plus">+${won(r.me.reward)}P</span>를 받았어요.` : ''}</p>
+      ${r.me.deposit.result !== 'none' ? `<p class="small mt">💰 ${PAST_DEPOSIT[r.me.deposit.result](r.me.deposit.amount)}
+        ${r.me.reward ? ` 보상으로 <span class="plus">+${won(r.me.reward)}P</span>를 받았어요.` : ''}</p>` : ''}
     </section>` : ''}
 
     <section class="card">
@@ -1208,14 +1176,42 @@ function closeModal() {
   modal.innerHTML = '';
 }
 
+// 카메라 화면에서 QR 글자 읽기: 브라우저 기본 기능(BarcodeDetector)이 없으면(아이폰 등) jsQR로 읽는다.
+let jsQrLoading = null;
+const loadJsQr = () => (jsQrLoading ??= new Promise((resolve, reject) => {
+  const s = document.createElement('script');
+  s.src = 'vendor/jsQR.js';
+  s.onload = () => resolve(window.jsQR);
+  s.onerror = () => { jsQrLoading = null; reject(new Error('QR 인식 기능을 불러오지 못했어요.')); };
+  document.head.append(s);
+}));
+
+async function qrReader(video) {
+  if ('BarcodeDetector' in window) {
+    const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+    return async () => (await detector.detect(video).catch(() => [])).map((c) => c.rawValue);
+  }
+  const jsQR = await loadJsQr();
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  return async () => {
+    if (!video.videoWidth) return [];
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+    const hit = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+    return hit ? [hit.data] : [];
+  };
+}
+
 function openScanner(appointmentId, onDone) {
   const modal = $('#modal');
-  const canScan = 'BarcodeDetector' in window && navigator.mediaDevices?.getUserMedia;
+  const canScan = !!navigator.mediaDevices?.getUserMedia;
   modal.innerHTML = `
     <div class="sheet">
-      <div class="row between"><h3>QR 스캔하기</h3><button class="btn sm ghost" id="close">닫기</button></div>
-      <p class="small muted">메이트 화면의 출석 QR을 비추거나, 아래에 메이트의 코드를 입력하세요.</p>
-      ${canScan ? '<div class="scanner"><video id="video" playsinline muted></video></div>' : '<div class="notice">이 브라우저는 카메라 QR 인식을 지원하지 않아요. 메이트 화면의 6자리 코드를 입력해 주세요.</div>'}
+      <div class="row between"><h3>메이트 QR 찍기</h3><button class="btn sm ghost" id="close">닫기</button></div>
+      <p class="small muted">메이트 화면의 출석 QR을 비추면 바로 출석이 확인돼요. 안 되면 아래에 메이트의 코드를 입력하세요.</p>
+      ${canScan ? '<div class="scanner"><video id="video" playsinline muted></video></div>' : '<div class="notice">이 브라우저는 카메라를 쓸 수 없어요. 메이트 화면의 6자리 코드를 입력해 주세요.</div>'}
       <form id="code-form" class="row mt">
         <input class="input code" name="code" maxlength="6" placeholder="메이트 코드" autocomplete="off" style="text-transform:uppercase" required>
         <button class="btn primary">출석 확인</button>
@@ -1239,7 +1235,11 @@ function openScanner(appointmentId, onDone) {
       closeModal();
       toast('✅ 메이트 출석을 확인했어요. 함께 시작해요 📚');
       onDone(res.match);
-    } catch (err) { toast(err.message, true); }
+      return true;
+    } catch (err) {
+      toast(err.message, true);
+      return false;
+    }
   };
 
   $('#code-form').addEventListener('submit', (e) => {
@@ -1255,12 +1255,13 @@ function openScanner(appointmentId, onDone) {
         const video = $('#video');
         video.srcObject = stream;
         await video.play();
-        const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+        const read = await qrReader(video);
         const loop = async () => {
           if (stopped) return;
-          const codes = await detector.detect(video).catch(() => []);
-          const hit = codes.map((c) => c.rawValue).find((v) => v.startsWith('SB:'));
-          if (hit) return submit(hit.split(':')[2]);
+          const hit = (await read()).find((v) => v.startsWith('SB:'));
+          // 읽었는데 확인에 실패하면(시간 전 등) 잠깐 쉬었다가 다시 찍을 수 있게 한다
+          if (hit && await submit(hit.split(':')[2])) return;
+          if (hit) return setTimeout(loop, 2000);
           requestAnimationFrame(loop);
         };
         loop();
@@ -1376,7 +1377,7 @@ async function renderMe(alive) {
   setTop({ title: '마이페이지' });
   setTabs('me');
   loading();
-  const [{ user }, { logs }, { matches }] = await Promise.all([api('/me'), api('/me/points'), api('/me/history')]);
+  const [{ user }, { matches }] = await Promise.all([api('/me'), api('/me/history')]);
   if (!alive()) return;
 
   view.innerHTML = `
@@ -1387,19 +1388,11 @@ async function renderMe(alive) {
         <div>
           <div class="name">${esc(user.name)}${user.age ? `<small>(${user.age}세)</small>` : ''}</div>
           <div class="small muted">${esc(user.email)}</div>
+          ${user.department || user.phone ? `<div class="small muted">${esc([user.department, user.phone].filter(Boolean).join(' · '))}</div>` : ''}
           ${user.bio ? `<div class="small mt">${esc(user.bio)}</div>` : ''}
           <div class="tags">${user.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
         </div>
       </div>
-    </section>
-
-    <section class="card">
-      <div class="card-head"><h2>💰 포인트</h2><span class="pill lime">${won(user.points)}P</span></div>
-      ${logs.length ? logs.map((l) => `
-        <div class="list-item">
-          <div><div>${esc(l.reason)}</div><div class="tiny muted">${new Date(l.created_at).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' })}</div></div>
-          <span class="${l.amount > 0 ? 'plus' : 'minus'}">${l.amount > 0 ? '+' : ''}${won(l.amount)}</span>
-        </div>`).join('') : '<p class="small muted">아직 포인트 내역이 없어요.</p>'}
     </section>
 
     <section class="card">
@@ -1448,6 +1441,8 @@ async function renderEditProfile(alive) {
       </div>
       <label class="field"><span>이름 (닉네임)</span><input class="input" name="name" maxlength="20" value="${esc(user.name)}" required></label>
       <label class="field"><span>나이</span><input class="input" name="age" type="number" min="14" max="100" value="${user.age ?? ''}"></label>
+      <label class="field"><span>학과</span><input class="input" name="department" maxlength="30" value="${esc(user.department ?? '')}" placeholder="예: 경영정보학부" required></label>
+      <label class="field"><span>전화번호 (메이트에게는 보이지 않아요)</span><input class="input" name="phone" type="tel" inputmode="numeric" value="${esc(user.phone ?? '')}" placeholder="010-1234-5678" required></label>
       <label class="field"><span>태그 (쉼표로 구분, 최대 5개)</span><input class="input" name="tags" value="${esc(user.tags.join(', '))}" placeholder="#카페공부, #자격증준비, #ENFJ"></label>
       <label class="field"><span>한 줄 소개</span><textarea class="input" name="bio" maxlength="200" placeholder="메이트에게 나를 소개해 주세요">${esc(user.bio)}</textarea></label>
       <button class="btn primary block mt-lg">저장하기</button>

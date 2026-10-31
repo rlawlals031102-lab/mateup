@@ -15,6 +15,8 @@ const ADDED_COLUMNS = [
   ['match_requests', 'cells', 'TEXT'], // 시간표에서 고른 칸
   ['matches', 'schedule', 'TEXT'], // 요일별 약속 시간
   ['users', 'personal', 'TEXT'], // 내 개인 일정 [{ cell, title }]
+  ['users', 'department', 'TEXT'], // 학과 (가입 때 수집, 본인·운영자만 봄)
+  ['users', 'phone', 'TEXT'], // 전화번호 (가입 때 수집, 본인·운영자만 봄)
 ];
 
 export function migrations(dialect) {

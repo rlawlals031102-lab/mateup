@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import * as S from './service.js';
-import { LOCATIONS, STYLES, DEPOSITS, CHECKIN_EARLY_MIN, TIME_SLOTS } from './options.js';
+import { LOCATIONS, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD } from './options.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const COOKIE = 'sb_token';
@@ -52,7 +52,7 @@ export function createApp({
 
   api.get('/options', (req, res) => {
     res.json({
-      locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, timeSlots: TIME_SLOTS,
+      locations: LOCATIONS, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD,
       emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, demoLogin,
     });
   });
@@ -95,7 +95,6 @@ export function createApp({
   api.put('/me/personal', auth, async (req, res) => {
     res.json({ personal: await S.setPersonalSchedule(db, req.user.id, req.body?.entries) });
   });
-  api.get('/me/points', auth, async (req, res) => res.json({ logs: await S.pointLogs(db, req.user.id) }));
   api.get('/me/history', auth, async (req, res) => res.json({ matches: await S.matchHistory(db, req.user.id) }));
 
   // 매칭 신청

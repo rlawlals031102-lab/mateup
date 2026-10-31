@@ -1,23 +1,25 @@
 import crypto from 'node:crypto';
 import { requeueBot } from './service.js';
 import * as T from './time.js';
+import { STUDY_PERIOD } from './options.js';
 
 // 데모(가상) 메이트. 사용자가 매칭을 신청하면 이 중 조건이 맞는 메이트와 연결된다.
 // 화면에는 "데모 메이트"로 표시된다. 목록을 고치면 다음 실행 때 기존 메이트 정보와 대기 신청에도 반영된다.
-const WEEKDAYS = [1, 2, 3, 4, 5];
+// 스터디 기간(STUDY_PERIOD)의 요일·시간에 장소마다 한 명씩 기다린다.
+const STUDY_DAYS = [...new Set(STUDY_PERIOD.dates.map(T.isoWeekday))];
 const ALL_STYLES = ['check', 'talk', 'social'];
-const START_POINTS = 100_000; // 데모 메이트 포인트 (보증금이 차감되지 않아 항상 이 값)
+const START_POINTS = 100_000; // 데모 메이트 포인트 (항상 이 값)
+const studyTemplate = (location) => ({
+  location, days: STUDY_DAYS, startTime: STUDY_PERIOD.start, endTime: STUDY_PERIOD.end, styles: ALL_STYLES, deposit: 0,
+});
 
 export const BOTS = [
-  { email: 'bot-morning@studybuddy.local', name: '김아침', age: null, avatar: '🌅',
-    tags: ['#아침공부', '#경영관'], bio: '아침 9시에 같이 시작해요',
-    template: { location: '경영관 3층 라운지', days: WEEKDAYS, startTime: '09:00', endTime: '12:00', styles: ALL_STYLES, deposit: 10000 } },
   { email: 'bot-evening@studybuddy.local', name: '김저녁', age: null, avatar: '🌙',
-    tags: ['#저녁공부', '#성곡도서관'], bio: '수업 끝나고 저녁에 같이 공부해요',
-    template: { location: '국민대 성곡도서관', days: WEEKDAYS, startTime: '19:00', endTime: '21:00', styles: ALL_STYLES, deposit: 5000 } },
-  { email: 'bot-weekend@studybuddy.local', name: '김주말', age: null, avatar: '☀️',
-    tags: ['#주말공부', '#카페공부'], bio: '주말 오후에 카페에서 공부해요',
-    template: { location: '정릉 근처 카페', days: [6, 7], startTime: '13:30', endTime: '18:00', styles: ALL_STYLES, deposit: 20000 } },
+    tags: ['#저녁공부', '#경상관102A'], bio: '수업 끝나고 저녁에 같이 공부해요',
+    template: studyTemplate('지정 강의실 (경상관 102A)') },
+  { email: 'bot-chat@studybuddy.local', name: '김대화', age: null, avatar: '💬',
+    tags: ['#저녁공부', '#장소는채팅으로'], bio: '장소는 채팅으로 같이 정해요',
+    template: studyTemplate('채팅으로 정하기') },
 ];
 
 export async function seedBots(db) {
@@ -73,8 +75,8 @@ async function syncBot(db, id, b) {
     b.name, b.age, JSON.stringify(b.tags), b.bio, b.avatar, JSON.stringify(t), START_POINTS, id);
   await requeueBot(db, id);
   await db.run(
-    `UPDATE match_requests SET location = ?, days = ?, start_time = ?, end_time = ?, styles = ?
+    `UPDATE match_requests SET location = ?, days = ?, start_time = ?, end_time = ?, styles = ?, deposit = ?
      WHERE user_id = ? AND status = 'pending'`,
-    t.location, JSON.stringify(t.days), t.startTime, t.endTime, JSON.stringify(t.styles), id,
+    t.location, JSON.stringify(t.days), t.startTime, t.endTime, JSON.stringify(t.styles), t.deposit, id,
   );
 }

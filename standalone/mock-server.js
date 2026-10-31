@@ -8,7 +8,7 @@ import QRCode from 'qrcode';
 import { openSqlite } from '../server/db.js';
 import { seedBots, retireOldBots } from '../server/seed.js';
 import * as S from '../server/service.js';
-import { LOCATIONS, STYLES, DEPOSITS, CHECKIN_EARLY_MIN, TIME_SLOTS } from '../server/options.js';
+import { LOCATIONS, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD } from '../server/options.js';
 import { persist, clearSaved } from './shims/sqlite.js';
 
 const TOKEN_KEY = 'studybuddy-standalone-token';
@@ -43,7 +43,7 @@ const needUser = (ctx) => {
 };
 
 const routes = [
-  ['GET', '/options', async () => ({ locations: LOCATIONS, styles: STYLES, deposits: DEPOSITS, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, demoLogin: true, timeSlots: TIME_SLOTS })],
+  ['GET', '/options', async () => ({ locations: LOCATIONS, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, demoLogin: true, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD })],
 
   ['POST', '/auth/signup', async ({ db, body }) => {
     const { user, token } = await S.signup(db, body);
@@ -69,7 +69,6 @@ const routes = [
 
   ['GET', '/me', (ctx) => S.homeState(ctx.db, needUser(ctx), opts)],
   ['PUT', '/me', async (ctx) => ({ user: await S.updateProfile(ctx.db, needUser(ctx), ctx.body) })],
-  ['GET', '/me/points', async (ctx) => ({ logs: await S.pointLogs(ctx.db, needUser(ctx)) })],
   ['GET', '/matches/:id', async (ctx) => ({ match: await S.matchById(ctx.db, needUser(ctx), ctx.id, opts) })],
   ['GET', '/me/history', async (ctx) => ({ matches: await S.matchHistory(ctx.db, needUser(ctx)) })],
 

@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 import { isUniqueViolation } from './db.js';
 import * as T from './time.js';
 import {
-  LOCATIONS, STYLES, DEPOSITS, SIGNUP_POINTS, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
-  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS,
+  LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
+  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD,
 } from './options.js';
 
 // 모든 함수는 첫 인자로 db(server/db.js 인터페이스)를 받는다.
@@ -100,7 +100,9 @@ export const publicUser = (u) => u && {
   isBot: !!u.is_bot && !!u.bot_template, // 체험용 데모 메이트 (화면에 "가상 인물"로 표시)
 };
 
-export const privateUser = (u) => u && { ...publicUser(u), email: u.email, points: u.points };
+export const privateUser = (u) => u && {
+  ...publicUser(u), email: u.email, department: u.department ?? null, phone: u.phone ?? null,
+};
 
 const getUser = (db, id) => db.get('SELECT * FROM users WHERE id = ?', id);
 
@@ -126,13 +128,27 @@ async function issueToken(db, userId) {
   return token;
 }
 
-function validateProfile({ name, age, tags, bio, avatar }, partial = false) {
+// 전화번호: 숫자만 남겨 010-1234-5678 꼴로
+function normalizePhone(phone) {
+  const d = String(phone ?? '').replace(/\D/g, '');
+  if (!/^01[016789]\d{7,8}$/.test(d)) throw new AppError(400, '전화번호를 올바르게 입력해 주세요. (예: 010-1234-5678)');
+  return d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+}
+
+function validateProfile({ name, age, tags, bio, avatar, department, phone }, partial = false) {
   const out = {};
   if (name !== undefined || !partial) {
     const n = String(name ?? '').trim();
     if (n.length < 1 || n.length > 20) throw new AppError(400, '이름은 1~20자로 입력해 주세요.');
     out.name = n;
   }
+  // 학과·전화번호: 가입 때 꼭 받고, 본인과 운영자만 본다 (메이트에게는 보이지 않음)
+  if (department !== undefined || !partial) {
+    const d = String(department ?? '').trim();
+    if (d.length < 1 || d.length > 30) throw new AppError(400, '학과를 입력해 주세요.');
+    out.department = d;
+  }
+  if (phone !== undefined || !partial) out.phone = normalizePhone(phone);
   if (age !== undefined && age !== null && age !== '') {
     const a = Number(age);
     if (!Number.isInteger(a) || a < 14 || a > 100) throw new AppError(400, '나이를 올바르게 입력해 주세요.');
@@ -231,22 +247,21 @@ async function verifyEmailCode(db, email, purpose, code) {
   return row.id;
 }
 
-export async function signup(db, { email, password, name, age, code }, policy = NO_POLICY) {
+export async function signup(db, { email, password, name, age, department, phone, code }, policy = NO_POLICY) {
   const e = normalizeEmail(email, policy);
   checkPassword(password);
-  const profile = validateProfile({ name, age });
+  const profile = validateProfile({ name, age, department, phone });
   const codeId = policy.verify ? await verifyEmailCode(db, e, 'signup', code) : null;
   const passwordHash = hashPassword(String(password));
   return db.tx(async (t) => {
     const { rows } = await t.run(
-      `INSERT INTO users (email, password_hash, name, age, points, created_at) VALUES (?, ?, ?, ?, 0, ?)
+      `INSERT INTO users (email, password_hash, name, age, department, phone, points, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
        ON CONFLICT (email) DO NOTHING RETURNING id`,
-      e, passwordHash, profile.name, profile.age ?? null, iso(),
+      e, passwordHash, profile.name, profile.age ?? null, profile.department, profile.phone, iso(),
     );
     if (!rows.length) throw new AppError(409, '이미 가입된 이메일입니다.');
     if (codeId) await t.run('UPDATE email_codes SET used = 1 WHERE id = ?', codeId);
     const id = rows[0].id;
-    await adjustPoints(t, id, SIGNUP_POINTS, '가입 축하 포인트');
     return { user: privateUser(await getUser(t, id)), token: await issueToken(t, id) };
   });
 }
@@ -277,7 +292,7 @@ export async function resetPassword(db, { email, code, password }, policy = NO_P
 }
 
 // 데모 계정 로그인 (데모 모드 전용). 계정이 없으면 만든다.
-export const DEMO_ACCOUNT = { email: 'demo@studybuddy.local', name: '데모 사용자' };
+export const DEMO_ACCOUNT = { email: 'demo@studybuddy.local', name: '데모 사용자', department: '경영정보학부', phone: '010-0000-0000' };
 
 export async function demoLogin(db) {
   let u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', DEMO_ACCOUNT.email);
@@ -419,58 +434,34 @@ export async function adjustPoints(db, userId, amount, reason, matchId = null) {
   );
 }
 
-export function pointLogs(db, userId) {
-  return db.all('SELECT * FROM point_logs WHERE user_id = ? ORDER BY id DESC LIMIT 50', userId);
-}
-
 // ───────────────────────── 매칭 신청 ─────────────────────────
 
-// 신청은 시간표 칸(cells: ["요일-시간대번호"])으로 받는다. (요일 + 시작·끝 시간으로 보내도 칸으로 바꿔 받음)
+// 아직 끝나지 않은 스터디 날짜
+const remainingStudyDates = () => STUDY_PERIOD.dates.filter((d) => T.at(d, STUDY_PERIOD.end) > T.now());
+
+// 시간은 스터디 기간(19~21시)으로 고정. 날짜는 스터디 날짜(화·수·목) 중 원하는 날을 여러 개 고른다.
+// days: 요일 번호(2=화, 3=수, 4=목). 보증금은 없다.
 export function validateRequest(input) {
-  let cells;
-  if (Array.isArray(input.cells)) {
-    cells = [...new Set(input.cells.map(String))];
-    const bad = cells.some((c) => {
-      const [d, i] = parseCell(c);
-      return !/^\d-\d+$/.test(c) || d < 1 || d > 7 || !TIME_SLOTS[i];
-    });
-    if (bad) throw new AppError(400, '시간표에서 칸을 다시 골라 주세요.');
-  } else {
-    const days = [...new Set((input.days ?? []).map(Number))];
-    if (!days.length || days.some((d) => !Number.isInteger(d) || d < 1 || d > 7)) {
-      throw new AppError(400, '공부할 요일을 하나 이상 골라 주세요.');
-    }
-    // 정해진 시간대(TIME_SLOTS)의 이어진 묶음만 허용: 시작은 어떤 시간대의 시작, 끝은 어떤 시간대의 끝
-    const startIdx = TIME_SLOTS.findIndex((s) => s.start === input.startTime);
-    const endIdx = TIME_SLOTS.findIndex((s) => s.end === input.endTime);
-    if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
-      throw new AppError(400, '시간대를 골라 주세요.');
-    }
-    cells = cellsFromRange(days, input.startTime, input.endTime);
-  }
-  if (!cells.length) throw new AppError(400, '시간표에서 공부할 시간을 하나 이상 골라 주세요.');
-  cells.sort((a, b) => parseCell(a)[0] - parseCell(b)[0] || parseCell(a)[1] - parseCell(b)[1]);
-  const runs = runsOf(cells);
-  const days = [...new Set(runs.map((r) => r.day))];
-  const startTime = T.fromMin(Math.min(...runs.map((r) => T.toMin(r.start))));
-  const endTime = T.fromMin(Math.max(...runs.map((r) => T.toMin(r.end))));
+  const remaining = remainingStudyDates();
+  if (!remaining.length) throw new AppError(400, '이번 스터디 기간이 끝나서 신청할 수 없어요.');
+  const days = [...new Set((input.days ?? []).map(Number))].sort((a, b) => a - b);
+  if (!days.length) throw new AppError(400, '공부할 날짜를 하나 이상 골라 주세요.');
+  const dayOf = (d) => STUDY_PERIOD.dates.find((date) => T.isoWeekday(date) === d);
+  if (days.some((d) => !dayOf(d))) throw new AppError(400, '스터디 날짜 중에서 골라 주세요.');
+  if (days.some((d) => !remaining.includes(dayOf(d)))) throw new AppError(400, '이미 지난 날짜는 고를 수 없어요.');
+  const cells = cellsFromRange(days, STUDY_PERIOD.start, STUDY_PERIOD.end);
   if (!LOCATIONS.includes(input.location)) throw new AppError(400, '장소를 골라 주세요.');
   const styles = [...new Set(input.styles ?? [])];
   if (!styles.length || styles.some((s) => !STYLES[s])) {
     throw new AppError(400, '공부 스타일을 하나 이상 골라 주세요.');
   }
-  const deposit = Number(input.deposit ?? 0);
-  if (deposit !== 0 && !DEPOSITS.includes(deposit)) throw new AppError(400, '보증금 금액이 올바르지 않습니다.');
-  return { cells, days, startTime, endTime, location: input.location, styles, deposit };
+  return { cells, days, startTime: STUDY_PERIOD.start, endTime: STUDY_PERIOD.end, location: input.location, styles, deposit: 0 };
 }
 
 // 두 신청이 매칭 가능한지 판단하고, 가능하면 합의 조건과 점수를 돌려준다.
-// 조건: 같은 장소, 겹치는 요일 1개 이상, 겹치는 시간 1시간 이상, 공통 스타일 1개 이상,
-//       보증금 사용 여부 일치 (금액이 다르면 작은 쪽에 맞춘다).
+// 조건: 같은 장소, 겹치는 요일 1개 이상, 겹치는 시간 1시간 이상, 공통 스타일 1개 이상.
 export function compatibility(a, b) {
   if (a.location !== b.location) return null;
-  // 보증금 사용 여부가 같아야 한다. 데모 메이트는 모두 보증금을 걸고 있으므로 보증금을 건 신청만 매칭된다.
-  if ((a.deposit > 0) !== (b.deposit > 0)) return null;
   // 시간표에서 둘 다 고른 칸 → 요일마다 가장 길게 이어진 시간이 그날 약속 (1시간 이상)
   const cellsA = a.cells ?? cellsFromRange(a.days, a.start_time ?? a.startTime, a.end_time ?? a.endTime);
   const cellsB = new Set(b.cells ?? cellsFromRange(b.days, b.start_time ?? b.startTime, b.end_time ?? b.endTime));
@@ -517,9 +508,8 @@ export async function createRequest(db, userId, input) {
     return await db.tx(async (t) => {
       const busy = await busyCells(t, userId);
       if (req.cells.some((c) => busy.has(c))) {
-        throw new AppError(409, '이미 신청했거나 매칭된 시간과 겹쳐요. 겹치지 않는 칸만 골라 주세요.');
+        throw new AppError(409, '고른 날짜에 이미 신청했거나 매칭됐어요. 다른 날짜를 골라 주세요.');
       }
-      if (req.deposit) await adjustPoints(t, userId, -req.deposit, '보증금 예치');
       const { rows } = await t.run(
         `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, cells, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
@@ -556,10 +546,11 @@ async function tryMatch(db, requestId) {
      WHERE r.status = 'pending' AND r.user_id != ? AND r.location = ? ORDER BY r.id`,
     req.user_id, req.location,
   )).map(parseRequest);
-  // 공용 데모 계정은 데모 메이트하고만, 실제 사용자는 공용 데모 계정과는 매칭하지 않는다.
+  // 공용 데모 계정은 데모 메이트하고만, 실제 사용자는 실제 사용자하고만 매칭한다.
+  // (보증금이 없어진 뒤로 데모 메이트가 실제 스터디 신청을 가져가지 않도록)
   const me = await getUser(db, req.user_id);
   const iAmDemo = me.email === DEMO_ACCOUNT.email;
-  const allowed = (c) => (iAmDemo ? !!c.u_bot : c.u_email !== DEMO_ACCOUNT.email);
+  const allowed = (c) => (iAmDemo ? !!c.u_bot : !c.u_bot && c.u_email !== DEMO_ACCOUNT.email);
 
   const ranked = candidates
     .filter(allowed)
@@ -589,31 +580,15 @@ async function tryMatch(db, requestId) {
   return null;
 }
 
-// 이번 주 약속 날짜를 계산한다. 오늘부터 7일이 기본이고,
-// 오늘 약속이 이미 끝났다면 건너뛴다. 남는 약속이 없으면 내일부터 7일로 잡는다.
-// schedule: [{ day, start, end }] 요일별 약속 시간 (예전 방식: planWeek(days, start, end)도 됨)
+// 약속 날짜: 스터디 기간 중 두 사람이 함께 고른 요일이면서 아직 끝나지 않은 날짜 (한국 시간 기준).
+// 주간은 스터디 첫날 ~ 마지막 날. schedule: [{ day, start, end }] (없으면 모든 스터디 날짜)
 // 반환하는 dates 는 [{ date, start, end }]
-export function planWeek(schedule, startTime, endTime) {
-  if (typeof schedule[0] === 'number') schedule = schedule.map((day) => ({ day, start: startTime, end: endTime }));
-  const t = T.today();
-  const build = (offset) => {
-    const dates = [];
-    for (let i = 0; i < 7; i++) {
-      const date = T.addDays(t, offset + i);
-      const slot = schedule.find((s) => s.day === T.isoWeekday(date));
-      if (!slot) continue;
-      if (T.at(date, slot.end) <= T.now()) continue;
-      dates.push({ date, start: slot.start, end: slot.end });
-    }
-    return dates;
-  };
-  let offset = 0;
-  let dates = build(0);
-  if (!dates.length) {
-    offset = 1;
-    dates = build(1);
-  }
-  return { weekStart: T.addDays(t, offset), weekEnd: T.addDays(t, offset + 6), dates };
+export function planStudy(schedule = null) {
+  const dates = remainingStudyDates()
+    .filter((date) => !schedule || schedule.some((s) => s.day === T.isoWeekday(date)))
+    .map((date) => ({ date, start: STUDY_PERIOD.start, end: STUDY_PERIOD.end }));
+  if (!dates.length) throw new AppError(400, '이번 스터디 기간이 끝났어요.');
+  return { weekStart: STUDY_PERIOD.dates[0], weekEnd: STUDY_PERIOD.dates.at(-1), dates };
 }
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -622,7 +597,7 @@ const makeCode = () => Array.from(crypto.randomBytes(6), (b) => CODE_CHARS[b % C
 async function createMatch(db, { userA, userB, stakeA, stakeB, terms, prevMatchId = null }) {
   const stake = Math.min(stakeA, stakeB);
   const schedule = terms.schedule ?? terms.days.map((day) => ({ day, start: terms.startTime, end: terms.endTime }));
-  const { weekStart, weekEnd, dates } = planWeek(schedule);
+  const { weekStart, weekEnd, dates } = planStudy(schedule);
   const { rows } = await db.run(
     `INSERT INTO matches (user_a, user_b, days, start_time, end_time, location, styles, stake,
                           week_start, week_end, prev_match_id, schedule, created_at)
@@ -766,8 +741,9 @@ export async function matchDetail(db, userId, m, { demo = false } = {}) {
     };
   });
 
+  // 주간 첫날 ~ 마지막 날 (스터디 기간은 3일, 예전 매칭은 7일)
   const week = [];
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 7 && T.addDays(m.week_start, i) <= m.week_end; i++) {
     const date = T.addDays(m.week_start, i);
     const a = appointments.find((x) => x.date === date);
     week.push({ date, weekday: T.isoWeekday(date), me: a ? a.me.status : 'off', mate: a ? a.mate.status : 'off' });

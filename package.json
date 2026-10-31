@@ -25,6 +25,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.16",
     "esbuild": "^0.25.12",
+    "jsqr": "1.4.0",
     "sql.js": "1.13"
   }
 }
