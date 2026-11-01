@@ -940,6 +940,18 @@ function drawMatch(m, alive) {
   $$('img[data-qr]').forEach(async (img) => {
     const id = img.dataset.qr;
     img.src = window.__mockQr ? await window.__mockQr(Number(id)).catch(() => '') : `/api/appointments/${id}/qr`;
+    // 누르면 메이트가 찍기 쉽게 크게 보여 준다 (아무 데나 누르면 닫힘)
+    img.addEventListener('click', () => {
+      const modal = $('#modal');
+      modal.innerHTML = `
+        <div class="qr-zoom">
+          <img src="${img.src}" alt="내 출석 QR 코드 (크게)">
+          <div class="code">${esc(target.myCode ?? '')}</div>
+          <p class="tiny muted">메이트에게 이 QR을 찍게 해 주세요 · 화면을 누르면 닫혀요</p>
+        </div>`;
+      modal.hidden = false;
+      modal.onclick = closeModal;
+    });
   });
 
   const timer = $('#timer');
@@ -1187,6 +1199,7 @@ function closeModal() {
   modal.dispatchEvent(new Event('close'));
   modal.hidden = true;
   modal.innerHTML = '';
+  modal.onclick = null;
 }
 
 // 카메라 화면에서 QR 글자 읽기: 브라우저 기본 기능(BarcodeDetector)이 없으면(아이폰 등) jsQR로 읽는다.
