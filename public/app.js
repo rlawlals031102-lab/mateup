@@ -681,7 +681,7 @@ async function renderApply(alive) {
     const busy = [...taken.keys()].some((c) => c.startsWith(`${day}-`) && taken.get(c).kind !== 'personal');
     return { date, day, disabled: over || busy, note: over ? '지남' : busy ? '신청함' : '' };
   });
-  const form = { location: OPTIONS.locations[0], styles: new Set(), days: new Set() };
+  const form = { location: null, styles: new Set(), days: new Set() };
 
   view.innerHTML = `
     <section class="card">
@@ -705,9 +705,14 @@ async function renderApply(alive) {
             </button>`).join('')}
         </div>
       </div>
-      <label class="field"><span>장소 설정</span>
-        <select class="select" id="loc">${OPTIONS.locations.map((l) => `<option>${esc(l)}</option>`).join('')}</select>
-      </label>
+      <div class="field"><span>장소 설정</span>
+        <div class="style-picker" id="loc" style="grid-template-columns:repeat(2, 1fr)">
+          ${OPTIONS.locations.map((l) => {
+            const [, name, sub] = l.match(/^(.*?)\s*\((.*)\)$/) ?? [null, l, ''];
+            return `<button type="button" data-loc="${esc(l)}" aria-pressed="false"><b>${esc(name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</button>`;
+          }).join('')}
+        </div>
+      </div>
     </section>
 
     <section class="card">
@@ -736,7 +741,13 @@ async function renderApply(alive) {
     form.days.has(d) ? form.days.delete(d) : form.days.add(d);
     b.setAttribute('aria-pressed', form.days.has(d));
   });
-  $('#loc').addEventListener('change', (e) => { form.location = e.target.value; });
+  // 장소는 하나만 고른다
+  $('#loc').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    form.location = b.dataset.loc;
+    $$('#loc button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+  });
 
   $('#submit').addEventListener('click', async (e) => {
     e.target.disabled = true;
