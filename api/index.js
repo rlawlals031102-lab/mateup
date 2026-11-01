@@ -24,7 +24,7 @@ function getApp() {
       // 국민대 메일만 가입·로그인하고, 가입·비밀번호 찾기는 메일 인증번호로 확인한다.
       emailPolicy: { domain: EMAIL_DOMAIN, verify: true },
       mailer,
-      demoLogin: true, // 가입 없이 둘러보는 공용 체험 계정 (데모 메이트와만 매칭)
+      demoLogin: false, // 실제 모집 기간이라 공용 체험 계정(데모 계정으로 로그인)은 끔
     });
   })();
   return appPromise;

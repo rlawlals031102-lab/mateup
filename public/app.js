@@ -1466,7 +1466,6 @@ async function renderEditProfile(alive) {
         </div>
       </div>
       <label class="field"><span>이름 (닉네임)</span><input class="input" name="name" maxlength="20" value="${esc(user.name)}" required></label>
-      <label class="field"><span>나이</span><input class="input" name="age" type="number" min="14" max="100" value="${user.age ?? ''}"></label>
       <label class="field"><span>학과</span><input class="input" name="department" maxlength="30" value="${esc(user.department ?? '')}" placeholder="예: 경영정보학부" required></label>
       <label class="field"><span>전화번호 (메이트에게는 보이지 않아요)</span><input class="input" name="phone" type="tel" inputmode="numeric" value="${esc(user.phone ?? '')}" placeholder="010-1234-5678" required></label>
       <label class="field"><span>태그 (쉼표로 구분, 최대 5개)</span><input class="input" name="tags" value="${esc(user.tags.join(', '))}" placeholder="#카페공부, #자격증준비, #ENFJ"></label>
