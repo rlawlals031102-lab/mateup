@@ -562,9 +562,8 @@ async function renderHome(alive) {
     <div class="card">
       <div class="card-head"><h2>스터디버디는 이렇게 진행돼요</h2></div>
       <ol class="steps">
-        <li><b>매칭 신청</b><span class="small muted">장소와 교류 방식을 정하면 1:1로 연결돼요.</span></li>
+        <li><b>매칭 신청</b><span class="small muted">일정과 장소, 교류 방식을 정하면 1:1로 연결돼요.</span></li>
         <li><b>약속 이행</b><span class="small muted">정해진 날짜에 만나서 각자 공부하고, 서로의 QR을 찍어 출석을 확인해요.</span></li>
-        <li><b>주간 리포트와 재매칭</b><span class="small muted">같은 메이트와 계속할지, 새 메이트를 만날지 골라요.</span></li>
       </ol>
     </div>`;
 
