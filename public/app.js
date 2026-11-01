@@ -494,7 +494,7 @@ async function renderHome(alive) {
         <div class="profile">
           <div class="avatar">${esc(m.mate.avatar)}</div>
           <div>
-            <div class="name">${esc(m.mate.name)}${m.mate.age ? `<small>(${m.mate.age}세)</small>` : ''}${botBadge(m.mate)}</div>
+            <div class="name">${esc(m.mate.name)}${botBadge(m.mate)}</div>
             <div class="small muted">${esc(scheduleText(m.schedule))}</div>
             <div class="small muted">출석 ${m.stats.me.attended}/${m.stats.me.total} · 공부 ${fmtMinutes(m.stats.me.minutes)}</div>
           </div>
@@ -691,7 +691,7 @@ async function renderApply(alive) {
       <div class="profile">
         <div class="avatar">${esc(user.avatar)}</div>
         <div>
-          <div class="name">${esc(user.name)}${user.age ? `<small>(${user.age}세)</small>` : ''}</div>
+          <div class="name">${esc(user.name)}</div>
           <div class="tags">${user.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('') || '<span class="small muted">태그를 추가하면 메이트가 나를 더 잘 알 수 있어요</span>'}</div>
         </div>
       </div>
@@ -700,7 +700,7 @@ async function renderApply(alive) {
     <section class="card">
       <div class="card-head"><h2>📅 공부 일정 및 장소 설정</h2></div>
       <div class="field"><span>공부할 날짜 (중복 선택 가능)</span>
-        <div class="style-picker" id="days" style="grid-template-columns:repeat(2, 1fr)">
+        <div class="style-picker" id="days">
           ${studyDays.map((d) => `
             <button type="button" data-day="${d.day}" aria-pressed="${form.days.has(d.day)}"${d.disabled ? ' disabled' : ''}>
               <b>${Number(d.date.slice(5, 7))}월 ${Number(d.date.slice(8))}일 (${WD[d.day]})</b><small>${esc(d.note)}</small>
@@ -883,7 +883,7 @@ function drawMatch(m, alive) {
       <div class="profile">
         <div class="avatar lg">${esc(m.mate.avatar)}</div>
         <div>
-          <div class="name">${esc(m.mate.name)}${m.mate.age ? `<small>(${m.mate.age}세)</small>` : ''}${botBadge(m.mate)}</div>
+          <div class="name">${esc(m.mate.name)}${botBadge(m.mate)}</div>
           ${m.mate.bio ? `<div class="small muted">${esc(m.mate.bio)}</div>` : ''}
           <div class="tags">${m.mate.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
         </div>
@@ -1157,7 +1157,7 @@ async function renderPast(alive, id) {
       <div class="profile">
         <div class="avatar">${esc(m.mate.avatar)}</div>
         <div>
-          <div class="name">${esc(m.mate.name)}${m.mate.age ? `<small>(${m.mate.age}세)</small>` : ''}${botBadge(m.mate)}</div>
+          <div class="name">${esc(m.mate.name)}${botBadge(m.mate)}</div>
           <div class="tags">${m.mate.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
         </div>
       </div>
@@ -1412,7 +1412,7 @@ async function renderMe(alive) {
       <div class="profile">
         <div class="avatar lg">${esc(user.avatar)}</div>
         <div>
-          <div class="name">${esc(user.name)}${user.age ? `<small>(${user.age}세)</small>` : ''}</div>
+          <div class="name">${esc(user.name)}</div>
           <div class="small muted">${esc(user.email)}</div>
           ${user.department || user.phone ? `<div class="small muted">${esc([user.department, user.phone].filter(Boolean).join(' · '))}</div>` : ''}
           ${user.bio ? `<div class="small mt">${esc(user.bio)}</div>` : ''}
