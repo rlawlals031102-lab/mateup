@@ -436,26 +436,38 @@ export async function adjustPoints(db, userId, amount, reason, matchId = null) {
 
 // ───────────────────────── 매칭 신청 ─────────────────────────
 
-// 아직 끝나지 않은 스터디 날짜
-const remainingStudyDates = () => STUDY_PERIOD.dates.filter((d) => T.at(d, STUDY_PERIOD.end) > T.now());
+// 스터디 날짜의 시간 (날짜별로 다르게 정한 날이 있으면 그 시간)
+const studyTimeOf = (date) => STUDY_PERIOD.times?.[date] ?? STUDY_PERIOD;
+const studyDateOfDay = (d) => STUDY_PERIOD.dates.find((date) => T.isoWeekday(date) === d);
 
-// 시간은 스터디 기간(19~21시)으로 고정. 날짜는 스터디 날짜(화·수·목) 중 원하는 날을 여러 개 고른다.
-// days: 요일 번호(2=화, 3=수, 4=목). 보증금은 없다.
+// 고른 요일들의 시간표 칸 (요일마다 그 날짜의 스터디 시간)
+export const studyCellsFor = (days) => days.flatMap((d) => {
+  const { start, end } = studyTimeOf(studyDateOfDay(d));
+  return cellsFromRange([d], start, end);
+});
+
+// 아직 끝나지 않은 스터디 날짜
+const remainingStudyDates = () => STUDY_PERIOD.dates.filter((d) => T.at(d, studyTimeOf(d).end) > T.now());
+
+// 날짜는 스터디 날짜(일·화·수·목) 중 원하는 날을 여러 개 고르고, 시간은 날짜마다 정해져 있다
+// (화·수·목 19~21시, 11/1 일요일은 바로 시작). days: 요일 번호(7=일, 2=화, 3=수, 4=목). 보증금은 없다.
 export function validateRequest(input) {
   const remaining = remainingStudyDates();
   if (!remaining.length) throw new AppError(400, '이번 스터디 기간이 끝나서 신청할 수 없어요.');
   const days = [...new Set((input.days ?? []).map(Number))].sort((a, b) => a - b);
   if (!days.length) throw new AppError(400, '공부할 날짜를 하나 이상 골라 주세요.');
-  const dayOf = (d) => STUDY_PERIOD.dates.find((date) => T.isoWeekday(date) === d);
-  if (days.some((d) => !dayOf(d))) throw new AppError(400, '스터디 날짜 중에서 골라 주세요.');
-  if (days.some((d) => !remaining.includes(dayOf(d)))) throw new AppError(400, '이미 지난 날짜는 고를 수 없어요.');
-  const cells = cellsFromRange(days, STUDY_PERIOD.start, STUDY_PERIOD.end);
+  if (days.some((d) => !studyDateOfDay(d))) throw new AppError(400, '스터디 날짜 중에서 골라 주세요.');
+  if (days.some((d) => !remaining.includes(studyDateOfDay(d)))) throw new AppError(400, '이미 지난 날짜는 고를 수 없어요.');
+  const cells = studyCellsFor(days);
   if (!LOCATIONS.includes(input.location)) throw new AppError(400, '장소를 골라 주세요.');
   const styles = [...new Set(input.styles ?? [])];
   if (!styles.length || styles.some((s) => !STYLES[s])) {
     throw new AppError(400, '공부 스타일을 하나 이상 골라 주세요.');
   }
-  return { cells, days, startTime: STUDY_PERIOD.start, endTime: STUDY_PERIOD.end, location: input.location, styles, deposit: 0 };
+  const times = days.map((d) => studyTimeOf(studyDateOfDay(d)));
+  const startTime = T.fromMin(Math.min(...times.map((t) => T.toMin(t.start))));
+  const endTime = T.fromMin(Math.max(...times.map((t) => T.toMin(t.end))));
+  return { cells, days, startTime, endTime, location: input.location, styles, deposit: 0 };
 }
 
 // 두 신청이 매칭 가능한지 판단하고, 가능하면 합의 조건과 점수를 돌려준다.
@@ -586,7 +598,10 @@ async function tryMatch(db, requestId) {
 export function planStudy(schedule = null) {
   const dates = remainingStudyDates()
     .filter((date) => !schedule || schedule.some((s) => s.day === T.isoWeekday(date)))
-    .map((date) => ({ date, start: STUDY_PERIOD.start, end: STUDY_PERIOD.end }));
+    .map((date) => {
+      const { start, end } = schedule?.find((s) => s.day === T.isoWeekday(date)) ?? studyTimeOf(date);
+      return { date, start, end };
+    });
   if (!dates.length) throw new AppError(400, '이번 스터디 기간이 끝났어요.');
   return { weekStart: STUDY_PERIOD.dates[0], weekEnd: STUDY_PERIOD.dates.at(-1), dates };
 }
@@ -1163,10 +1178,12 @@ export async function requeueBot(db, userId) {
   if (!u.is_bot || !u.bot_template) return;
   if (await pendingRequest(db, userId)) return;
   const t = JSON.parse(u.bot_template);
+  // cells가 있으면 시간표 칸 그대로 (날짜마다 시간이 다른 스터디 기간), 없으면 요일 × 시간 범위
   await db.run(
-    `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    userId, JSON.stringify(t.days), t.startTime, t.endTime, t.location, JSON.stringify(t.styles), t.deposit, iso(),
+    `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, cells, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    userId, JSON.stringify(t.days), t.startTime, t.endTime, t.location, JSON.stringify(t.styles), t.deposit,
+    t.cells ? JSON.stringify(t.cells) : null, iso(),
   );
 }
 

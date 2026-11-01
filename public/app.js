@@ -671,15 +671,17 @@ async function renderApply(alive) {
   const state = await api('/me');
   if (!alive()) return;
   const { user } = state;
-  // 스터디 날짜(11월 3일 화 · 4일 수 · 5일 목) 중 원하는 날을 여러 개 고른다. 시간은 19~21시 고정.
-  // 이미 지난 날짜, 이미 신청·매칭한 날짜는 고를 수 없다.
+  // 스터디 날짜(11월 1일 일 · 3일 화 · 4일 수 · 5일 목) 중 원하는 날을 여러 개 고른다.
+  // 시간은 날짜마다 정해져 있다 (화·수·목 19~21시, 11/1은 바로 시작). 지난 날짜, 이미 신청·매칭한 날짜는 고를 수 없다.
   const period = OPTIONS.studyPeriod;
   const taken = myTimetable(state);
   const studyDays = period.dates.map((date) => {
     const day = new Date(`${date}T00:00:00`).getDay() || 7;
-    const over = new Date(`${date}T${period.end}:00+09:00`) <= new Date();
+    const time = period.times?.[date] ?? period;
+    const over = new Date(`${date}T00:00:00+09:00`).getTime() + toMinutes(time.end) * 60000 <= Date.now();
     const busy = [...taken.keys()].some((c) => c.startsWith(`${day}-`) && taken.get(c).kind !== 'personal');
-    return { date, day, disabled: over || busy, note: over ? '지남' : busy ? '신청함' : '' };
+    const when = time.label ?? `${fmtTime(time.start)} ~ ${fmtTime(time.end)}`;
+    return { date, day, disabled: over || busy, note: over ? '지남' : busy ? '신청함' : when };
   });
   const form = { location: null, styles: new Set(), days: new Set() };
 
@@ -697,11 +699,11 @@ async function renderApply(alive) {
 
     <section class="card">
       <div class="card-head"><h2>📅 공부 일정 및 장소 설정</h2></div>
-      <div class="field"><span>공부할 날짜 (중복 선택 가능) · ${fmtTime(period.start)} ~ ${fmtTime(period.end)}</span>
-        <div class="style-picker" id="days">
+      <div class="field"><span>공부할 날짜 (중복 선택 가능)</span>
+        <div class="style-picker" id="days" style="grid-template-columns:repeat(2, 1fr)">
           ${studyDays.map((d) => `
             <button type="button" data-day="${d.day}" aria-pressed="${form.days.has(d.day)}"${d.disabled ? ' disabled' : ''}>
-              <b>${Number(d.date.slice(5, 7))}월 ${Number(d.date.slice(8))}일 (${WD[d.day]})</b><small>${d.note || `${fmtTime(period.start)} ~ ${fmtTime(period.end)}`}</small>
+              <b>${Number(d.date.slice(5, 7))}월 ${Number(d.date.slice(8))}일 (${WD[d.day]})</b><small>${esc(d.note)}</small>
             </button>`).join('')}
         </div>
       </div>

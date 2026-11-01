@@ -51,13 +51,29 @@ test('신청 검증: 화·수·목 중 원하는 날짜, 시간은 19~21시 고�
   setNow(null);
 });
 
+test('11/1(일)은 바로 시작: 09~24시, 다른 날짜와 함께 고를 수 있음', () => {
+  setNow(kst(2026, 11, 1, 11, 0));
+  const r = S.validateRequest({ ...baseReq, days: [7, 2] });
+  assert.deepEqual([r.days, r.startTime, r.endTime], [[2, 7], '09:00', '24:00']);
+  assert.deepEqual(r.cells, ['2-7', '2-8', ...Array.from({ length: 12 }, (_, i) => `7-${i}`)]);
+  // 일요일 약속은 하루 종일, 화요일은 19~21시
+  const plan = S.planStudy([{ day: 7, start: '09:00', end: '24:00' }, { day: 2, start: '19:00', end: '21:00' }]);
+  assert.deepEqual(plan.dates, [
+    { date: '2026-11-01', start: '09:00', end: '24:00' },
+    { date: '2026-11-03', start: '19:00', end: '21:00' },
+  ]);
+  setNow(kst(2026, 11, 2, 0, 0)); // 11/1이 끝나면 일요일은 못 고름
+  assert.throws(() => S.validateRequest({ ...baseReq, days: [7] }), /지난 날짜/);
+  setNow(null);
+});
+
 test('약속 날짜: 한국 시간 기준으로 끝나지 않은 스터디 날짜만', () => {
   setNow(kst(2026, 11, 3, 0, 30)); // 한국 화요일 00:30 = UTC 월요일 15:30
   assert.deepEqual(S.planStudy().dates.map((d) => d.date), STUDY_DATES);
   setNow(kst(2026, 11, 3, 21, 0)); // 첫날 약속이 끝남
   const p = S.planStudy();
   assert.deepEqual(p.dates.map((d) => d.date), ['2026-11-04', '2026-11-05']);
-  assert.deepEqual([p.weekStart, p.weekEnd], ['2026-11-03', '2026-11-05']);
+  assert.deepEqual([p.weekStart, p.weekEnd], ['2026-11-01', '2026-11-05']);
   // 두 사람이 함께 고른 요일만
   assert.deepEqual(S.planStudy([{ day: 3 }]).dates.map((d) => d.date), ['2026-11-04']);
   setNow(kst(2026, 11, 5, 21, 0));
@@ -94,7 +110,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(m.stake, 0);
       assert.deepEqual(m.appointments.map((x) => [x.date, x.startTime, x.endTime]),
         STUDY_DATES.map((d) => [d, '19:00', '21:00']));
-      assert.deepEqual(m.week.map((d) => d.date), STUDY_DATES, '주간 표시는 스터디 3일');
+      assert.deepEqual(m.week.map((d) => d.date), ['2026-11-01', '2026-11-02', ...STUDY_DATES], '주간 표시는 스터디 기간(11/1~5)');
       assert.equal(m.mate.name, 'b');
 
       // 출석 가능 시간 전에는 거절

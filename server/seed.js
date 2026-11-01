@@ -1,16 +1,20 @@
 import crypto from 'node:crypto';
-import { requeueBot } from './service.js';
+import { requeueBot, studyCellsFor } from './service.js';
 import * as T from './time.js';
 import { STUDY_PERIOD } from './options.js';
 
 // 데모(가상) 메이트. 사용자가 매칭을 신청하면 이 중 조건이 맞는 메이트와 연결된다.
 // 화면에는 "데모 메이트"로 표시된다. 목록을 고치면 다음 실행 때 기존 메이트 정보와 대기 신청에도 반영된다.
-// 스터디 기간(STUDY_PERIOD)의 요일·시간에 장소마다 한 명씩 기다린다.
+// 스터디 기간(STUDY_PERIOD)의 모든 날짜·시간에 장소마다 한 명씩 기다린다. (날짜마다 시간이 달라 칸으로 저장)
 const STUDY_DAYS = [...new Set(STUDY_PERIOD.dates.map(T.isoWeekday))];
+const STUDY_TIMES = STUDY_PERIOD.dates.map((d) => STUDY_PERIOD.times?.[d] ?? STUDY_PERIOD);
 const ALL_STYLES = ['check', 'talk', 'social'];
 const START_POINTS = 100_000; // 데모 메이트 포인트 (항상 이 값)
 const studyTemplate = (location) => ({
-  location, days: STUDY_DAYS, startTime: STUDY_PERIOD.start, endTime: STUDY_PERIOD.end, styles: ALL_STYLES, deposit: 0,
+  location, days: STUDY_DAYS, cells: studyCellsFor(STUDY_DAYS),
+  startTime: T.fromMin(Math.min(...STUDY_TIMES.map((t) => T.toMin(t.start)))),
+  endTime: T.fromMin(Math.max(...STUDY_TIMES.map((t) => T.toMin(t.end)))),
+  styles: ALL_STYLES, deposit: 0,
 });
 
 export const BOTS = [
@@ -75,8 +79,9 @@ async function syncBot(db, id, b) {
     b.name, b.age, JSON.stringify(b.tags), b.bio, b.avatar, JSON.stringify(t), START_POINTS, id);
   await requeueBot(db, id);
   await db.run(
-    `UPDATE match_requests SET location = ?, days = ?, start_time = ?, end_time = ?, styles = ?, deposit = ?
+    `UPDATE match_requests SET location = ?, days = ?, start_time = ?, end_time = ?, styles = ?, deposit = ?, cells = ?
      WHERE user_id = ? AND status = 'pending'`,
-    t.location, JSON.stringify(t.days), t.startTime, t.endTime, JSON.stringify(t.styles), t.deposit, id,
+    t.location, JSON.stringify(t.days), t.startTime, t.endTime, JSON.stringify(t.styles), t.deposit,
+    t.cells ? JSON.stringify(t.cells) : null, id,
   );
 }
