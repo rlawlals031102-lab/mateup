@@ -544,6 +544,7 @@ async function renderHome(alive) {
   const main = hasAny
     ? ttCard
       + [...matches.map((m) => (m.status === 'reported' ? reportCard(m) : matchCard(m))), ...pendingRequests.map(pendingCard)].join('')
+      + '<a class="btn block mt" href="#/apply">＋ 다른 날짜에 매칭 추가 신청</a>'
       + homeStats
     : `${leftNote}
       <div class="card hero compact">
