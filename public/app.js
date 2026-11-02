@@ -284,6 +284,7 @@ async function renderLogin() {
         <button type="button" class="btn block" id="demo-login">🧪 데모 계정으로 로그인</button>
         <p class="tiny muted center">가입 없이 둘러볼 수 있는 체험용 계정이에요.</p>
       </div>` : ''}`);
+  showIntro();
   $('#demo-login')?.addEventListener('click', async () => {
     try {
       await api('/auth/demo', { method: 'POST' });
@@ -328,6 +329,27 @@ async function renderSignup() {
       location.hash = '#/home';
     } catch (err) { toast(err.message, true); }
   });
+}
+
+// 로그인 화면에 들어오면 스터디버디 소개 팝업을 띄운다
+function showIntro() {
+  const modal = $('#modal');
+  modal.innerHTML = `
+    <div class="sheet intro">
+      <h3>📚 스터디버디는요</h3>
+      <p class="intro-team">🏫 국민대학교 창업동아리 <b>MateUp팀</b>이 운영해요</p>
+      <p class="small muted">국민대생끼리 1:1 공부 메이트를 이어 주는 서비스예요.</p>
+      <ol class="steps mt">
+        <li><b>매칭 신청</b><span class="small muted">날짜, 장소, 공부 스타일을 고르면 조건이 맞는 메이트와 바로 연결돼요.</span></li>
+        <li><b>함께 공부</b><span class="small muted">약속한 날 만나서 각자 공부하고, 서로의 QR을 찍어 출석을 확인해요.</span></li>
+      </ol>
+      <div class="notice mt"><span>🗓</span><span>2회차 베타: 11/3(화)·4(수)·5(목) 오후 7~9시</span></div>
+      <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a></p>
+      <button class="btn primary block mt" id="intro-ok">확인했어요</button>
+    </div>`;
+  modal.hidden = false;
+  modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+  $('#intro-ok').addEventListener('click', closeModal);
 }
 
 async function renderReset() {
