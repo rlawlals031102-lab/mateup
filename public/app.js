@@ -103,6 +103,7 @@ function every(ms, fn) {
 }
 
 function setTop({ title = '', back = null, brand = false, right = '' } = {}) {
+  topbar.hidden = false;
   topbar.innerHTML = `
     <div>${back ? `<a class="icon-btn" href="${back}" aria-label="뒤로">‹</a>` : ''}</div>
     ${brand ? '<div class="center"><img class="logo" src="logo.png" alt="스터디버디"></div>' : `<h1>${esc(title)}</h1>`}
@@ -203,7 +204,9 @@ router();
 function authShell(inner) {
   setTop({});
   setTabs(null);
+  // 로그인·가입·비밀번호 찾기 화면에는 위쪽 띠가 없다 (스크롤할 때 로고를 가리지 않게)
   topbar.innerHTML = '';
+  topbar.hidden = true;
   view.innerHTML = `
     <div class="auth">
       <img class="logo lg" src="logo.png" alt="스터디버디">
@@ -338,7 +341,7 @@ function showIntro() {
     <div class="sheet intro">
       <h3>📚 스터디버디는요</h3>
       <p class="intro-team">🏫 국민대학교 창업동아리 <b>MateUp팀</b>이 운영해요</p>
-      <p class="small muted">국민대생끼리 1:1 공부 메이트를 이어 주는 서비스예요.</p>
+      <p class="small muted">국민대생끼리 1:1 공부 메이트를 이어 주는 서비스입니다.</p>
       <ol class="steps mt">
         <li><b>매칭 신청</b><span class="small muted">날짜, 장소, 공부 스타일을 고르면 조건이 맞는 메이트와 바로 연결돼요.</span></li>
         <li><b>함께 공부</b><span class="small muted">약속한 날 만나서 각자 공부하고, 서로의 QR을 찍어 출석을 확인해요.</span></li>
