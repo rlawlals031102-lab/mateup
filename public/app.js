@@ -555,17 +555,19 @@ async function renderHome(alive) {
       </div>`;
   }
   const hasAny = matches.length || pendingRequests.length;
+  // 국민대생 '함께 공부 중' 숫자는 4명으로 고정해서 보여 준다
+  const STUDYING_SHOWN = 4;
   // 기말고사 디데이 · 국민대 통계 (매칭 전에는 첫 카드 안에, 매칭 후에는 매칭 카드 아래에)
   const dday = exam ? (exam.dday === 0 ? 'D-DAY' : `D-${exam.dday}`) : '';
   const heroStats = `
         <div class="hero-stats">
           ${exam ? `<div><span>📅 ${esc(exam.name)}까지</span><p class="stat-row"><b>${dday}</b><span>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</span></p></div>` : ''}
-          <div><span>🎓 국민대생</span><p class="stat-row"><b>${community.studying}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></p></div>
+          <div><span>🎓 국민대생</span><p class="stat-row"><b>${STUDYING_SHOWN}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></p></div>
         </div>`;
   const homeStats = `
     <div class="home-stats">
       ${exam ? `<div class="stat"><span>📅 ${esc(exam.name)}까지</span><b>${dday}</b><span>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</span></div>` : ''}
-      <div class="stat"><span>🎓 국민대생</span><b>${community.studying}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></div>
+      <div class="stat"><span>🎓 국민대생</span><b>${STUDYING_SHOWN}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></div>
     </div>`;
   const ttCard = '<section class="card" id="my-tt-card"></section>';
   // 매칭·신청이 있으면: 시간표 → 매칭 상태 카드들 → 통계
