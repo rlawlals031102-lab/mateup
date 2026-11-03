@@ -335,11 +335,8 @@ async function renderSignup() {
 }
 
 // 로그인 화면에 들어오면 스터디버디 소개 팝업을 띄운다
-function showIntro() {
-  const modal = $('#modal');
-  modal.innerHTML = `
-    <div class="sheet intro">
-      <h3>📚 스터디버디는요</h3>
+// 스터디버디 소개 (로그인 팝업·홈 진행 안내 카드 공용)
+const INTRO_BODY = `
       <p class="intro-team">🏫 국민대학교 창업동아리 <b>MateUp팀</b>이 운영해요</p>
       <p class="small muted">국민대생끼리 1:1 공부 메이트를 이어 주는 서비스입니다.</p>
       <ol class="steps mt">
@@ -347,7 +344,14 @@ function showIntro() {
         <li><b>함께 공부</b><span class="small muted">약속한 날 만나서 각자 공부하고, 서로의 QR을 찍어 출석을 확인해요.</span></li>
       </ol>
       <div class="notice mt"><span>🗓</span><span>2회차 베타: 11/3(화)·4(수)·5(목) 오후 7~9시</span></div>
-      <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a></p>
+      <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a></p>`;
+
+function showIntro() {
+  const modal = $('#modal');
+  modal.innerHTML = `
+    <div class="sheet intro">
+      <h3>📚 스터디버디는요</h3>
+      ${INTRO_BODY}
       <button class="btn primary block mt" id="intro-ok">확인했어요</button>
     </div>`;
   modal.hidden = false;
@@ -586,10 +590,7 @@ async function renderHome(alive) {
     ${main}
     <div class="card">
       <div class="card-head"><h2>스터디버디는 이렇게 진행돼요</h2></div>
-      <ol class="steps">
-        <li><b>매칭 신청</b><span class="small muted">일정과 장소, 교류 방식을 정하면 1:1로 연결돼요.</span></li>
-        <li><b>약속 이행</b><span class="small muted">정해진 날짜에 만나서 각자 공부하고, 서로의 QR을 찍어 출석을 확인해요.</span></li>
-      </ol>
+      ${INTRO_BODY}
     </div>`;
 
   // ── 내 시간표 (매칭 · 대기 · 개인 일정) + 개인 일정 편집
