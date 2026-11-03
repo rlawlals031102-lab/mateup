@@ -531,3 +531,13 @@ a.link-item:hover { background: var(--soft); }
 
 /* 홈 통계 칸: 큰 숫자 옆에 작은 설명 */
 .hero-stats .stat-row { display: flex; align-items: baseline; gap: 6px; margin: 2px 0 0; flex-wrap: wrap; }
+
+/* 신청 화면: 스터디 날짜 3일 × 19·20시 = 6칸 시간표 */
+.apply-tt { grid-template-columns: 40px repeat(3, 1fr); gap: 3px; touch-action: auto; padding-bottom: 6px; }
+.apply-tt .tt-day { font-size: 12px; color: var(--ink); }
+.apply-tt .tt-cell { height: 30px; }
+/* 시각은 칸 사이 경계(위·아래 모서리)에 붙인다 */
+.apply-tt .tt-time { position: relative; padding: 0; }
+.apply-tt .tt-time i { position: absolute; right: 4px; top: -6px; font-style: normal; font-size: 10.5px; line-height: 1; }
+.apply-tt .tt-time i.end { top: auto; bottom: -7px; }
+.apply-tt .tt-cell span { top: 50%; transform: translateY(-50%); text-align: center; font-size: 10.5px; color: var(--muted); }

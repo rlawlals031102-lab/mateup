@@ -697,19 +697,23 @@ async function renderApply(alive) {
   const state = await api('/me');
   if (!alive()) return;
   const { user } = state;
-  // 스터디 날짜(11월 1일 일 · 3일 화 · 4일 수 · 5일 목) 중 원하는 날을 여러 개 고른다.
-  // 시간은 날짜마다 정해져 있다 (화·수·목 19~21시, 11/1은 바로 시작). 지난 날짜, 이미 신청·매칭한 날짜는 고를 수 없다.
+  // 스터디 날짜(화·수·목) 19~21시를 1시간 칸으로 보여 주고, 원하는 칸을 여러 개 고른다.
+  // 이미 끝난 칸, 이미 신청·매칭한 칸은 고를 수 없다.
   const period = OPTIONS.studyPeriod;
   const taken = myTimetable(state);
+  const slots = OPTIONS.timeSlots.map((s, i) => ({ ...s, i }))
+    .filter((s) => toMinutes(s.start) >= toMinutes(period.start) && toMinutes(s.end) <= toMinutes(period.end));
   const studyDays = period.dates.map((date) => {
     const day = new Date(`${date}T00:00:00`).getDay() || 7;
-    const time = period.times?.[date] ?? period;
-    const over = new Date(`${date}T00:00:00+09:00`).getTime() + toMinutes(time.end) * 60000 <= Date.now();
-    const busy = [...taken.keys()].some((c) => c.startsWith(`${day}-`) && taken.get(c).kind !== 'personal');
-    const when = time.label ?? `${fmtTime(time.start)} ~ ${fmtTime(time.end)}`;
-    return { date, day, disabled: over || busy, note: over ? '지남' : busy ? '신청함' : when };
+    const cells = slots.map((s) => {
+      const cell = `${day}-${s.i}`;
+      const over = new Date(`${date}T00:00:00+09:00`).getTime() + toMinutes(s.end) * 60000 <= Date.now();
+      const busy = taken.has(cell) && taken.get(cell).kind !== 'personal';
+      return { cell, start: s.start, disabled: over || busy, note: over ? '지남' : busy ? '신청함' : '' };
+    });
+    return { date, day, cells };
   });
-  const form = { location: null, styles: new Set(), days: new Set() };
+  const form = { location: null, styles: new Set(), cells: new Set() };
 
   view.innerHTML = `
     <section class="card">
@@ -726,11 +730,12 @@ async function renderApply(alive) {
     <section class="card">
       <div class="card-head"><h2>📅 공부 일정 및 장소 설정</h2></div>
       <div class="field"><span>공부할 날짜 (중복 선택 가능)</span>
-        <div class="style-picker" id="days">
-          ${studyDays.map((d) => `
-            <button type="button" data-day="${d.day}" aria-pressed="${form.days.has(d.day)}"${d.disabled ? ' disabled' : ''}>
-              <b>${Number(d.date.slice(5, 7))}월 ${Number(d.date.slice(8))}일 (${WD[d.day]})</b><small>${esc(d.note)}</small>
-            </button>`).join('')}
+        <div class="tt apply-tt" id="days">
+          <div class="tt-corner"></div>${studyDays.map((d) => `<div class="tt-day">${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8))} (${WD[d.day]})</div>`).join('')}
+          ${slots.map((s, k) => `
+            <div class="tt-time"><i>${s.start}</i>${k === slots.length - 1 ? `<i class="end">${s.end}</i>` : ''}</div>
+            ${studyDays.map((d) => `<button type="button" class="tt-cell" data-cell="${d.cells[k].cell}" aria-pressed="false"${d.cells[k].disabled ? ' disabled' : ''}
+              aria-label="${WD[d.day]} ${s.start}">${d.cells[k].note ? `<span>${d.cells[k].note}</span>` : ''}</button>`).join('')}`).join('')}
         </div>
       </div>
       <div class="field"><span>장소 설정</span>
@@ -765,9 +770,9 @@ async function renderApply(alive) {
   $('#days').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b || b.disabled) return;
-    const d = Number(b.dataset.day);
-    form.days.has(d) ? form.days.delete(d) : form.days.add(d);
-    b.setAttribute('aria-pressed', form.days.has(d));
+    const c = b.dataset.cell;
+    form.cells.has(c) ? form.cells.delete(c) : form.cells.add(c);
+    b.setAttribute('aria-pressed', form.cells.has(c));
   });
   // 장소는 하나만 고른다
   $('#loc').addEventListener('click', (e) => {
@@ -783,7 +788,7 @@ async function renderApply(alive) {
       // 바로 매칭되더라도 메이트를 찾는 화면을 3초 동안 보여 준다
       const res = await withLoading('🔍', '메이트를 찾는 중이에요', () => api('/requests', {
         method: 'POST',
-        body: { days: [...form.days], location: form.location, styles: [...form.styles] },
+        body: { days: [...new Set([...form.cells].map((c) => Number(c.split('-')[0])))], cells: [...form.cells], location: form.location, styles: [...form.styles] },
       }));
       if (res.matchId) {
         toast('🎉 바로 메이트를 찾았어요!');

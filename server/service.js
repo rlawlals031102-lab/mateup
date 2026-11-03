@@ -458,16 +458,19 @@ export function validateRequest(input) {
   if (!days.length) throw new AppError(400, '공부할 날짜를 하나 이상 골라 주세요.');
   if (days.some((d) => !studyDateOfDay(d))) throw new AppError(400, '스터디 날짜 중에서 골라 주세요.');
   if (days.some((d) => !remaining.includes(studyDateOfDay(d)))) throw new AppError(400, '이미 지난 날짜는 고를 수 없어요.');
-  const cells = studyCellsFor(days);
+  // 시간표 칸(1시간 단위)을 보내면 그 칸만, 안 보내면 고른 날짜의 스터디 시간 전체
+  const allowed = studyCellsFor(days);
+  const cells = input.cells ? [...new Set(input.cells)].filter((c) => allowed.includes(c)) : allowed;
+  if (!cells.length) throw new AppError(400, '공부할 시간을 하나 이상 골라 주세요.');
   if (!LOCATIONS.includes(input.location)) throw new AppError(400, '장소를 골라 주세요.');
   const styles = [...new Set(input.styles ?? [])];
   if (!styles.length || styles.some((s) => !STYLES[s])) {
     throw new AppError(400, '공부 스타일을 하나 이상 골라 주세요.');
   }
-  const times = days.map((d) => studyTimeOf(studyDateOfDay(d)));
-  const startTime = T.fromMin(Math.min(...times.map((t) => T.toMin(t.start))));
-  const endTime = T.fromMin(Math.max(...times.map((t) => T.toMin(t.end))));
-  return { cells, days, startTime, endTime, location: input.location, styles, deposit: 0 };
+  const runs = runsOf(cells);
+  const startTime = T.fromMin(Math.min(...runs.map((r) => T.toMin(r.start))));
+  const endTime = T.fromMin(Math.max(...runs.map((r) => T.toMin(r.end))));
+  return { cells, days: [...new Set(runs.map((r) => r.day))], startTime, endTime, location: input.location, styles, deposit: 0 };
 }
 
 // 두 신청이 매칭 가능한지 판단하고, 가능하면 합의 조건과 점수를 돌려준다.
