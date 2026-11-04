@@ -30,6 +30,21 @@ test('compatibility: 장소·요일·시간·스타일 조건', () => {
   assert.equal(S.compatibility(a, { ...b, days: [2] }), null);
   assert.equal(S.compatibility(a, { ...b, start_time: '20:30' }), null, '겹치는 시간 1시간 미만');
   assert.equal(S.compatibility(a, { ...b, styles: ['social'] }), null);
+
+  // 장소 여러 개: 하나라도 겹치면 매칭, 겹치는 게 여럿이면 강의실 우선
+  const both = { locations: ['채팅으로 정하기', ROOM] };
+  assert.equal(S.compatibility({ ...a, ...both }, b).location, ROOM);
+  assert.equal(S.compatibility({ ...a, ...both }, { ...b, location: '채팅으로 정하기' }).location, '채팅으로 정하기');
+  assert.equal(S.compatibility({ ...a, ...both }, { ...b, ...both }).location, ROOM);
+});
+
+test('신청 검증: 장소는 여러 개 고를 수 있음', () => {
+  setNow(kst(2026, 10, 31, 9, 0));
+  const r = S.validateRequest({ ...baseReq, location: undefined, locations: [ROOM, '채팅으로 정하기'] });
+  assert.deepEqual(r.locations, ['채팅으로 정하기', ROOM]);
+  assert.throws(() => S.validateRequest({ ...baseReq, location: undefined, locations: [] }), /장소/);
+  assert.throws(() => S.validateRequest({ ...baseReq, location: undefined, locations: [ROOM, '국민대 성곡도서관'] }), /장소/);
+  setNow(null);
 });
 
 test('신청 검증: 화·수·목 중 원하는 날짜, 시간은 19~21시 고정, 보증금 없음', () => {
@@ -464,6 +479,17 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal((await S.userByToken(db, token)).name, 'a');
       await S.logout(db, token);
       assert.equal(await S.userByToken(db, token), null);
+    });
+
+    test('장소 여러 개로 신청: 겹치는 장소로 매칭', async () => {
+      const a = await signup('a');
+      const b = await signup('b');
+      const { request } = await S.createRequest(db, a, { ...baseReq, location: undefined, locations: ['채팅으로 정하기', ROOM] });
+      assert.deepEqual(request.locations, ['채팅으로 정하기', ROOM]);
+      assert.equal(request.location, `채팅으로 정하기 · ${ROOM}`);
+      const { matchId } = await S.createRequest(db, b, { ...baseReq, location: '채팅으로 정하기' });
+      assert.ok(matchId);
+      assert.equal((await S.currentMatch(db, a)).location, '채팅으로 정하기');
     });
 
     test('개발자 화면: 운영자만, 실제 사용자 기준 집계', async () => {

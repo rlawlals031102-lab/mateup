@@ -21,12 +21,17 @@ const iso = () => T.now().toISOString();
 
 // ───────────────────────── 직렬화 ─────────────────────────
 
+// 신청 장소: 여러 개를 고를 수 있어 JSON 배열로 저장한다. 예전 신청·데모 메이트는 장소 하나(문자열).
+const locationsOf = (x) => x.locations
+  ?? (String(x.location ?? '').startsWith('[') ? JSON.parse(x.location) : [x.location]);
+
 const parseRequest = (r) => {
   if (!r) return r;
   const days = JSON.parse(r.days);
   // cells: 시간표에서 고른 칸 ["요일-시간대번호", ...]. 예전 신청·데모 메이트는 요일 × 시간 범위로 만든다.
   const cells = r.cells ? JSON.parse(r.cells) : cellsFromRange(days, r.start_time, r.end_time);
-  return { ...r, days, styles: JSON.parse(r.styles), cells, schedule: runsOf(cells) };
+  const locations = locationsOf(r);
+  return { ...r, days, styles: JSON.parse(r.styles), cells, schedule: runsOf(cells), locations, location: locations.join(' · ') };
 };
 const parseMatch = (m) => m && {
   ...m,
@@ -463,7 +468,10 @@ export function validateRequest(input) {
   const allowed = studyCellsFor(days);
   const cells = input.cells ? [...new Set(input.cells)].filter((c) => allowed.includes(c)) : allowed;
   if (!cells.length) throw new AppError(400, '공부할 시간을 하나 이상 골라 주세요.');
-  if (!LOCATIONS.includes(input.location)) throw new AppError(400, '장소를 골라 주세요.');
+  // 장소는 여러 개 고를 수 있다 (locations). 예전 방식(location 하나)도 받는다.
+  const picked = input.locations ?? (input.location ? [input.location] : []);
+  const locations = LOCATIONS.filter((l) => picked.includes(l));
+  if (!locations.length || locations.length !== new Set(picked).size) throw new AppError(400, '장소를 골라 주세요.');
   const styles = [...new Set(input.styles ?? [])];
   if (!styles.length || styles.some((s) => !STYLES[s])) {
     throw new AppError(400, '공부 스타일을 하나 이상 골라 주세요.');
@@ -471,13 +479,20 @@ export function validateRequest(input) {
   const runs = runsOf(cells);
   const startTime = T.fromMin(Math.min(...runs.map((r) => T.toMin(r.start))));
   const endTime = T.fromMin(Math.max(...runs.map((r) => T.toMin(r.end))));
-  return { cells, days: [...new Set(runs.map((r) => r.day))], startTime, endTime, location: input.location, styles, deposit: 0 };
+  return {
+    cells, days: [...new Set(runs.map((r) => r.day))], startTime, endTime,
+    locations, location: locations.join(' · '), styles, deposit: 0,
+  };
 }
 
 // 두 신청이 매칭 가능한지 판단하고, 가능하면 합의 조건과 점수를 돌려준다.
-// 조건: 같은 장소, 겹치는 요일 1개 이상, 겹치는 시간 1시간 이상, 공통 스타일 1개 이상.
+// 조건: 겹치는 장소 1개 이상, 겹치는 요일 1개 이상, 겹치는 시간 1시간 이상, 공통 스타일 1개 이상.
+// 겹치는 장소가 여럿이면 정해진 장소(강의실 등)를 '채팅으로 정하기'보다 먼저 고른다.
 export function compatibility(a, b) {
-  if (a.location !== b.location) return null;
+  const locsB = locationsOf(b);
+  const commonLocs = LOCATIONS.filter((l) => locationsOf(a).includes(l) && locsB.includes(l));
+  if (!commonLocs.length) return null;
+  const location = commonLocs.find((l) => l !== '채팅으로 정하기') ?? commonLocs[0];
   // 시간표에서 둘 다 고른 칸 → 요일마다 가장 길게 이어진 시간이 그날 약속 (1시간 이상)
   const cellsA = a.cells ?? cellsFromRange(a.days, a.start_time ?? a.startTime, a.end_time ?? a.endTime);
   const cellsB = new Set(b.cells ?? cellsFromRange(b.days, b.start_time ?? b.startTime, b.end_time ?? b.endTime));
@@ -491,7 +506,7 @@ export function compatibility(a, b) {
     schedule: schedule.map(({ day, start, end }) => ({ day, start, end })),
     startTime: T.fromMin(Math.min(...schedule.map((r) => T.toMin(r.start)))),
     endTime: T.fromMin(Math.max(...schedule.map((r) => T.toMin(r.end)))),
-    location: a.location,
+    location,
     styles,
     overlapMin: schedule.reduce((sum, r) => sum + r.minutes, 0), // 약속으로 잡히는 시간 합계
     overlapCells: common.length, // 시간표에서 겹치는 칸 수 (매칭 우선순위)
@@ -529,7 +544,7 @@ export async function createRequest(db, userId, input) {
       const { rows } = await t.run(
         `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, cells, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-        userId, JSON.stringify(req.days), req.startTime, req.endTime, req.location,
+        userId, JSON.stringify(req.days), req.startTime, req.endTime, JSON.stringify(req.locations),
         JSON.stringify(req.styles), req.deposit, JSON.stringify(req.cells), iso(),
       );
       const match = await tryMatch(t, rows[0].id);
@@ -559,9 +574,9 @@ async function tryMatch(db, requestId) {
   const req = parseRequest(await db.get('SELECT * FROM match_requests WHERE id = ?', requestId));
   const candidates = (await db.all(
     `SELECT r.*, u.is_bot AS u_bot, u.email AS u_email FROM match_requests r JOIN users u ON u.id = r.user_id
-     WHERE r.status = 'pending' AND r.user_id != ? AND r.location = ? ORDER BY r.id`,
-    req.user_id, req.location,
-  )).map(parseRequest);
+     WHERE r.status = 'pending' AND r.user_id != ? ORDER BY r.id`,
+    req.user_id,
+  )).map(parseRequest); // 장소는 여러 개일 수 있어 compatibility에서 겹치는지 본다
   // 공용 데모 계정은 데모 메이트하고만, 실제 사용자는 실제 사용자하고만 매칭한다.
   // (보증금이 없어진 뒤로 데모 메이트가 실제 스터디 신청을 가져가지 않도록)
   const me = await getUser(db, req.user_id);

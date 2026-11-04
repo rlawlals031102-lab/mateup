@@ -757,7 +757,7 @@ async function renderApply(alive) {
     });
     return { date, day, cells };
   });
-  const form = { location: null, styles: new Set(), cells: new Set() };
+  const form = { locations: new Set(), styles: new Set(), cells: new Set() };
 
   view.innerHTML = `
     <section class="card">
@@ -773,7 +773,7 @@ async function renderApply(alive) {
 
     <section class="card">
       <div class="card-head"><h2>📅 공부 일정 및 장소 설정</h2></div>
-      <div class="field"><span>공부할 날짜 (중복 선택 가능)</span>
+      <div class="field"><span>공부할 시간 (중복 선택 가능)</span>
         <div class="tt apply-tt" id="days">
           <div class="tt-corner"></div>${studyDays.map((d) => `<div class="tt-day">${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8))} (${WD[d.day]})</div>`).join('')}
           ${slots.map((s, k) => `
@@ -782,7 +782,7 @@ async function renderApply(alive) {
               aria-label="${WD[d.day]} ${s.start}">${d.cells[k].note ? `<span>${d.cells[k].note}</span>` : ''}</button>`).join('')}`).join('')}
         </div>
       </div>
-      <div class="field"><span>장소 설정</span>
+      <div class="field"><span>장소 설정 (중복 선택 가능)</span>
         <div class="style-picker" id="loc" style="grid-template-columns:repeat(2, 1fr)">
           ${OPTIONS.locations.map((l) => {
             const [, name, sub] = l.match(/^(.*?)\s*\((.*)\)$/) ?? [null, l, ''];
@@ -818,12 +818,13 @@ async function renderApply(alive) {
     form.cells.has(c) ? form.cells.delete(c) : form.cells.add(c);
     b.setAttribute('aria-pressed', form.cells.has(c));
   });
-  // 장소는 하나만 고른다
+  // 장소는 여러 개 고를 수 있다
   $('#loc').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    form.location = b.dataset.loc;
-    $$('#loc button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+    const l = b.dataset.loc;
+    form.locations.has(l) ? form.locations.delete(l) : form.locations.add(l);
+    b.setAttribute('aria-pressed', form.locations.has(l));
   });
 
   $('#submit').addEventListener('click', async (e) => {
@@ -832,7 +833,7 @@ async function renderApply(alive) {
       // 바로 매칭되더라도 메이트를 찾는 화면을 3초 동안 보여 준다
       const res = await withLoading('🔍', '메이트를 찾는 중이에요', () => api('/requests', {
         method: 'POST',
-        body: { days: [...new Set([...form.cells].map((c) => Number(c.split('-')[0])))], cells: [...form.cells], location: form.location, styles: [...form.styles] },
+        body: { days: [...new Set([...form.cells].map((c) => Number(c.split('-')[0])))], cells: [...form.cells], locations: [...form.locations], styles: [...form.styles] },
       }));
       if (res.matchId) {
         toast('🎉 바로 메이트를 찾았어요!');
