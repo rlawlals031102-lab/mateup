@@ -3,7 +3,8 @@ import { isUniqueViolation } from './db.js';
 import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
-  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAIL,
+  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD,
+  DEPOSIT_OPTIONS, PHOTO_MAX_BYTES, ADMIN_EMAIL,
 } from './options.js';
 
 // 모든 함수는 첫 인자로 db(server/db.js 인터페이스)를 받는다.
@@ -21,7 +22,7 @@ const iso = () => T.now().toISOString();
 
 // ───────────────────────── 직렬화 ─────────────────────────
 
-// 신청 장소: 여러 개를 고를 수 있어 JSON 배열로 저장한다. 예전 신청·데모 메이트는 장소 하나(문자열).
+// 신청 장소: 여러 개를 고를 수 있어 JSON 배열로 저장한다. 예전 신청·데모 메이트·다음 주 이어가기는 장소 하나(문자열).
 const locationsOf = (x) => x.locations
   ?? (String(x.location ?? '').startsWith('[') ? JSON.parse(x.location) : [x.location]);
 
@@ -102,11 +103,15 @@ export const publicUser = (u) => u && {
   tags: JSON.parse(u.tags),
   bio: u.bio,
   avatar: u.avatar,
+  photo: u.photo_id ? `/api/photos/${u.photo_id}` : null, // 프로필 사진 (없으면 아바타 이모지)
   isBot: !!u.is_bot && !!u.bot_template, // 체험용 데모 메이트 (화면에 "가상 인물"로 표시)
 };
 
 export const privateUser = (u) => u && {
   ...publicUser(u), email: u.email, department: u.department ?? null, phone: u.phone ?? null,
+  // 보증금 환급 계좌 (본인·운영자만 봄)
+  refund: u.refund_account ? { bank: u.refund_bank, account: u.refund_account, holder: u.refund_holder } : null,
+  // 운영자 여부 (기본 ADMIN_EMAIL). 환경 변수 ADMIN_EMAILS 까지 포함한 최종 판단은 server/app.js 가 한다.
   isAdmin: u.email === ADMIN_EMAIL,
 };
 
@@ -185,7 +190,8 @@ const NO_POLICY = { domain: null, verify: false };
 function normalizeEmail(email, policy = NO_POLICY) {
   const e = String(email ?? '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new AppError(400, '이메일 형식이 올바르지 않습니다.');
-  if (policy.domain && !e.endsWith(`@${policy.domain}`)) {
+  // 운영진(ADMIN_EMAILS)은 학교 메일이 아니어도 가입·로그인할 수 있다.
+  if (policy.domain && !e.endsWith(`@${policy.domain}`) && !policy.extraEmails?.has(e)) {
     throw new AppError(400, `국민대학교 메일(@${policy.domain})만 사용할 수 있어요.`);
   }
   return e;
@@ -198,6 +204,8 @@ const checkPassword = (password) => {
 const hashCode = (email, code) => crypto.createHash('sha256').update(`${email}:${code}`).digest('hex');
 
 // 인증번호 메일 보내기. purpose: 'signup'(가입) | 'reset'(비밀번호 찾기)
+// 메일을 먼저 보내 보고, 보내지 못하면 방금 만든 인증번호를 지운다.
+// (예전에는 실패해도 인증번호가 남아 60초 동안 다시 받을 수 없었고, 그 전에 받은 번호도 무효가 됐다)
 export async function requestEmailCode(db, mailer, { email, purpose }, policy = NO_POLICY) {
   if (!['signup', 'reset'].includes(purpose)) throw new AppError(400, '요청이 올바르지 않습니다.');
   const e = normalizeEmail(email, policy);
@@ -217,40 +225,76 @@ export async function requestEmailCode(db, mailer, { email, purpose }, policy = 
 
   const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
   const expires = new Date(T.now().getTime() + EMAIL_CODE_TTL_MIN * 60000).toISOString();
-  await db.run("UPDATE email_codes SET used = 1 WHERE email = ? AND purpose = ? AND used = 0", e, purpose);
-  await db.run(
-    'INSERT INTO email_codes (email, purpose, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)',
+  const { rows } = await db.run(
+    'INSERT INTO email_codes (email, purpose, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id',
     e, purpose, hashCode(e, code), expires, iso(),
   );
+  const codeId = rows[0].id;
 
   const what = purpose === 'signup' ? '회원가입' : '비밀번호 재설정';
-  await mailer.send({
-    to: e,
-    subject: `[스터디버디] ${what} 인증번호 ${code}`,
-    text: `스터디버디 ${what} 인증번호는 ${code} 입니다.\n${EMAIL_CODE_TTL_MIN}분 안에 입력해 주세요.\n\n본인이 요청하지 않았다면 이 메일을 무시하세요.`,
-    html: `<div style="font-family:sans-serif;max-width:420px;margin:auto;padding:24px;border:1px solid #dde4d5;border-radius:16px">
+  try {
+    const sent = await mailer.send({
+      to: e,
+      subject: `[스터디버디] ${what} 인증번호 ${code}`,
+      text: `스터디버디 ${what} 인증번호는 ${code} 입니다.\n${EMAIL_CODE_TTL_MIN}분 안에 입력해 주세요.\n\n본인이 요청하지 않았다면 이 메일을 무시하세요.`,
+      html: `<div style="font-family:sans-serif;max-width:420px;margin:auto;padding:24px;border:1px solid #dde4d5;border-radius:16px">
       <p style="color:#315443;font-weight:800;margin:0 0 12px">STUDY BUDDY</p>
       <p>스터디버디 ${what} 인증번호입니다.</p>
       <p style="font-size:32px;font-weight:800;letter-spacing:6px;color:#203829;margin:16px 0">${code}</p>
       <p style="color:#5f6b5c;font-size:13px">${EMAIL_CODE_TTL_MIN}분 안에 입력해 주세요. 본인이 요청하지 않았다면 이 메일을 무시하세요.</p>
     </div>`,
-  });
+    });
+    await logEmail(db, { email: e, purpose, status: 'sent', provider: sent?.provider, attempts: sent?.attempts ?? 1 });
+  } catch (err) {
+    await db.run('DELETE FROM email_codes WHERE id = ?', codeId);
+    await logEmail(db, {
+      email: e, purpose, status: 'failed', provider: err.provider, attempts: err.attempts ?? 1,
+      error: String(err.response ?? err.message ?? err).slice(0, 300),
+    });
+    throw new AppError(502, "인증 메일을 보내지 못했어요. 잠시 후 다시 받거나, '메일이 안 와요'를 눌러 운영진에게 알려 주세요.");
+  }
   return { sent: true };
 }
 
-// 인증번호 확인. 틀리면 시도 횟수를 올리고(트랜잭션 밖에서 기록되도록 여기서 처리), 맞으면 코드 id를 돌려준다.
+const logEmail = (db, { email, purpose, status, provider = null, attempts = 1, error = null }) => db.run(
+  'INSERT INTO email_logs (email, purpose, status, provider, attempts, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  email, purpose, status, provider ?? null, attempts, error, iso(),
+).catch(() => {}); // 기록 실패가 가입을 막지 않게
+
+// 인증번호 확인. 유효 시간 안에 받은 번호라면 가장 최근 것이 아니어도 받아 준다.
+// (메일이 늦게 도착해 '다시 받기'를 누른 뒤 먼저 온 번호를 넣는 경우가 있다)
+// 틀리면 가장 최근 번호의 시도 횟수를 올리고, 맞으면 그 번호의 id를 돌려준다.
 async function verifyEmailCode(db, email, purpose, code) {
-  const row = await db.get(
-    'SELECT * FROM email_codes WHERE email = ? AND purpose = ? AND used = 0 ORDER BY id DESC LIMIT 1', email, purpose,
+  const rows = await db.all(
+    'SELECT * FROM email_codes WHERE email = ? AND purpose = ? AND used = 0 ORDER BY id DESC LIMIT 5', email, purpose,
   );
-  if (!row || new Date(row.expires_at) <= T.now()) throw new AppError(400, '인증번호를 다시 받아 주세요.');
-  if (row.attempts >= EMAIL_CODE_MAX_ATTEMPTS) throw new AppError(400, '입력 횟수를 넘었어요. 인증번호를 다시 받아 주세요.');
-  if (hashCode(email, String(code ?? '').trim()) !== row.code_hash) {
-    await db.run('UPDATE email_codes SET attempts = attempts + 1 WHERE id = ?', row.id);
-    const left = EMAIL_CODE_MAX_ATTEMPTS - row.attempts - 1;
+  const live = rows.filter((r) => new Date(r.expires_at) > T.now());
+  if (!live.length) throw new AppError(400, '인증번호를 다시 받아 주세요.');
+  const latest = live[0];
+  if (latest.attempts >= EMAIL_CODE_MAX_ATTEMPTS) throw new AppError(400, '입력 횟수를 넘었어요. 인증번호를 다시 받아 주세요.');
+  const hash = hashCode(email, String(code ?? '').trim());
+  const hit = live.find((r) => r.code_hash === hash);
+  if (!hit) {
+    await db.run('UPDATE email_codes SET attempts = attempts + 1 WHERE id = ?', latest.id);
+    const left = EMAIL_CODE_MAX_ATTEMPTS - latest.attempts - 1;
     throw new AppError(400, left > 0 ? `인증번호가 맞지 않아요. (${left}번 남음)` : '입력 횟수를 넘었어요. 인증번호를 다시 받아 주세요.');
   }
-  return row.id;
+  return hit.id;
+}
+
+// '메일이 안 와요' 도움 요청. 운영진이 전화 등으로 본인을 확인한 뒤 인증번호를 직접 알려 준다.
+export async function requestEmailHelp(db, { email, purpose, name, phone }, policy = NO_POLICY) {
+  if (!['signup', 'reset'].includes(purpose)) throw new AppError(400, '요청이 올바르지 않습니다.');
+  const e = normalizeEmail(email, policy);
+  const n = String(name ?? '').trim().slice(0, 20);
+  if (!n) throw new AppError(400, '이름을 입력해 주세요.');
+  const p = normalizePhone(phone);
+  const open = await db.get("SELECT id FROM email_help WHERE email = ? AND status = 'open'", e);
+  if (open) return { ok: true, already: true };
+  await db.run(
+    'INSERT INTO email_help (email, purpose, name, phone, created_at) VALUES (?, ?, ?, ?, ?)', e, purpose, n, p, iso(),
+  );
+  return { ok: true };
 }
 
 export async function signup(db, { email, password, name, age, department, phone, code }, policy = NO_POLICY) {
@@ -456,18 +500,27 @@ export const studyCellsFor = (days) => days.flatMap((d) => {
 const remainingStudyDates = () => STUDY_PERIOD.dates.filter((d) => T.at(d, studyTimeOf(d).end) > T.now());
 
 // 날짜는 스터디 날짜(일·화·수·목) 중 원하는 날을 여러 개 고르고, 시간은 날짜마다 정해져 있다
-// (화·수·목 19~21시, 11/1 일요일은 바로 시작). days: 요일 번호(7=일, 2=화, 3=수, 4=목). 보증금은 없다.
-export function validateRequest(input) {
+// (화·수·목 19~21시). days: 요일 번호(1=월 … 7=일).
+// 보증금(계좌이체)은 운영진 계좌가 설정된 경우(deposits: true)에만 받는다. 아니면 항상 0.
+// cells: 고른 1시간 칸 ["요일-시간대번호", ...] (예: 화 19–20시 = "2-7"). 없으면 고른 날짜(days)의 모든 칸.
+export function validateRequest(input, { deposits = false } = {}) {
   const remaining = remainingStudyDates();
   if (!remaining.length) throw new AppError(400, '이번 스터디 기간이 끝나서 신청할 수 없어요.');
-  const days = [...new Set((input.days ?? []).map(Number))].sort((a, b) => a - b);
-  if (!days.length) throw new AppError(400, '공부할 날짜를 하나 이상 골라 주세요.');
-  if (days.some((d) => !studyDateOfDay(d))) throw new AppError(400, '스터디 날짜 중에서 골라 주세요.');
-  if (days.some((d) => !remaining.includes(studyDateOfDay(d)))) throw new AppError(400, '이미 지난 날짜는 고를 수 없어요.');
-  // 시간표 칸(1시간 단위)을 보내면 그 칸만, 안 보내면 고른 날짜의 스터디 시간 전체
-  const allowed = studyCellsFor(days);
-  const cells = input.cells ? [...new Set(input.cells)].filter((c) => allowed.includes(c)) : allowed;
-  if (!cells.length) throw new AppError(400, '공부할 시간을 하나 이상 골라 주세요.');
+  let cells = Array.isArray(input.cells) && input.cells.length
+    ? [...new Set(input.cells.map(String))]
+    : studyCellsFor([...new Set((input.days ?? []).map(Number))]);
+  if (!cells.length) throw new AppError(400, '공부할 날짜와 시간을 하나 이상 골라 주세요.');
+  for (const c of cells) {
+    const [d, i] = parseCell(c);
+    const date = studyDateOfDay(d);
+    if (!date) throw new AppError(400, '스터디 날짜 중에서 골라 주세요.');
+    if (!studyCellsFor([d]).includes(c)) throw new AppError(400, '시간은 스터디 시간 안의 1시간 칸에서 골라 주세요.');
+    if (!remaining.includes(date) || T.at(date, TIME_SLOTS[i].start) <= T.now()) {
+      throw new AppError(400, '이미 지난 날짜·시간은 고를 수 없어요.');
+    }
+  }
+  cells = cells.sort((a, b) => parseCell(a)[0] - parseCell(b)[0] || parseCell(a)[1] - parseCell(b)[1]);
+  const days = [...new Set(cells.map((c) => parseCell(c)[0]))];
   // 장소는 여러 개 고를 수 있다 (locations). 예전 방식(location 하나)도 받는다.
   const picked = input.locations ?? (input.location ? [input.location] : []);
   const locations = LOCATIONS.filter((l) => picked.includes(l));
@@ -476,13 +529,37 @@ export function validateRequest(input) {
   if (!styles.length || styles.some((s) => !STYLES[s])) {
     throw new AppError(400, '공부 스타일을 하나 이상 골라 주세요.');
   }
-  const runs = runsOf(cells);
-  const startTime = T.fromMin(Math.min(...runs.map((r) => T.toMin(r.start))));
-  const endTime = T.fromMin(Math.max(...runs.map((r) => T.toMin(r.end))));
-  return {
-    cells, days: [...new Set(runs.map((r) => r.day))], startTime, endTime,
-    locations, location: locations.join(' · '), styles, deposit: 0,
-  };
+  const slots = cells.map((c) => TIME_SLOTS[parseCell(c)[1]]);
+  const startTime = T.fromMin(Math.min(...slots.map((t) => T.toMin(t.start))));
+  const endTime = T.fromMin(Math.max(...slots.map((t) => T.toMin(t.end))));
+  let deposit = 0;
+  if (deposits && Number(input.deposit)) {
+    deposit = Number(input.deposit);
+    if (!DEPOSIT_OPTIONS.includes(deposit)) throw new AppError(400, '보증금 금액을 다시 골라 주세요.');
+  }
+  return { cells, days, startTime, endTime, locations, location: locations.join(' · '), styles, deposit };
+}
+
+// 환급 계좌 확인 (보증금을 걸 때 필수)
+function validateRefund(refund) {
+  const bank = String(refund?.bank ?? '').trim().slice(0, 20);
+  const account = String(refund?.account ?? '').replace(/[^\d-]/g, '').slice(0, 30);
+  const holder = String(refund?.holder ?? '').trim().slice(0, 20);
+  if (!bank || account.replace(/\D/g, '').length < 6 || !holder) {
+    throw new AppError(400, '보증금을 돌려받을 계좌(은행·계좌번호·예금주)를 입력해 주세요.');
+  }
+  return { bank, account, holder };
+}
+
+// 운영진이 주고받을 돈을 장부에 남긴다. (데모 메이트·0원은 기록하지 않음)
+async function recordMoney(db, { userId, kind, amount, reason, matchId = null, requestId = null, status = 'todo' }) {
+  if (!amount) return;
+  if ((await getUser(db, userId))?.is_bot) return;
+  await db.run(
+    `INSERT INTO money_logs (user_id, kind, amount, status, reason, request_id, match_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    userId, kind, amount, status, reason, requestId, matchId, iso(),
+  );
 }
 
 // 두 신청이 매칭 가능한지 판단하고, 가능하면 합의 조건과 점수를 돌려준다.
@@ -493,6 +570,8 @@ export function compatibility(a, b) {
   const commonLocs = LOCATIONS.filter((l) => locationsOf(a).includes(l) && locsB.includes(l));
   if (!commonLocs.length) return null;
   const location = commonLocs.find((l) => l !== '채팅으로 정하기') ?? commonLocs[0];
+  // 보증금을 건 사람은 보증금을 건 사람끼리 (금액이 다르면 낮은 쪽에 맞추고 차액은 돌려준다)
+  if ((Number(a.deposit) > 0) !== (Number(b.deposit) > 0)) return null;
   // 시간표에서 둘 다 고른 칸 → 요일마다 가장 길게 이어진 시간이 그날 약속 (1시간 이상)
   const cellsA = a.cells ?? cellsFromRange(a.days, a.start_time ?? a.startTime, a.end_time ?? a.endTime);
   const cellsB = new Set(b.cells ?? cellsFromRange(b.days, b.start_time ?? b.startTime, b.end_time ?? b.endTime));
@@ -519,8 +598,9 @@ export async function pendingRequest(db, userId) {
 
 // 대기 중인 신청 모두 (겹치지 않는 시간대로 여러 개 신청할 수 있다)
 export async function pendingRequests(db, userId) {
-  return (await db.all("SELECT * FROM match_requests WHERE user_id = ? AND status = 'pending' ORDER BY id", userId))
-    .map(parseRequest);
+  return (await db.all(
+    "SELECT * FROM match_requests WHERE user_id = ? AND status IN ('pending', 'awaiting_deposit') ORDER BY id", userId,
+  )).map(parseRequest);
 }
 
 // 이미 신청했거나 매칭된 시간표 칸 (새 신청은 이 칸과 겹칠 수 없다)
@@ -533,20 +613,35 @@ export async function busyCells(db, userId) {
   return set;
 }
 
-export async function createRequest(db, userId, input) {
-  const req = validateRequest(input);
+export async function createRequest(db, userId, input, { deposits = false } = {}) {
+  const req = validateRequest(input, { deposits });
+  const refund = req.deposit ? validateRefund(input.refund) : null;
+  const depositor = req.deposit ? (String(input.depositor ?? '').trim().slice(0, 20) || null) : null;
   try {
     return await db.tx(async (t) => {
       const busy = await busyCells(t, userId);
       if (req.cells.some((c) => busy.has(c))) {
         throw new AppError(409, '고른 날짜에 이미 신청했거나 매칭됐어요. 다른 날짜를 골라 주세요.');
       }
+      const me = await getUser(t, userId);
       const { rows } = await t.run(
-        `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, cells, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, cells, status, depositor, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
         userId, JSON.stringify(req.days), req.startTime, req.endTime, JSON.stringify(req.locations),
-        JSON.stringify(req.styles), req.deposit, JSON.stringify(req.cells), iso(),
+        JSON.stringify(req.styles), req.deposit, JSON.stringify(req.cells),
+        req.deposit ? 'awaiting_deposit' : 'pending', req.deposit ? (depositor ?? me.name) : null, iso(),
       );
+      if (req.deposit) {
+        // 보증금 신청: 운영진이 입금을 확인한 뒤에 매칭 대기열에 들어간다.
+        await t.run('UPDATE users SET refund_bank = ?, refund_account = ?, refund_holder = ? WHERE id = ?',
+          refund.bank, refund.account, refund.holder, userId);
+        await recordMoney(t, { userId, kind: 'deposit', amount: req.deposit, reason: '보증금 입금', requestId: rows[0].id });
+        return {
+          request: parseRequest(await t.get('SELECT * FROM match_requests WHERE id = ?', rows[0].id)),
+          matchId: null,
+          awaitingDeposit: true,
+        };
+      }
       const match = await tryMatch(t, rows[0].id);
       const request = match ? null : parseRequest(await t.get('SELECT * FROM match_requests WHERE id = ?', rows[0].id));
       return { request, matchId: match?.id ?? null };
@@ -561,13 +656,27 @@ export async function createRequest(db, userId, input) {
 export async function cancelRequest(db, userId, requestId = null) {
   return db.tx(async (t) => {
     const target = requestId ?? (await pendingRequest(t, userId))?.id ?? 0;
+    const before = await t.get('SELECT status FROM match_requests WHERE id = ? AND user_id = ?', target, userId);
     const { rows } = await t.run(
-      "UPDATE match_requests SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'pending' RETURNING deposit",
+      `UPDATE match_requests SET status = 'cancelled'
+       WHERE id = ? AND user_id = ? AND status IN ('pending', 'awaiting_deposit') RETURNING id, deposit`,
       target, userId,
     );
     if (!rows.length) throw new AppError(404, '대기 중인 매칭 신청이 없어요.');
-    if (rows[0].deposit) await adjustPoints(t, userId, rows[0].deposit, '매칭 취소 보증금 반환');
+    await cancelDepositOf(t, rows[0], before.status, userId);
   });
+}
+
+// 신청을 취소할 때 보증금 처리: 입금 전이면 입금 요청만 취소, 입금 확인 후면 환급 대기로 남긴다.
+async function cancelDepositOf(db, request, statusBefore, userId) {
+  if (!request.deposit) return;
+  if (statusBefore === 'awaiting_deposit') {
+    await db.run(
+      "UPDATE money_logs SET status = 'cancelled' WHERE request_id = ? AND kind = 'deposit' AND status = 'todo'", request.id,
+    );
+  } else {
+    await recordMoney(db, { userId, kind: 'refund', amount: request.deposit, reason: '매칭 신청 취소 · 보증금 환급', requestId: request.id });
+  }
 }
 
 async function tryMatch(db, requestId) {
@@ -641,8 +750,8 @@ async function createMatch(db, { userA, userB, stakeA, stakeB, terms, prevMatchI
   );
   const matchId = rows[0].id;
 
-  if (stakeA > stake) await adjustPoints(db, userA, stakeA - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
-  if (stakeB > stake) await adjustPoints(db, userB, stakeB - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
+  if (stakeA > stake) await recordMoney(db, { userId: userA, kind: 'refund', amount: stakeA - stake, reason: '보증금 차액 환급 (메이트 금액에 맞춤)', matchId });
+  if (stakeB > stake) await recordMoney(db, { userId: userB, kind: 'refund', amount: stakeB - stake, reason: '보증금 차액 환급 (메이트 금액에 맞춤)', matchId });
 
   for (const { date, start, end } of dates) {
     const { rows: ap } = await db.run(
@@ -902,9 +1011,10 @@ export async function recordVisit(db, visitorId) {
   );
 }
 
-// ───────────────────────── 개발자 화면 ─────────────────────────
-// 운영자(ADMIN_EMAIL)만 볼 수 있는 운영 현황. 실제 사용자만 센다 (데모 메이트·공용 데모 계정 제외).
+// ───────────────────────── 개발자 화면 (운영자 화면의 '현황') ─────────────────────────
+// 운영 현황. 실제 사용자만 센다 (데모 메이트·공용 데모 계정 제외).
 // 전화번호는 뒷자리를 가리고, 메일은 앞 3글자만 보인다. 비밀번호·인증번호는 원래부터 암호로만 저장돼 없다.
+// 채팅 내용은 여기서 보내지 않는다. 운영자 화면 '채팅' 탭에서 열람 기록을 남기며 본다.
 
 export async function assertAdmin(db, userId) {
   const u = await getUser(db, userId);
@@ -916,8 +1026,7 @@ const maskEmail = (e) => e.replace(/^(.{3}).*@/, '$1***@');
 
 export async function adminDashboard(db) {
   const real = (col) => `${col} IN (SELECT id FROM users WHERE is_bot = 0 AND email <> '${DEMO_ACCOUNT.email}')`;
-  const n = async (sql) => Number((await db.get(sql)).n);
-  const users = await db.all(`SELECT * FROM users WHERE is_bot = 0 AND email <> ? ORDER BY id`, DEMO_ACCOUNT.email);
+  const users = await db.all('SELECT * FROM users WHERE is_bot = 0 AND email <> ? ORDER BY id', DEMO_ACCOUNT.email);
   const nameOf = new Map((await db.all('SELECT id, name, is_bot FROM users')).map((u) => [u.id, u.is_bot ? `${u.name}(데모)` : u.name]));
 
   // 방문: 사이트를 열 때마다 한 줄. 사람 수는 브라우저 id로 센다.
@@ -950,9 +1059,6 @@ export async function adminDashboard(db) {
   const codes = await db.all('SELECT email, purpose, used, attempts, created_at FROM email_codes ORDER BY id DESC');
   const joined = new Set(users.map((u) => u.email));
   const notJoined = new Set(codes.filter((c) => c.purpose === 'signup' && !joined.has(c.email)).map((c) => c.email));
-  const messages = await db.all(
-    `SELECT match_id, user_id, body, created_at FROM messages WHERE match_id IN (SELECT id FROM matches WHERE ${real('user_a')} OR ${real('user_b')}) ORDER BY id`,
-  );
   const realIds = new Set(users.map((u) => u.id));
 
   // 전환 단계: 단계마다 사람 수. today면 오늘(한국 날짜) 일어난 일만 센다.
@@ -1000,10 +1106,6 @@ export async function adminDashboard(db) {
       notJoined: notJoined.size,
       list: codes.map((c) => ({ ...c, email: maskEmail(c.email), joined: joined.has(c.email) })),
     },
-    chats: matches.map((m) => ({
-      matchId: m.id, names: [nameOf.get(m.user_a), nameOf.get(m.user_b)],
-      messages: messages.filter((x) => x.match_id === m.id).map((x) => ({ name: nameOf.get(x.user_id), body: x.body, createdAt: x.created_at })),
-    })).filter((c) => c.messages.length),
   };
 }
 
@@ -1167,15 +1269,20 @@ export async function settleMatch(db, matchId) {
     for (const [uid, mid] of [[m.user_a, m.user_b], [m.user_b, m.user_a]]) {
       const me = users[uid];
       const mate = users[mid];
+      // 보증금(계좌이체) 정산 규칙
+      //   약속을 모두 지킴           → 내 보증금 환급
+      //   못 지킴 + 메이트는 지킴     → 내 보증금은 메이트에게 보상
+      //   둘 다 못 지킴              → 운영진에게 귀속 (돌려주지 않음, 장부에 kept 로 기록)
       if (!m.stake) {
         me.deposit = { result: 'none', amount: 0 };
       } else if (me.kept) {
-        await adjustPoints(t, uid, m.stake, '약속 이행 · 보증금 반환', m.id);
+        await recordMoney(t, { userId: uid, kind: 'refund', amount: m.stake, reason: '약속 이행 · 보증금 환급', matchId: m.id });
         me.deposit = { result: 'refunded', amount: m.stake };
       } else if (mate.kept) {
-        await adjustPoints(t, mid, m.stake, '메이트 약속 미이행 보상', m.id);
+        await recordMoney(t, { userId: mid, kind: 'reward', amount: m.stake, reason: '메이트 약속 미이행 보상', matchId: m.id });
         me.deposit = { result: 'to_mate', amount: m.stake };
       } else {
+        await recordMoney(t, { userId: uid, kind: 'kept', amount: m.stake, reason: '둘 다 약속 미이행 · 운영진 귀속', matchId: m.id, status: 'done' });
         me.deposit = { result: 'forfeited', amount: m.stake };
       }
     }
@@ -1228,13 +1335,9 @@ export async function leaveMatch(db, userId, matchId) {
       users[userId].deposit = none;
       users[mateId].deposit = none;
     } else {
-      await adjustPoints(t, mateId, m.stake * 2, '메이트 중도 종료 · 보증금 반환 + 보상', m.id); // 데모 메이트면 변화 없음
-      // 그만둔 사람: 보증금은 이미 예치 때 빠졌으므로 잔액 변화 없이 내역만 남긴다
-      const { points } = await getUser(t, userId);
-      await t.run(
-        'INSERT INTO point_logs (user_id, amount, balance, reason, match_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        userId, 0, points, mateIsBot ? `중도 종료 · 보증금 ${m.stake.toLocaleString()}P 소멸` : `중도 종료 · 보증금 ${m.stake.toLocaleString()}P 메이트에게 보상`, m.id, iso(),
-      );
+      // 메이트: 자기 보증금 환급 + 그만둔 사람의 보증금을 보상으로 받음 (데모 메이트면 기록하지 않음)
+      await recordMoney(t, { userId: mateId, kind: 'refund', amount: m.stake, reason: '메이트 중도 종료 · 보증금 환급', matchId: m.id });
+      await recordMoney(t, { userId: mateId, kind: 'reward', amount: m.stake, reason: '메이트 중도 종료 보상', matchId: m.id });
       users[userId].deposit = { result: mateIsBot ? 'forfeited' : 'to_mate', amount: m.stake };
       users[mateId].deposit = { result: 'refunded', amount: m.stake };
     }
@@ -1282,14 +1385,9 @@ export async function chooseNext(db, userId, matchId, choice) {
 }
 
 async function continueMatch(db, m) {
-  // 이전 주와 같은 보증금을 다시 건다. 둘 중 한 명이라도 포인트가 부족하면 보증금 없이 진행.
-  let stake = m.stake;
-  const canPay = async (uid) => (await getUser(db, uid)).points >= stake;
-  if (stake && (!(await canPay(m.user_a)) || !(await canPay(m.user_b)))) stake = 0;
-  if (stake) {
-    await adjustPoints(db, m.user_a, -stake, '보증금 예치 (재매칭)', m.id);
-    await adjustPoints(db, m.user_b, -stake, '보증금 예치 (재매칭)', m.id);
-  }
+  // 지난주 보증금은 리포트 때 이미 정산(환급·보상)했으므로, 이어서 하는 주간은 보증금 없이 진행한다.
+  // 다시 보증금을 걸고 싶으면 새로 신청하면 된다.
+  const stake = 0;
   return createMatch(db, {
     userA: m.user_a,
     userB: m.user_b,
@@ -1346,7 +1444,8 @@ function botReply(text) {
 export async function listMessages(db, userId, matchId, afterId = 0) {
   await loadMatchForUser(db, userId, matchId);
   return db.all(
-    'SELECT id, user_id AS "userId", body, created_at AS "createdAt" FROM messages WHERE match_id = ? AND id > ? ORDER BY id',
+    `SELECT id, user_id AS "userId", body, photo_id AS "photoId", created_at AS "createdAt"
+     FROM messages WHERE match_id = ? AND id > ? ORDER BY id`,
     matchId, Number(afterId) || 0,
   );
 }
@@ -1365,4 +1464,270 @@ export async function sendMessage(db, userId, matchId, body) {
     const mate = await getUser(t, mateOf(m, userId));
     if (mate.is_bot) await insert(mate.id, botReply(text));
   });
+}
+
+// ───────────────────────── 사진 ─────────────────────────
+// 화면에서 줄인 이미지(data URL)를 받아 photos 테이블에 저장한다.
+// 보기 권한: 프로필 사진은 본인 + 함께 매칭된 적 있는 사람 + 운영자, 채팅 사진은 그 매칭의 두 사람 + 운영자.
+
+const PHOTO_TYPES = {
+  'image/jpeg': (b) => b[0] === 0xff && b[1] === 0xd8,
+  'image/png': (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47,
+  'image/webp': (b) => b.subarray(0, 4).toString() === 'RIFF' && b.subarray(8, 12).toString() === 'WEBP',
+};
+
+function parsePhoto(dataUrl) {
+  const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl ?? ''));
+  if (!m) throw new AppError(400, '사진 형식이 올바르지 않아요. (JPG·PNG·WEBP)');
+  const buf = Buffer.from(m[2], 'base64');
+  if (!buf.length) throw new AppError(400, '사진이 비어 있어요.');
+  if (buf.length > PHOTO_MAX_BYTES) throw new AppError(413, '사진이 너무 커요. 더 작은 사진을 골라 주세요.');
+  if (!PHOTO_TYPES[m[1]](buf)) throw new AppError(400, '사진 파일이 올바르지 않아요.');
+  return { mime: m[1], data: m[2] };
+}
+
+async function insertPhoto(db, userId, dataUrl, matchId = null) {
+  const { mime, data } = parsePhoto(dataUrl);
+  const { rows } = await db.run(
+    'INSERT INTO photos (user_id, match_id, mime, data, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id',
+    userId, matchId, mime, data, iso(),
+  );
+  return rows[0].id;
+}
+
+export async function setProfilePhoto(db, userId, dataUrl) {
+  return db.tx(async (t) => {
+    const old = (await getUser(t, userId)).photo_id;
+    const id = await insertPhoto(t, userId, dataUrl);
+    await t.run('UPDATE users SET photo_id = ? WHERE id = ?', id, userId);
+    if (old) await t.run('DELETE FROM photos WHERE id = ? AND match_id IS NULL', old);
+    return privateUser(await getUser(t, userId));
+  });
+}
+
+export async function removeProfilePhoto(db, userId) {
+  return db.tx(async (t) => {
+    const old = (await getUser(t, userId)).photo_id;
+    await t.run('UPDATE users SET photo_id = NULL WHERE id = ?', userId);
+    if (old) await t.run('DELETE FROM photos WHERE id = ? AND match_id IS NULL', old);
+    return privateUser(await getUser(t, userId));
+  });
+}
+
+// 채팅으로 사진 보내기
+export async function sendPhoto(db, userId, matchId, dataUrl) {
+  return db.tx(async (t) => {
+    const m = await loadMatchForUser(t, userId, matchId);
+    if (m.status === 'closed') throw new AppError(400, '종료된 매칭이에요.');
+    const photoId = await insertPhoto(t, userId, dataUrl, m.id);
+    await t.run(
+      'INSERT INTO messages (match_id, user_id, body, photo_id, created_at) VALUES (?, ?, ?, ?, ?)',
+      m.id, userId, '', photoId, iso(),
+    );
+    const mate = await getUser(t, mateOf(m, userId));
+    if (mate.is_bot) {
+      await t.run('INSERT INTO messages (match_id, user_id, body, created_at) VALUES (?, ?, ?, ?)',
+        m.id, mate.id, '사진 잘 봤어요! 📸', iso());
+    }
+    return { photoId };
+  });
+}
+
+// 사진 읽기 (권한 확인). admin: 운영자면 모두 볼 수 있다.
+export async function getPhoto(db, userId, photoId, { admin = false } = {}) {
+  const p = await db.get('SELECT * FROM photos WHERE id = ?', Number(photoId) || 0);
+  if (!p) throw new AppError(404, '사진을 찾을 수 없어요.');
+  let ok = admin || p.user_id === userId;
+  if (!ok && p.match_id) {
+    ok = isMember(await getMatchRow(db, p.match_id), userId);
+  } else if (!ok) {
+    // 프로필 사진: 함께 매칭된 적이 있거나, 데모 메이트의 사진
+    const shared = await db.get(
+      'SELECT id FROM matches WHERE (user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?) LIMIT 1',
+      userId, p.user_id, p.user_id, userId,
+    );
+    ok = !!shared || !!(await getUser(db, p.user_id))?.is_bot;
+  }
+  if (!ok) throw new AppError(404, '사진을 찾을 수 없어요.');
+  return { mime: p.mime, buffer: Buffer.from(p.data, 'base64') };
+}
+
+// ───────────────────────── 보증금 내역 (본인) ─────────────────────────
+
+export async function myMoney(db, userId) {
+  return db.all(
+    `SELECT id, kind, amount, status, reason, created_at AS "createdAt", done_at AS "doneAt"
+     FROM money_logs WHERE user_id = ? AND status <> 'cancelled' ORDER BY id DESC LIMIT 50`,
+    userId,
+  );
+}
+
+// ───────────────────────── 운영자 ─────────────────────────
+// 운영자는 환경 변수 ADMIN_EMAILS(쉼표로 구분)에 적힌 메일로 로그인한 사람이다. (server/app.js 에서 확인)
+
+const adminLog = (db, adminId, action, target) => db.run(
+  'INSERT INTO admin_logs (admin_id, action, target, created_at) VALUES (?, ?, ?, ?)', adminId, action, String(target ?? ''), iso(),
+);
+
+const userBrief = (u) => u && {
+  id: u.id, name: u.name, email: u.email, department: u.department ?? null, phone: u.phone ?? null,
+  avatar: u.avatar, photo: u.photo_id ? `/api/photos/${u.photo_id}` : null,
+};
+
+export async function adminOverview(db) {
+  const real = `u.is_bot = 0 AND u.email <> '${DEMO_ACCOUNT.email}'`;
+  const count = async (sql) => Number((await db.get(sql)).n);
+  const deposits = await db.all(
+    `SELECT l.id, l.amount, l.created_at AS "createdAt", r.id AS "requestId", r.depositor, r.status AS "requestStatus",
+            u.id AS "userId", u.name, u.email, u.department, u.phone
+     FROM money_logs l JOIN users u ON u.id = l.user_id LEFT JOIN match_requests r ON r.id = l.request_id
+     WHERE l.kind = 'deposit' AND l.status = 'todo' ORDER BY l.id`,
+  );
+  const payouts = await db.all(
+    `SELECT l.id, l.kind, l.amount, l.reason, l.match_id AS "matchId", l.created_at AS "createdAt",
+            u.id AS "userId", u.name, u.email, u.phone, u.refund_bank AS bank, u.refund_account AS account, u.refund_holder AS holder
+     FROM money_logs l JOIN users u ON u.id = l.user_id
+     WHERE l.kind IN ('refund', 'reward') AND l.status = 'todo' ORDER BY l.id`,
+  );
+  const doneMoney = await db.all(
+    `SELECT l.id, l.kind, l.amount, l.reason, l.status, l.done_at AS "doneAt", u.name
+     FROM money_logs l JOIN users u ON u.id = l.user_id
+     WHERE l.status IN ('done', 'cancelled') ORDER BY l.id DESC LIMIT 30`,
+  );
+  const help = await db.all(
+    `SELECT id, email, purpose, name, phone, created_at AS "createdAt" FROM email_help WHERE status = 'open' ORDER BY id`,
+  );
+  const emailLogs = await db.all(
+    `SELECT id, email, purpose, status, provider, attempts, error, created_at AS "createdAt"
+     FROM email_logs ORDER BY id DESC LIMIT 30`,
+  );
+  const since = new Date(T.now().getTime() - 7 * 86400000).toISOString();
+  const mail = await db.get(
+    `SELECT SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+     FROM email_logs WHERE created_at >= ?`, since,
+  );
+  const matchRows = await db.all(
+    `SELECT m.id, m.status, m.location, m.week_start AS "weekStart", m.week_end AS "weekEnd", m.stake,
+            ua.name AS "nameA", ub.name AS "nameB", ua.is_bot AS "botA", ub.is_bot AS "botB",
+            (SELECT COUNT(*) FROM messages x WHERE x.match_id = m.id) AS "messageCount"
+     FROM matches m JOIN users ua ON ua.id = m.user_a JOIN users ub ON ub.id = m.user_b
+     ORDER BY m.id DESC LIMIT 100`,
+  );
+  return {
+    stats: {
+      users: await count(`SELECT COUNT(*) AS n FROM users u WHERE ${real}`),
+      activeMatches: await count("SELECT COUNT(*) AS n FROM matches WHERE status = 'active'"),
+      waiting: await count("SELECT COUNT(*) AS n FROM match_requests WHERE status = 'pending'"),
+      mailSent7d: Number(mail?.sent ?? 0),
+      mailFailed7d: Number(mail?.failed ?? 0),
+    },
+    deposits,
+    payouts,
+    doneMoney,
+    help,
+    emailLogs,
+    matches: matchRows.map((r) => ({ ...r, messageCount: Number(r.messageCount) })),
+  };
+}
+
+// 입금 확인 → 신청이 매칭 대기열에 들어가고, 조건이 맞는 사람이 있으면 바로 매칭된다.
+export async function confirmDeposit(db, adminId, logId) {
+  const log = await db.tx(async (t) => {
+    const { rows } = await t.run(
+      `UPDATE money_logs SET status = 'done', done_at = ?, done_by = ? WHERE id = ? AND kind = 'deposit' AND status = 'todo' RETURNING *`,
+      iso(), adminId, logId,
+    );
+    if (!rows.length) throw new AppError(404, '확인할 입금이 없어요. (이미 처리됐을 수 있어요)');
+    const { changes } = await t.run(
+      "UPDATE match_requests SET status = 'pending' WHERE id = ? AND status = 'awaiting_deposit'", rows[0].request_id,
+    );
+    if (!changes) {
+      // 학생이 그사이 신청을 취소했다면 받은 돈은 돌려준다.
+      await recordMoney(t, { userId: rows[0].user_id, kind: 'refund', amount: rows[0].amount, reason: '입금 전 신청 취소 · 보증금 환급', requestId: rows[0].request_id });
+    }
+    await adminLog(t, adminId, 'deposit_confirm', logId);
+    return { ...rows[0], queued: !!changes };
+  });
+  if (!log.queued) return { matchId: null, refunded: true };
+  // 매칭 시도는 따로 한다. (스터디 기간이 끝나 매칭이 안 돼도 입금 확인은 남는다)
+  try {
+    const match = await db.tx((t) => tryMatch(t, log.request_id));
+    return { matchId: match?.id ?? null };
+  } catch (err) {
+    return { matchId: null, matchError: err.message };
+  }
+}
+
+// 입금이 들어오지 않은 신청 취소
+export async function rejectDeposit(db, adminId, logId) {
+  return db.tx(async (t) => {
+    const { rows } = await t.run(
+      "UPDATE money_logs SET status = 'cancelled', done_at = ?, done_by = ? WHERE id = ? AND kind = 'deposit' AND status = 'todo' RETURNING *",
+      iso(), adminId, logId,
+    );
+    if (!rows.length) throw new AppError(404, '취소할 입금 요청이 없어요.');
+    await t.run("UPDATE match_requests SET status = 'cancelled' WHERE id = ? AND status = 'awaiting_deposit'", rows[0].request_id);
+    await adminLog(t, adminId, 'deposit_reject', logId);
+    return { ok: true };
+  });
+}
+
+// 환급·보상 이체를 마쳤다고 표시
+export async function markPayoutDone(db, adminId, logId) {
+  return db.tx(async (t) => {
+    const { rows } = await t.run(
+      "UPDATE money_logs SET status = 'done', done_at = ?, done_by = ? WHERE id = ? AND kind IN ('refund', 'reward') AND status = 'todo' RETURNING id",
+      iso(), adminId, logId,
+    );
+    if (!rows.length) throw new AppError(404, '처리할 이체가 없어요. (이미 처리됐을 수 있어요)');
+    await adminLog(t, adminId, 'payout_done', logId);
+    return { ok: true };
+  });
+}
+
+// 메일 도움 요청 처리: 새 인증번호를 만들어 운영자 화면에 한 번만 보여 준다. (본인 확인 후 직접 전달)
+export async function issueHelpCode(db, adminId, helpId) {
+  return db.tx(async (t) => {
+    const { rows } = await t.run(
+      "UPDATE email_help SET status = 'resolved', resolved_at = ?, resolved_by = ? WHERE id = ? AND status = 'open' RETURNING *",
+      iso(), adminId, helpId,
+    );
+    if (!rows.length) throw new AppError(404, '처리할 요청이 없어요.');
+    const h = rows[0];
+    const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+    // 운영자가 전달하는 시간을 생각해 30분 동안 유효
+    const expires = new Date(T.now().getTime() + 30 * 60000).toISOString();
+    await t.run(
+      'INSERT INTO email_codes (email, purpose, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)',
+      h.email, h.purpose, hashCode(h.email, code), expires, iso(),
+    );
+    await adminLog(t, adminId, 'help_code', h.email);
+    return { code, email: h.email, name: h.name, phone: h.phone, expiresMin: 30 };
+  });
+}
+
+export async function closeHelp(db, adminId, helpId) {
+  const { changes } = await db.run(
+    "UPDATE email_help SET status = 'resolved', resolved_at = ?, resolved_by = ? WHERE id = ? AND status = 'open'",
+    iso(), adminId, helpId,
+  );
+  if (!changes) throw new AppError(404, '처리할 요청이 없어요.');
+  return { ok: true };
+}
+
+// 매칭 하나의 채팅 기록 전체 (운영자). 열어 본 기록을 남긴다.
+export async function adminChat(db, adminId, matchId) {
+  const m = await getMatchRow(db, Number(matchId) || 0);
+  if (!m) throw new AppError(404, '매칭을 찾을 수 없어요.');
+  await adminLog(db, adminId, 'chat_view', m.id);
+  const [a, b] = [await getUser(db, m.user_a), await getUser(db, m.user_b)];
+  const messages = await db.all(
+    `SELECT id, user_id AS "userId", body, photo_id AS "photoId", created_at AS "createdAt"
+     FROM messages WHERE match_id = ? ORDER BY id`, m.id,
+  );
+  return {
+    match: { id: m.id, status: m.status, location: m.location, weekStart: m.week_start, weekEnd: m.week_end, stake: m.stake },
+    users: { [a.id]: userBrief(a), [b.id]: userBrief(b) },
+    messages,
+  };
 }
