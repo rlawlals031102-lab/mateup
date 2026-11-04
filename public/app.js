@@ -214,24 +214,36 @@ function authShell(inner) {
     </div>`;
 }
 
-// 실서비스는 국민대 메일만 받는다. 아이디만 입력해도 @kookmin.ac.kr 을 붙여 준다.
+// 실서비스는 국민대 메일만 받는다. 칸에는 @ 앞(아이디)만 입력하고, 보낼 때 @kookmin.ac.kr 을 붙인다.
 const withDomain = (email) => {
   const v = String(email ?? '').trim();
-  return OPTIONS.emailDomain && v && !v.includes('@') ? `${v}@${OPTIONS.emailDomain}` : v;
+  if (!OPTIONS.emailDomain || !v) return v;
+  return `${v.split('@')[0]}@${OPTIONS.emailDomain}`;
 };
 
 const emailLabel = () => (OPTIONS.emailDomain ? '국민대 메일' : '이메일');
-const emailPlaceholder = () => (OPTIONS.emailDomain ? `아이디@${OPTIONS.emailDomain}` : '');
+
+// 메일 입력칸. 국민대 메일만 받을 때는 뒤에 @kookmin.ac.kr 을 고정으로 붙여 보여 준다.
+const emailInput = () => (OPTIONS.emailDomain
+  ? `<div class="email-input"><input class="input" name="email" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="아이디" required><span>@${esc(OPTIONS.emailDomain)}</span></div>`
+  : '<input class="input" name="email" type="email" autocomplete="email" required>');
+
+// 아이디 칸에 전체 주소를 붙여 넣으면 @ 앞만 남긴다
+document.addEventListener('input', (e) => {
+  if (OPTIONS.emailDomain && e.target.name === 'email' && e.target.value.includes('@')) {
+    e.target.value = e.target.value.split('@')[0];
+  }
+});
 
 // 이메일 + "인증번호 받기" 버튼 + 인증번호 입력칸 (메일 인증을 쓰는 실서비스에서만)
 function emailCodeFields() {
   if (!OPTIONS.emailVerification) {
-    return `<label class="field"><span>${emailLabel()}</span><input class="input" name="email" type="email" autocomplete="email" placeholder="${esc(emailPlaceholder())}" required></label>`;
+    return `<label class="field"><span>${emailLabel()}</span>${emailInput()}</label>`;
   }
   return `
     <div class="field"><span>${emailLabel()}</span>
       <div class="row">
-        <input class="input" name="email" autocomplete="email" placeholder="${esc(emailPlaceholder())}" required>
+        ${emailInput()}
         <button type="button" class="btn inline-btn" id="send-code">인증번호 받기</button>
       </div>
     </div>
@@ -244,11 +256,11 @@ function bindSendCode(form, purpose) {
   const btn = $('#send-code', form);
   if (!btn) return;
   btn.addEventListener('click', async () => {
-    form.email.value = withDomain(form.email.value);
-    if (!form.email.value) return toast('메일 주소를 입력해 주세요.', true);
+    const email = withDomain(form.email.value);
+    if (!email) return toast('메일 주소를 입력해 주세요.', true);
     btn.disabled = true;
     try {
-      await api('/auth/code', { method: 'POST', body: { email: form.email.value, purpose } });
+      await api('/auth/code', { method: 'POST', body: { email, purpose } });
       $('#code-field', form).hidden = false;
       form.code.required = true;
       form.code.focus();
@@ -277,7 +289,7 @@ async function renderLogin() {
     <h2>같은 시간에<br>함께 시작하는 공부</h2>
     <p class="lead">${OPTIONS.emailDomain ? '국민대 학생을 위한 ' : ''}1주일 단위 1:1 스터디 메이트 매칭, 스터디버디</p>
     <form id="f" class="card">
-      <label class="field"><span>${emailLabel()}</span><input class="input" name="email" autocomplete="email" placeholder="${esc(emailPlaceholder())}" required></label>
+      <label class="field"><span>${emailLabel()}</span>${emailInput()}</label>
       <label class="field"><span>비밀번호</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn primary block mt-lg">로그인</button>
     </form>
@@ -296,8 +308,8 @@ async function renderLogin() {
   });
   $('#f').addEventListener('submit', async (e) => {
     e.preventDefault();
-    e.target.email.value = withDomain(e.target.email.value);
     const fd = Object.fromEntries(new FormData(e.target));
+    fd.email = withDomain(fd.email);
     try {
       await api('/auth/login', { method: 'POST', body: fd });
       location.hash = '#/home';
@@ -323,9 +335,9 @@ async function renderSignup() {
   bindSendCode(form, 'signup');
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    form.email.value = withDomain(form.email.value);
     if (OPTIONS.emailVerification && $('#code-field').hidden) return toast("먼저 '인증번호 받기'를 눌러 주세요.", true);
     const fd = Object.fromEntries(new FormData(form));
+    fd.email = withDomain(fd.email);
     try {
       await withLoading('📝', '가입하는 중이에요', () => api('/auth/signup', { method: 'POST', body: fd }));
       toast('환영해요! 이번 주 메이트를 찾아볼까요?');
@@ -377,9 +389,9 @@ async function renderReset() {
   bindSendCode(form, 'reset');
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    form.email.value = withDomain(form.email.value);
     if ($('#code-field').hidden) return toast("먼저 '인증번호 받기'를 눌러 주세요.", true);
     const fd = Object.fromEntries(new FormData(form));
+    fd.email = withDomain(fd.email);
     try {
       await api('/auth/reset', { method: 'POST', body: fd });
       toast('비밀번호를 바꿨어요. 다른 기기에서는 다시 로그인해 주세요.');

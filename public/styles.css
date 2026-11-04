@@ -541,3 +541,9 @@ a.link-item:hover { background: var(--soft); }
 .apply-tt .tt-time i { position: absolute; right: 4px; top: -6px; font-style: normal; font-size: 10.5px; line-height: 1; }
 .apply-tt .tt-time i.end { top: auto; bottom: -7px; }
 .apply-tt .tt-cell span { top: 50%; transform: translateY(-50%); text-align: center; font-size: 10.5px; color: var(--muted); }
+
+/* 메일 입력칸: @ 앞만 입력하고 @kookmin.ac.kr 은 칸 오른쪽에 고정으로 보인다 */
+.email-input { position: relative; display: block; }
+.field .row .email-input { flex: 1; min-width: 0; }
+.email-input .input { width: 100%; padding-right: 112px; }
+.email-input span { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--muted); pointer-events: none; }
