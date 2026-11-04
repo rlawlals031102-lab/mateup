@@ -3,7 +3,7 @@ import { isUniqueViolation } from './db.js';
 import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
-  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD,
+  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAIL,
 } from './options.js';
 
 // 모든 함수는 첫 인자로 db(server/db.js 인터페이스)를 받는다.
@@ -102,6 +102,7 @@ export const publicUser = (u) => u && {
 
 export const privateUser = (u) => u && {
   ...publicUser(u), email: u.email, department: u.department ?? null, phone: u.phone ?? null,
+  isAdmin: u.email === ADMIN_EMAIL,
 };
 
 const getUser = (db, id) => db.get('SELECT * FROM users WHERE id = ?', id);
@@ -884,6 +885,111 @@ export async function recordVisit(db, visitorId) {
     'INSERT INTO visits (visitor_id, day, created_at) VALUES (?, ?, ?)',
     visitorId, T.today(), iso(),
   );
+}
+
+// ───────────────────────── 개발자 화면 ─────────────────────────
+// 운영자(ADMIN_EMAIL)만 볼 수 있는 운영 현황. 실제 사용자만 센다 (데모 메이트·공용 데모 계정 제외).
+// 전화번호는 뒷자리를 가리고, 메일은 앞 3글자만 보인다. 비밀번호·인증번호는 원래부터 암호로만 저장돼 없다.
+
+export async function assertAdmin(db, userId) {
+  const u = await getUser(db, userId);
+  if (u?.email !== ADMIN_EMAIL) throw new AppError(403, '개발자만 볼 수 있어요.');
+}
+
+const maskPhone = (p) => (p ? p.replace(/\d{4}$/, '****') : null);
+const maskEmail = (e) => e.replace(/^(.{3}).*@/, '$1***@');
+
+export async function adminDashboard(db) {
+  const real = (col) => `${col} IN (SELECT id FROM users WHERE is_bot = 0 AND email <> '${DEMO_ACCOUNT.email}')`;
+  const n = async (sql) => Number((await db.get(sql)).n);
+  const users = await db.all(`SELECT * FROM users WHERE is_bot = 0 AND email <> ? ORDER BY id`, DEMO_ACCOUNT.email);
+  const nameOf = new Map((await db.all('SELECT id, name, is_bot FROM users')).map((u) => [u.id, u.is_bot ? `${u.name}(데모)` : u.name]));
+
+  // 방문: 사이트를 열 때마다 한 줄. 사람 수는 브라우저 id로 센다.
+  const visits = await db.all('SELECT visitor_id, day, created_at FROM visits ORDER BY id');
+  const visitorNo = new Map();
+  for (const v of visits) if (!visitorNo.has(v.visitor_id)) visitorNo.set(v.visitor_id, visitorNo.size + 1);
+  const kstHour = (s) => new Date(new Date(s).getTime() + 9 * 3600000).getUTCHours();
+  const byDay = new Map();
+  const byHour = Array(24).fill(0);
+  const perVisitor = new Map();
+  for (const v of visits) {
+    const d = byDay.get(v.day) ?? { day: v.day, people: new Set(), visits: 0 };
+    d.people.add(v.visitor_id);
+    d.visits += 1;
+    byDay.set(v.day, d);
+    const h = kstHour(v.created_at);
+    byHour[h] += 1;
+    const key = `${visitorNo.get(v.visitor_id)}|${v.day}`;
+    const p = perVisitor.get(key) ?? { visitor: visitorNo.get(v.visitor_id), day: v.day, hours: {} };
+    p.hours[h] = (p.hours[h] ?? 0) + 1;
+    perVisitor.set(key, p);
+  }
+
+  const requests = (await db.all(`SELECT * FROM match_requests WHERE ${real('user_id')} ORDER BY id DESC`)).map(parseRequest);
+  const matches = (await db.all(
+    `SELECT * FROM matches WHERE ${real('user_a')} OR ${real('user_b')} ORDER BY id DESC`,
+  )).map(parseMatch);
+  const attendance = await db.all(`SELECT user_id, checked_in_at FROM attendance WHERE ${real('user_id')}`);
+  const lastLogin = new Map((await db.all('SELECT user_id, MAX(created_at) AS at FROM auth_tokens GROUP BY user_id')).map((r) => [r.user_id, r.at]));
+  const codes = await db.all('SELECT email, purpose, used, attempts, created_at FROM email_codes ORDER BY id DESC');
+  const joined = new Set(users.map((u) => u.email));
+  const notJoined = new Set(codes.filter((c) => c.purpose === 'signup' && !joined.has(c.email)).map((c) => c.email));
+  const messages = await db.all(
+    `SELECT match_id, user_id, body, created_at FROM messages WHERE match_id IN (SELECT id FROM matches WHERE ${real('user_a')} OR ${real('user_b')}) ORDER BY id`,
+  );
+  const realIds = new Set(users.map((u) => u.id));
+
+  // 전환 단계: 단계마다 사람 수. today면 오늘(한국 날짜) 일어난 일만 센다.
+  const isToday = (s) => T.dateStr(new Date(s)) === T.today();
+  const funnel = (today) => {
+    const keep = (s) => !today || isToday(s);
+    return [
+      { label: '방문', count: new Set(visits.filter((v) => !today || v.day === T.today()).map((v) => v.visitor_id)).size },
+      { label: '가입', count: users.filter((u) => keep(u.created_at)).length },
+      { label: '매칭 신청', count: new Set(requests.filter((r) => keep(r.created_at)).map((r) => r.user_id)).size },
+      { label: '매칭 성사', count: new Set(matches.filter((m) => keep(m.created_at)).flatMap((m) => [m.user_a, m.user_b]).filter((id) => realIds.has(id))).size },
+      { label: '출석', count: new Set(attendance.filter((x) => keep(x.checked_in_at)).map((x) => x.user_id)).size },
+    ];
+  };
+
+  return {
+    summary: {
+      todayVisitors: new Set(visits.filter((v) => v.day === T.today()).map((v) => v.visitor_id)).size,
+      users: users.length,
+      pendingRequests: requests.filter((r) => r.status === 'pending').length,
+      activeMatches: matches.filter((m) => m.status !== 'closed').length,
+    },
+    visits: {
+      people: visitorNo.size,
+      total: visits.length,
+      byDay: [...byDay.values()].map((d) => ({ day: d.day, people: d.people.size, visits: d.visits })),
+      byHour,
+      perVisitor: [...perVisitor.values()],
+    },
+    funnel: { all: funnel(false), today: funnel(true) },
+    requests: requests.map((r) => ({
+      id: r.id, name: nameOf.get(r.user_id), status: r.status, schedule: r.schedule,
+      location: r.location, styles: r.styles, createdAt: r.created_at,
+    })),
+    matches: matches.map((m) => ({
+      id: m.id, names: [nameOf.get(m.user_a), nameOf.get(m.user_b)], status: m.status,
+      weekStart: m.week_start, weekEnd: m.week_end, schedule: m.schedule, location: m.location, styles: m.styles,
+      leftBy: m.report?.leftBy ? nameOf.get(m.report.leftBy) : null, createdAt: m.created_at,
+    })),
+    users: users.map((u) => ({
+      id: u.id, name: u.name, department: u.department ?? null, phone: maskPhone(u.phone),
+      createdAt: u.created_at, lastLogin: lastLogin.get(u.id) ?? null,
+    })),
+    emailCodes: {
+      notJoined: notJoined.size,
+      list: codes.map((c) => ({ ...c, email: maskEmail(c.email), joined: joined.has(c.email) })),
+    },
+    chats: matches.map((m) => ({
+      matchId: m.id, names: [nameOf.get(m.user_a), nameOf.get(m.user_b)],
+      messages: messages.filter((x) => x.match_id === m.id).map((x) => ({ name: nameOf.get(x.user_id), body: x.body, createdAt: x.created_at })),
+    })).filter((c) => c.messages.length),
+  };
 }
 
 // 시험 디데이 (한국 날짜 기준). 시험일이 지나면 null.

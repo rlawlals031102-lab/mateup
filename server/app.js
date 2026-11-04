@@ -57,6 +57,12 @@ export function createApp({
     });
   });
 
+  // 개발자 화면 (운영자 계정만)
+  api.get('/admin', auth, async (req, res) => {
+    await S.assertAdmin(db, req.user.id);
+    res.json(await S.adminDashboard(db));
+  });
+
   // 방문자 수 세기 (로그인 없이)
   api.post('/visit', async (req, res) => {
     await S.recordVisit(db, req.body?.id);

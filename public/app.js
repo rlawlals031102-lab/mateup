@@ -168,6 +168,7 @@ const routes = {
   chat: renderChat,
   me: renderMe,
   'me/edit': renderEditProfile,
+  admin: renderAdmin,
 };
 
 async function router() {
@@ -1507,6 +1508,7 @@ async function renderMe(alive) {
         </a>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
     </section>
 
+    ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">🛠 개발자 화면 보기</a>' : ''}
     <button class="btn ghost block mt-lg danger" id="logout">로그아웃</button>
     ${window.__mockReset ? '<button class="btn ghost block small muted" id="reset">이 브라우저의 데모 데이터 모두 지우기</button>' : ''}`;
 
@@ -1520,6 +1522,115 @@ async function renderMe(alive) {
   $('#logout').addEventListener('click', async () => {
     await api('/auth/logout', { method: 'POST' }).catch(() => {});
     location.hash = '#/login';
+  });
+}
+
+// ───────────────────────── 개발자 화면 (운영자 계정만) ─────────────────────────
+
+// ISO 시각 → 한국 시간 "11/4 23:12"
+function fmtAt(s) {
+  if (!s) return '-';
+  const d = new Date(new Date(s).getTime() + 9 * 3600000);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+async function renderAdmin(alive) {
+  setTop({ title: '개발자 화면', back: '#/me' });
+  setTabs(null);
+  loading();
+  let a;
+  try {
+    a = await api('/admin');
+  } catch (err) {
+    // 운영자 계정이 아니면 로그인 화면으로 보낸다
+    if (err.status === 403) {
+      location.hash = '#/login';
+      return;
+    }
+    throw err;
+  }
+  if (!alive()) return;
+  const STATUS = { pending: '대기', matched: '매칭됨', cancelled: '취소', active: '진행 중', reported: '리포트 대기', closed: '끝남' };
+  const shortDay = (s) => `${Number(s.slice(5, 7))}/${Number(s.slice(8))}`;
+  const maxHour = Math.max(1, ...a.visits.byHour);
+  const funnelHTML = (rows) => {
+    const max = Math.max(1, ...rows.map((f) => f.count));
+    return rows.map((f) => `
+        <div class="funnel-row"><span>${f.label}</span><div><i style="width:${(f.count / max) * 100}%"></i></div><b>${f.count}</b></div>`).join('');
+  };
+
+  view.innerHTML = `
+    <section class="card">
+      <div class="card-head"><h2>🪜 전환 단계</h2><button type="button" class="btn sm" id="funnel-today" aria-pressed="false">오늘만 보기</button></div>
+      <div id="funnel">${funnelHTML(a.funnel.all)}</div>
+      <p class="tiny muted mt">사람 수 기준이에요. 방문은 11/4부터 기록해서, 그 전에 가입한 사람은 방문 수에 없어요.</p>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>👀 방문 통계</h2><span class="hint">총 ${a.visits.total}번 방문</span></div>
+      <p class="small">지금까지 들어온 사람 <b>${a.visits.people}명</b></p>
+      <p class="small muted mt">날짜별 들어온 사람</p>
+      ${a.visits.byDay.map((d) => `<div class="list-item"><span>${shortDay(d.day)}</span><span><b>${d.people}명</b> <span class="tiny muted">· ${d.visits}번</span></span></div>`).join('') || '<p class="small muted">아직 기록이 없어요.</p>'}
+      <p class="small muted mt">시간대별 방문 (한국 시간)</p>
+      <div class="hour-bars">
+        ${a.visits.byHour.map((v, h) => `<div title="${h}시 ${v}번"><i style="height:${(v / maxHour) * 100}%"></i><span>${h % 3 === 0 ? h : ''}</span></div>`).join('')}
+      </div>
+      <details class="mt"><summary class="small">같은 사람의 시간대별 방문 보기</summary>
+        ${a.visits.perVisitor.map((p) => `<div class="list-item"><span>방문자${p.visitor} · ${shortDay(p.day)}</span><span class="tiny">${Object.entries(p.hours).map(([h, n]) => `${h}시 ${n}번`).join(', ')}</span></div>`).join('')}
+      </details>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>👥 가입자</h2><span class="hint">${a.users.length}명</span></div>
+      ${a.users.map((u) => `
+        <div class="admin-item">
+          <div class="row" style="justify-content:space-between"><b>${esc(u.name)}</b><span class="tiny muted">${esc(u.department ?? '학과 없음')}</span></div>
+          <div class="tiny muted">${esc(u.phone ?? '전화번호 없음')} · 가입 ${fmtAt(u.createdAt)} · 마지막 로그인 ${fmtAt(u.lastLogin)}</div>
+        </div>`).join('')}
+      <p class="tiny muted mt">마지막 로그인은 로그아웃하지 않은 기기 기준이에요.</p>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>✉️ 인증메일</h2><span class="hint">가입 못 마친 사람 ${a.emailCodes.notJoined}명</span></div>
+      ${a.emailCodes.list.map((c) => `
+        <div class="list-item"><span class="small">${esc(c.email)} <span class="tiny muted">${c.purpose === 'reset' ? '비번 찾기' : '가입'}</span></span>
+          <span class="tiny">${fmtAt(c.created_at)} · ${c.used ? '사용함' : '<b style="color:var(--red)">안 씀</b>'}${c.attempts ? ` · 틀림 ${c.attempts}` : ''}${c.purpose === 'signup' && !c.joined ? ' · 미가입' : ''}</span></div>`).join('')}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>📝 매칭 신청</h2><span class="hint">대기 ${a.summary.pendingRequests}건 · 전체 ${a.requests.length}건</span></div>
+      ${a.requests.map((r) => `
+        <div class="admin-item">
+          <div class="row" style="justify-content:space-between"><b>${esc(r.name)}</b><span class="pill${r.status === 'pending' ? ' lime' : r.status === 'cancelled' ? ' gray' : ''}">${STATUS[r.status] ?? r.status}</span></div>
+          <div class="tiny muted">${esc(scheduleText(r.schedule))} · ${esc(r.location)} · ${styleLabels(r.styles)}</div>
+          <div class="tiny muted">신청 ${fmtAt(r.createdAt)}</div>
+        </div>`).join('') || '<p class="small muted">신청이 없어요.</p>'}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>🤝 매칭</h2><span class="hint">전체 ${a.matches.length}건</span></div>
+      ${a.matches.map((m) => `
+        <div class="admin-item">
+          <div class="row" style="justify-content:space-between"><b>${esc(m.names.join(' ↔ '))}</b><span class="pill${m.status === 'closed' ? ' gray' : ' lime'}">${STATUS[m.status] ?? m.status}</span></div>
+          <div class="tiny muted">${shortDay(m.weekStart)}~${shortDay(m.weekEnd)} · ${esc(scheduleText(m.schedule))} · ${esc(m.location)}</div>
+          ${m.leftBy ? `<div class="tiny" style="color:var(--red)">${esc(m.leftBy)}님이 중간에 그만둠</div>` : ''}
+        </div>`).join('') || '<p class="small muted">매칭이 없어요.</p>'}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>💬 채팅</h2><span class="hint">${a.chats.length}개 방</span></div>
+      ${a.chats.map((c) => `
+        <details class="admin-chat"><summary class="small"><b>${esc(c.names.join(' ↔ '))}</b> <span class="tiny muted">· ${c.messages.length}개</span></summary>
+          ${c.messages.map((m) => `<div class="admin-msg"><span class="tiny muted">${fmtAt(m.createdAt)} · ${esc(m.name)}</span><div class="small">${esc(m.body)}</div></div>`).join('')}
+        </details>`).join('') || '<p class="small muted">채팅이 없어요.</p>'}
+    </section>`;
+
+  // 전환 단계: 전체 ↔ 오늘만
+  $('#funnel-today').addEventListener('click', (e) => {
+    const today = e.target.getAttribute('aria-pressed') !== 'true';
+    e.target.setAttribute('aria-pressed', today);
+    e.target.textContent = today ? '전체 보기' : '오늘만 보기';
+    $('#funnel').innerHTML = funnelHTML(today ? a.funnel.today : a.funnel.all);
   });
 }
 

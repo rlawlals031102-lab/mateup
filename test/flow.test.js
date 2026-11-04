@@ -466,6 +466,30 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(await S.userByToken(db, token), null);
     });
 
+    test('개발자 화면: 운영자만, 실제 사용자 기준 집계', async () => {
+      const admin = (await S.signup(db, {
+        email: 'rlawlals031102@kookmin.ac.kr', password: 'secret1', name: '운영자', department: '경영정보학부', phone: '010-1111-2222',
+      })).user;
+      assert.equal(admin.isAdmin, true);
+      const a = await signup('a');
+      const b = await signup('b');
+      await assert.rejects(S.assertAdmin(db, a), /개발자만/);
+      await S.assertAdmin(db, admin.id);
+
+      await S.recordVisit(db, 'visitor0001');
+      await S.createRequest(db, a, baseReq);
+      const { matchId } = await S.createRequest(db, b, baseReq);
+      await S.sendMessage(db, a, matchId, '안녕하세요');
+      await S.createRequest(db, (await S.demoLogin(db)).user.id, baseReq); // 데모 계정은 세지 않음
+
+      const d = await S.adminDashboard(db);
+      assert.deepEqual(d.summary, { todayVisitors: 1, users: 3, pendingRequests: 0, activeMatches: 1 });
+      assert.deepEqual(d.funnel.all.map((f) => f.count), [1, 3, 2, 2, 0]);
+      assert.deepEqual(d.funnel.today.map((f) => f.count), [1, 3, 2, 2, 0], '모두 오늘 일어난 일');
+      assert.equal(d.users.find((u) => u.name === '운영자').phone, '010-1111-****');
+      assert.deepEqual(d.chats.map((c) => [c.names, c.messages.map((m) => m.body)]), [[['a', 'b'], ['안녕하세요']]]);
+    });
+
     test('방문자: 열 때마다 기록, 사람 수는 브라우저 id로 센다', async () => {
       setNow(kst(2026, 11, 4, 10, 0));
       await S.recordVisit(db, 'visitor0001');

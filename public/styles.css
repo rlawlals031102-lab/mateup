@@ -547,3 +547,17 @@ a.link-item:hover { background: var(--soft); }
 .field .row .email-input { flex: 1; min-width: 0; }
 .email-input .input { width: 100%; padding-right: 112px; }
 .email-input span { position: absolute; top: 50%; white-space: nowrap; transform: translateY(-50%); font-size: 13px; color: var(--muted); pointer-events: none; }
+
+/* 개발자 화면 */
+.hour-bars { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; height: 80px; align-items: end; margin-top: 6px; }
+.hour-bars div { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; position: relative; padding-bottom: 14px; }
+.hour-bars i { display: block; background: var(--green); border-radius: 2px 2px 0 0; min-height: 1px; }
+.hour-bars span { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); font-size: 9.5px; color: var(--muted); }
+.funnel-row { display: grid; grid-template-columns: 64px 1fr 28px; align-items: center; gap: 8px; margin: 6px 0; font-size: 13px; }
+.funnel-row div { background: var(--soft); border-radius: 6px; height: 14px; overflow: hidden; }
+.funnel-row i { display: block; height: 100%; background: var(--green); border-radius: 6px; }
+.funnel-row b { text-align: right; }
+.admin-item { padding: 8px 0; border-bottom: 1px solid var(--soft); }
+.admin-item:last-child { border-bottom: 0; }
+.admin-chat { padding: 8px 0; border-bottom: 1px solid var(--soft); }
+.admin-msg { padding: 6px 0 0 8px; border-left: 2px solid var(--soft); margin-top: 6px; }
