@@ -212,6 +212,7 @@ function authShell(inner) {
       <img class="logo lg" src="logo.png" alt="스터디버디">
       ${inner}
     </div>`;
+  $$('.email-input input').forEach(placeDomain);
 }
 
 // 실서비스는 국민대 메일만 받는다. 칸에는 @ 앞(아이디)만 입력하고, 보낼 때 @kookmin.ac.kr 을 붙인다.
@@ -228,11 +229,26 @@ const emailInput = () => (OPTIONS.emailDomain
   ? `<div class="email-input"><input class="input" name="email" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="아이디" required><span>@${esc(OPTIONS.emailDomain)}</span></div>`
   : '<input class="input" name="email" type="email" autocomplete="email" required>');
 
+// @kookmin.ac.kr 을 입력한 글자(비어 있으면 '아이디' 안내 글자) 바로 뒤에 붙인다.
+// 칸 끝까지 차면 오른쪽 끝에 멈추고, 글자는 그 앞에서 옆으로 밀린다.
+const measureCtx = document.createElement('canvas').getContext('2d');
+function placeDomain(input) {
+  const span = input.nextElementSibling;
+  if (!span) return;
+  const cs = getComputedStyle(input);
+  measureCtx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  const text = input.value || input.placeholder;
+  const left = parseFloat(cs.paddingLeft) + measureCtx.measureText(text).width + 2;
+  span.style.left = `${Math.min(left, input.clientWidth - span.offsetWidth - 12)}px`;
+}
+document.fonts?.ready.then(() => $$('.email-input input').forEach(placeDomain));
+
 // 아이디 칸에 전체 주소를 붙여 넣으면 @ 앞만 남긴다
 document.addEventListener('input', (e) => {
   if (OPTIONS.emailDomain && e.target.name === 'email' && e.target.value.includes('@')) {
     e.target.value = e.target.value.split('@')[0];
   }
+  if (e.target.closest?.('.email-input')) placeDomain(e.target);
 });
 
 // 이메일 + "인증번호 받기" 버튼 + 인증번호 입력칸 (메일 인증을 쓰는 실서비스에서만)

@@ -546,4 +546,4 @@ a.link-item:hover { background: var(--soft); }
 .email-input { position: relative; display: block; }
 .field .row .email-input { flex: 1; min-width: 0; }
 .email-input .input { width: 100%; padding-right: 112px; }
-.email-input span { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--muted); pointer-events: none; }
+.email-input span { position: absolute; top: 50%; white-space: nowrap; transform: translateY(-50%); font-size: 13px; color: var(--muted); pointer-events: none; }
