@@ -877,6 +877,15 @@ async function communityStats(db) {
   return { studying: Number(studying.n), waiting: Number(waiting.n) };
 }
 
+// 사이트 방문 기록. 사이트를 열 때마다 한 줄씩 남긴다 (사람 수는 visitorId로 따로 센다).
+export async function recordVisit(db, visitorId) {
+  if (typeof visitorId !== 'string' || !/^[a-z0-9]{8,40}$/i.test(visitorId)) throw new AppError(400, '잘못된 요청이에요.');
+  await db.run(
+    'INSERT INTO visits (visitor_id, day, created_at) VALUES (?, ?, ?)',
+    visitorId, T.today(), iso(),
+  );
+}
+
 // 시험 디데이 (한국 날짜 기준). 시험일이 지나면 null.
 function examDday() {
   const days = Math.round((Date.parse(EXAM.date) - Date.parse(T.today())) / 86400000);

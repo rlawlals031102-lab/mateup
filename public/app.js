@@ -198,6 +198,19 @@ async function router() {
 
 window.addEventListener('hashchange', router);
 router();
+countVisit();
+
+// 방문 기록: 브라우저마다 무작위 id를 하나 만들어 두고, 사이트를 열 때마다 서버에 알린다 (실패해도 화면에는 영향 없음)
+function countVisit() {
+  try {
+    let id = localStorage.getItem('visitorId');
+    if (!id) {
+      id = crypto.getRandomValues(new Uint32Array(4)).reduce((s, n) => s + n.toString(36).padStart(7, '0'), '');
+      localStorage.setItem('visitorId', id);
+    }
+    api('/visit', { method: 'POST', body: { id } }).catch(() => {});
+  } catch {}
+}
 
 // ───────────────────────── 로그인 / 가입 ─────────────────────────
 

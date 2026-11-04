@@ -57,6 +57,12 @@ export function createApp({
     });
   });
 
+  // 방문자 수 세기 (로그인 없이)
+  api.post('/visit', async (req, res) => {
+    await S.recordVisit(db, req.body?.id);
+    res.status(204).end();
+  });
+
   // 인증
   api.post('/auth/code', async (req, res) => {
     res.json(await S.requestEmailCode(db, mailer, req.body ?? {}, emailPolicy));

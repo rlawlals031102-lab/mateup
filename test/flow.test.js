@@ -465,5 +465,19 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       await S.logout(db, token);
       assert.equal(await S.userByToken(db, token), null);
     });
+
+    test('방문자: 열 때마다 기록, 사람 수는 브라우저 id로 센다', async () => {
+      setNow(kst(2026, 11, 4, 10, 0));
+      await S.recordVisit(db, 'visitor0001');
+      await S.recordVisit(db, 'visitor0001');
+      await S.recordVisit(db, 'visitor0002');
+      setNow(kst(2026, 11, 5, 10, 0));
+      await S.recordVisit(db, 'visitor0001');
+      const rows = await db.all('SELECT visitor_id, day FROM visits ORDER BY id');
+      assert.deepEqual(rows.map((r) => `${r.visitor_id} ${r.day}`),
+        ['visitor0001 2026-11-04', 'visitor0001 2026-11-04', 'visitor0002 2026-11-04', 'visitor0001 2026-11-05']);
+      assert.equal(Number((await db.get('SELECT COUNT(DISTINCT visitor_id) AS n FROM visits')).n), 2);
+      await assert.rejects(S.recordVisit(db, 'x'), /잘못된/);
+    });
   });
 }
