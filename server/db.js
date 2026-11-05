@@ -122,6 +122,15 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL
 );
 
+-- 채팅 읽음: 매칭마다 사람별로 어디까지 읽었는지 (안 읽은 메시지 수, 보낸 메시지 옆 '1' 표시)
+CREATE TABLE IF NOT EXISTS chat_reads (
+  match_id     INTEGER NOT NULL REFERENCES matches(id),
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  last_read_id INTEGER NOT NULL DEFAULT 0,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (match_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS point_logs (
   id         ${ID},
   user_id    INTEGER NOT NULL REFERENCES users(id),
@@ -164,7 +173,7 @@ ${dialect === 'pg' ? RLS : ''}`;
 
 // PostgreSQL(Supabase)에서는 모든 테이블에 RLS를 켜 둔다. 정책이 없으므로 Supabase 공개 API(anon 키)로는
 // 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
-const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'email_codes', 'attendance_codes', 'visits']
+const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'email_codes', 'attendance_codes', 'visits', 'chat_reads']
   .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
   .join('\n');
 

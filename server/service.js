@@ -1351,6 +1351,55 @@ export async function listMessages(db, userId, matchId, afterId = 0) {
   );
 }
 
+// ── 채팅 읽음 ──
+// 매칭마다 사람별로 어디까지 읽었는지(chat_reads.last_read_id) 기록한다.
+// 안 읽은 메시지 = 메이트가 보낸 메시지 중 내가 읽은 위치보다 뒤의 것.
+
+const lastMessageId = async (db, matchId) => Number((await db.get('SELECT MAX(id) AS n FROM messages WHERE match_id = ?', matchId))?.n) || 0;
+const lastReadOf = async (db, matchId, userId) => Number((await db.get(
+  'SELECT last_read_id AS n FROM chat_reads WHERE match_id = ? AND user_id = ?', matchId, userId,
+))?.n) || 0;
+
+// 채팅 화면에서 본 메시지까지 읽음으로 기록 (lastId가 없으면 지금까지 전부). 뒤로 되돌리지는 않는다.
+export async function markChatRead(db, userId, matchId, lastId) {
+  const m = await loadMatchForUser(db, userId, matchId);
+  const max = await lastMessageId(db, m.id);
+  const upto = Math.min(Number(lastId) > 0 ? Number(lastId) : max, max);
+  if (upto > 0) {
+    await db.run(
+      `INSERT INTO chat_reads (match_id, user_id, last_read_id, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (match_id, user_id) DO UPDATE SET
+         last_read_id = CASE WHEN excluded.last_read_id > chat_reads.last_read_id THEN excluded.last_read_id ELSE chat_reads.last_read_id END,
+         updated_at = excluded.updated_at`,
+      m.id, userId, upto, iso(),
+    );
+  }
+  return { lastReadId: await lastReadOf(db, m.id, userId) };
+}
+
+// 진행 중인 매칭(리포트 대기 포함)별 안 읽은 메시지 수 → 채팅 탭의 빨간 숫자
+export async function unreadCounts(db, userId) {
+  const rows = await db.all(
+    `SELECT m.id AS "matchId", COUNT(msg.id) AS n
+       FROM matches m
+       JOIN messages msg ON msg.match_id = m.id AND msg.user_id <> ?
+       LEFT JOIN chat_reads r ON r.match_id = m.id AND r.user_id = ?
+      WHERE (m.user_a = ? OR m.user_b = ?) AND m.status IN ('active', 'reported')
+        AND msg.id > COALESCE(r.last_read_id, 0)
+      GROUP BY m.id`,
+    userId, userId, userId, userId,
+  );
+  const byMatch = Object.fromEntries(rows.map((r) => [Number(r.matchId), Number(r.n)]));
+  return { total: Object.values(byMatch).reduce((a, b) => a + b, 0), byMatch };
+}
+
+// 메이트가 어디까지 읽었는지 (내가 보낸 메시지 옆 '1' 표시). 데모 메이트는 바로 읽은 것으로 친다.
+export async function mateLastRead(db, userId, matchId) {
+  const m = await loadMatchForUser(db, userId, matchId);
+  const mate = await getUser(db, mateOf(m, userId));
+  return mate?.is_bot ? lastMessageId(db, m.id) : lastReadOf(db, m.id, mate.id);
+}
+
 export async function sendMessage(db, userId, matchId, body) {
   const text = String(body ?? '').trim();
   if (!text) throw new AppError(400, '메시지를 입력해 주세요.');

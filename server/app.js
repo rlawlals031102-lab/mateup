@@ -142,8 +142,17 @@ export function createApp({
 
   // 채팅
   api.get('/matches/:id/messages', auth, async (req, res) => {
-    res.json({ messages: await S.listMessages(db, req.user.id, Number(req.params.id), req.query.after) });
+    const id = Number(req.params.id);
+    res.json({
+      messages: await S.listMessages(db, req.user.id, id, req.query.after),
+      mateLastReadId: await S.mateLastRead(db, req.user.id, id), // 이 번호까지는 메이트가 읽음
+    });
   });
+  // 채팅 읽음 표시, 안 읽은 메시지 수 (채팅 탭 빨간 숫자)
+  api.post('/matches/:id/read', auth, async (req, res) => {
+    res.json(await S.markChatRead(db, req.user.id, Number(req.params.id), req.body?.lastId));
+  });
+  api.get('/chat/unread', auth, async (req, res) => res.json(await S.unreadCounts(db, req.user.id)));
   api.post('/matches/:id/messages', auth, async (req, res) => {
     await S.sendMessage(db, req.user.id, Number(req.params.id), req.body?.body);
     res.status(201).json({ ok: true });

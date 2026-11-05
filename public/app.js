@@ -221,6 +221,7 @@ async function router() {
   try {
     if (!OPTIONS) OPTIONS = await api('/options');
     await render(() => token === routeToken);
+    refreshUnread();
   } catch (err) {
     if (err.status === 401 && !['login', 'signup', 'reset'].includes(name)) {
       location.hash = '#/login';
@@ -231,9 +232,34 @@ async function router() {
   }
 }
 
+// ── 안 읽은 채팅: 채팅 탭 아이콘 위 빨간 숫자 (홈 등 탭이 보이는 모든 화면)
+let unread = { total: 0, byMatch: {} };
+async function refreshUnread() {
+  if (tabbar.hidden) return;
+  try { unread = await api('/chat/unread'); } catch { return; }
+  const tab = $('a[data-tab="chat"]', tabbar);
+  let badge = $('.badge', tab);
+  if (!unread.total) {
+    badge?.remove();
+    tab.removeAttribute('aria-label');
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.setAttribute('aria-hidden', 'true');
+    $('.ti', tab).append(badge);
+  }
+  badge.textContent = unread.total > 99 ? '99+' : String(unread.total);
+  tab.setAttribute('aria-label', `채팅, 안 읽은 메시지 ${unread.total}개`);
+}
+setInterval(refreshUnread, 15000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshUnread(); });
+
 window.addEventListener('hashchange', router);
 router();
 countVisit();
+
 
 // 방문 기록: 브라우저마다 무작위 id를 하나 만들어 두고, 사이트를 열 때마다 서버에 알린다 (실패해도 화면에는 영향 없음)
 function countVisit() {
@@ -581,8 +607,9 @@ async function renderHome(alive) {
   setTop({ brand: true });
   setTabs('home');
   loading();
-  const state = await api('/me');
+  const [state, u] = await Promise.all([api('/me'), api('/chat/unread').catch(() => null)]);
   if (!alive()) return;
+  if (u) unread = u;
   const { user, matches, pendingRequests, personal, mateLeft, community, exam } = state;
 
   const reportCard = (m) => `
@@ -607,6 +634,7 @@ async function renderHome(alive) {
         ${next ? `
           <p class="next-line">다음 약속 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b> · ${esc(next.location)}</p>`
         : '<p class="next-line">이번 주 약속을 모두 마쳤어요. 주간이 끝나면 리포트가 도착해요.</p>'}
+        ${unread.byMatch[m.id] ? `<a class="unread-line" href="#/chat/${m.id}"><span class="badge inline">${unread.byMatch[m.id]}</span>안 읽은 메시지가 있어요</a>` : ''}
         <a class="btn primary block mt" href="#/match/${m.id}">${next && ['open', 'studying'].includes(next.me.status) ? '지금 출석하러 가기' : '매칭 정보 보기'}</a>
       </div>`;
   };
@@ -879,7 +907,7 @@ async function renderApply(alive) {
   });
 }
 
-// ───────────────────────── 매칭중 ─────────────────────────
+// ───────────────────────── 내 메이트 (매칭된 메이트·약속·출석) ─────────────────────────
 
 const STATUS_PILL = {
   done: '<span class="pill">출석</span>',
@@ -898,11 +926,11 @@ const MARK = {
 let mateTabs = '';
 const mateTabsHTML = (matches, current, base) => (matches.length < 2 ? '' : `
   <div class="mate-tabs">${matches.map((m) => `
-    <a href="#/${base}/${m.id}" class="${m.id === current ? 'on' : ''}">${esc(m.mate.name)}<small>${esc(scheduleText(m.schedule))}</small></a>`).join('')}
+    <a href="#/${base}/${m.id}" class="${m.id === current ? 'on' : ''}">${esc(m.mate.name)}${base === 'chat' && m.id !== current && unread.byMatch[m.id] ? `<span class="badge inline">${unread.byMatch[m.id]}</span>` : ''}<small>${esc(scheduleText(m.schedule))}</small></a>`).join('')}
   </div>`);
 
 async function renderMatch(alive, id) {
-  setTop({ title: '매칭중' });
+  setTop({ title: '내 메이트' });
   setTabs('match');
   loading();
   const { matches } = await api('/matches/active');
@@ -912,7 +940,7 @@ async function renderMatch(alive, id) {
   if (!match) {
     view.innerHTML = `
       <div class="empty">
-        <h3>진행 중인 매칭이 없어요</h3>
+        <h3>이번 주 메이트가 아직 없어요</h3>
         <p>매칭을 신청하면 1주일 동안 함께할 메이트를 찾아드려요.</p>
         <a class="btn primary mt-lg" href="#/home">홈으로</a>
       </div>`;
@@ -1221,7 +1249,7 @@ async function renderPast(alive, id) {
   const { match: m } = await api(`/matches/${id}`);
   if (!alive()) return;
   if (m.status !== 'closed') {
-    location.hash = '#/match'; // 아직 진행 중인 매칭은 매칭중 화면에서
+    location.hash = '#/match'; // 아직 진행 중인 매칭은 '메이트' 탭에서
     return;
   }
   const r = m.report;
@@ -1402,8 +1430,9 @@ async function renderChat(alive, id) {
   setTop({ title: '채팅' });
   setTabs('chat');
   loading();
-  const [{ matches }, { user }] = await Promise.all([api('/matches/active'), api('/me')]);
+  const [{ matches }, { user }, u] = await Promise.all([api('/matches/active'), api('/me'), api('/chat/unread').catch(() => null)]);
   if (!alive()) return;
+  if (u) unread = u;
   const match = matches.find((m) => m.id === id) ?? matches[0];
   if (!match) {
     view.innerHTML = `
@@ -1430,17 +1459,32 @@ async function renderChat(alive, id) {
   // 하단 빠른 연락 + 입력창 높이만큼 비워 두어 마지막 메시지가 가려지지 않게 한다.
   box.style.paddingBottom = `${$('.chat-dock').offsetHeight + 16}px`;
   let lastId = 0;
+  let readSent = 0; // 서버에 '여기까지 읽음'으로 알린 번호
+  // 메이트가 읽은 위치보다 뒤에 내가 보낸 메시지에는 '1' (메이트가 채팅을 열면 사라짐)
+  const markMine = (mateLastReadId) => $$('.read-mark', box).forEach((el) => {
+    if (Number(el.dataset.id) <= mateLastReadId) el.remove();
+  });
   const load = async () => {
-    const { messages } = await api(`/matches/${match.id}/messages?after=${lastId}`);
-    if (!alive() || !messages.length) return;
-    $('#hello')?.remove();
-    for (const msg of messages) {
-      lastId = msg.id;
-      const t = new Date(msg.createdAt);
-      box.insertAdjacentHTML('beforeend', `
-        <div class="bubble ${msg.userId === user.id ? 'me' : 'mate'}">${esc(msg.body)}<time>${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}</time></div>`);
+    const { messages, mateLastReadId = 0 } = await api(`/matches/${match.id}/messages?after=${lastId}`);
+    if (!alive()) return;
+    if (messages.length) {
+      $('#hello')?.remove();
+      for (const msg of messages) {
+        lastId = msg.id;
+        const mine = msg.userId === user.id;
+        const t = new Date(msg.createdAt);
+        const mark = mine && msg.id > mateLastReadId ? `<b class="read-mark" data-id="${msg.id}" title="메이트가 아직 읽지 않았어요">1</b>` : '';
+        box.insertAdjacentHTML('beforeend', `
+          <div class="bubble ${mine ? 'me' : 'mate'}">${esc(msg.body)}<time>${mark}${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}</time></div>`);
+      }
+      scroller().scrollTo(0, scroller().scrollHeight);
     }
-    scroller().scrollTo(0, scroller().scrollHeight);
+    markMine(mateLastReadId);
+    // 화면을 보고 있을 때만 읽음으로 기록하고, 탭의 빨간 숫자를 다시 센다
+    if (lastId > readSent && document.visibilityState === 'visible') {
+      readSent = lastId;
+      api(`/matches/${match.id}/read`, { method: 'POST', body: { lastId } }).then(refreshUnread).catch(() => {});
+    }
   };
   await load();
   if (!box.children.length) box.innerHTML = `<p class="center small muted" id="hello">${esc(match.mate.name)}님께 먼저 인사해 보세요.</p>`;

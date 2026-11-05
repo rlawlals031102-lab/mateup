@@ -92,7 +92,12 @@ const routes = [
   }],
   ['POST', '/matches/:id/leave', (ctx) => S.leaveMatch(ctx.db, needUser(ctx), ctx.id)],
   ['POST', '/matches/:id/choice', (ctx) => S.chooseNext(ctx.db, needUser(ctx), ctx.id, ctx.body.choice)],
-  ['GET', '/matches/:id/messages', async (ctx) => ({ messages: await S.listMessages(ctx.db, needUser(ctx), ctx.id, ctx.query.after) })],
+  ['GET', '/matches/:id/messages', async (ctx) => {
+    const uid = needUser(ctx);
+    return { messages: await S.listMessages(ctx.db, uid, ctx.id, ctx.query.after), mateLastReadId: await S.mateLastRead(ctx.db, uid, ctx.id) };
+  }],
+  ['POST', '/matches/:id/read', (ctx) => S.markChatRead(ctx.db, needUser(ctx), ctx.id, ctx.body.lastId)],
+  ['GET', '/chat/unread', (ctx) => S.unreadCounts(ctx.db, needUser(ctx))],
   ['POST', '/matches/:id/messages', async (ctx) => {
     await S.sendMessage(ctx.db, needUser(ctx), ctx.id, ctx.body.body);
     return { ok: true };
@@ -111,7 +116,7 @@ const routes = [
 ].map(([method, pattern, handler]) => ({
   method,
   handler,
-  regex: new RegExp(`^${pattern.replace(':id', '(\d+)')}$`),
+  regex: new RegExp(`^${pattern.replace(':id', '(\\d+)')}$`), // '\\d' 로 써야 정규식의 숫자(\d)가 된다
 }));
 
 // 요청을 하나씩 처리한다. (DB를 localStorage에 저장하는 동안 다른 트랜잭션이 열려 있으면 안 됨)

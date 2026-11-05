@@ -18,6 +18,7 @@
   --sand-line: #ddd6c4;
   --red: #b8513f;
   --red-soft: #f8e6e1;
+  --alert: #e0383e;       /* 안 읽은 알림 숫자 (메시지 앱의 빨간 원) */
   /* 모서리 3단계 */
   --r-sm: 4px;
   --r: 8px;
@@ -595,3 +596,16 @@ a.link-item:hover { background: var(--soft); }
 input, textarea, select, .input, .select { font-size: 16px; }
 /* 가로로 돌렸을 때 사파리가 글자를 멋대로 키우지 않게 */
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+/* 안 읽은 채팅: 채팅 탭 아이콘 위 빨간 원 숫자 */
+.tabbar a .ti { position: relative; display: inline-block; }
+.badge { position: absolute; top: -6px; left: 13px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: var(--alert); color: #fff; font-size: 12px; font-weight: 700; line-height: 18px; text-align: center;
+  box-shadow: 0 0 0 2px var(--surface); }
+.badge.inline { position: static; display: inline-block; margin: 0 6px 0 4px; box-shadow: none; vertical-align: 1px; }
+.unread-line { display: flex; align-items: center; margin-top: 10px; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; }
+.unread-line .badge.inline { margin-left: 0; }
+/* 보낸 메시지: 메이트가 아직 안 읽었으면 시간 앞에 1 */
+.bubble time { opacity: 1; color: var(--muted); }
+.bubble.me time { color: rgba(255, 255, 255, .72); }
+.read-mark { color: var(--lime); font-weight: 700; margin-right: 4px; }

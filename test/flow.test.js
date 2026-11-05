@@ -530,6 +530,51 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       await assert.rejects(S.recordVisit(db, 'x'), /잘못된/);
     });
 
+    test('채팅 읽음: 안 읽은 수, 읽음 표시, 메이트가 읽은 위치', async () => {
+      const a = await signup('a');
+      const b = await signup('b');
+      await S.createRequest(db, a, baseReq);
+      const { matchId } = await S.createRequest(db, b, baseReq);
+      assert.deepEqual(await S.unreadCounts(db, a), { total: 0, byMatch: {} });
+
+      await S.sendMessage(db, b, matchId, '안녕하세요');
+      await S.sendMessage(db, b, matchId, '7시에 봬요');
+      assert.deepEqual(await S.unreadCounts(db, a), { total: 2, byMatch: { [matchId]: 2 } });
+      assert.equal((await S.unreadCounts(db, b)).total, 0, '내가 보낸 메시지는 안 셈');
+
+      const msgs = await S.listMessages(db, a, matchId);
+      await S.markChatRead(db, a, matchId, msgs[0].id); // 첫 메시지까지만 봄
+      assert.equal((await S.unreadCounts(db, a)).total, 1);
+      await S.markChatRead(db, a, matchId, 999999); // 없는 번호는 마지막 메시지로 맞춤
+      assert.equal((await S.unreadCounts(db, a)).total, 0);
+      assert.equal((await S.markChatRead(db, a, matchId, msgs[0].id)).lastReadId, msgs[1].id, '뒤로 되돌리지 않음');
+
+      // 내가 보낸 메시지는 메이트가 읽기 전까지 '1'
+      await S.sendMessage(db, a, matchId, '네 좋아요');
+      const mine = (await S.listMessages(db, a, matchId)).at(-1);
+      assert.ok(mine.id > await S.mateLastRead(db, a, matchId));
+      assert.equal((await S.unreadCounts(db, b)).total, 1);
+      await S.markChatRead(db, b, matchId);
+      assert.equal(await S.mateLastRead(db, a, matchId), mine.id);
+      assert.equal((await S.unreadCounts(db, b)).total, 0);
+
+      // 매칭 당사자가 아니면 읽음 표시도 못 함
+      const c = await signup('c');
+      await assert.rejects(S.markChatRead(db, c, matchId), /찾을 수 없어요/);
+    });
+
+    test('채팅 읽음: 데모 메이트는 바로 읽은 것으로', async () => {
+      const { seedBots } = await import('../server/seed.js');
+      await seedBots(db);
+      const demo = (await S.demoLogin(db)).user.id;
+      const { matchId } = await S.createRequest(db, demo, baseReq);
+      assert.ok(matchId);
+      await S.sendMessage(db, demo, matchId, '안녕하세요');
+      const all = await S.listMessages(db, demo, matchId);
+      assert.equal(await S.mateLastRead(db, demo, matchId), all.at(-1).id);
+      assert.equal((await S.unreadCounts(db, demo)).total, 1, '데모 메이트의 자동 답장 1개');
+    });
+
     test('개발자 화면 권한: 김지민·나윤빈 학교 메일만', async () => {
       const make = async (email) => (await S.signup(db, {
         email, password: 'secret1', name: '운영', department: '경영정보학부', phone: '010-1111-2222',
