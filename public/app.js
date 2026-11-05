@@ -56,7 +56,7 @@ function fmtTime(t) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 const fmtRange = (a, b) => `${fmtTime(a)}–${fmtTime(b)}`;
-// 이번 회차 날짜·시간 한 줄: "11월 3일(화)·4일(수)·5일(목) 19:00–21:00"
+// 이번 회차 날짜·시간 한 줄: "11월 10일(화)·11일(수)·12일(목) 19:00–21:00"
 function periodText() {
   const p = OPTIONS.studyPeriod;
   const days = p.dates.map((d, i) => {
@@ -445,7 +445,7 @@ const introBody = () => `
         <li><b>매칭 신청</b><span class="small muted">날짜, 장소, 공부 스타일을 고르면 조건이 맞는 메이트와 바로 연결돼요.</span></li>
         <li><b>함께 공부</b><span class="small muted">약속한 날 만나서 각자 공부하고, 서로의 QR을 찍어 출석을 확인해요.</span></li>
       </ol>
-      <p class="small mt"><b>이번 회차</b> ${periodText()}</p>
+      <p class="small mt"><b>3회차</b> ${periodText()}</p>
       <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a></p>`;
 
 function showIntro() {
