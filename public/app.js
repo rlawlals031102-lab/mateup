@@ -44,7 +44,6 @@ let timers = [];
 let routeToken = 0;
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const won = (n) => `${Number(n).toLocaleString('ko-KR')}`;
 
 function fmtDate(s, withWeekday = false) {
   const [, m, d] = s.split('-').map(Number);
@@ -56,7 +55,7 @@ function fmtTime(t) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 const fmtRange = (a, b) => `${fmtTime(a)}–${fmtTime(b)}`;
-// 이번 회차 날짜·시간 한 줄: "11월 10일(화)·11일(수)·12일(목) 19:00–21:00"
+// 이번 회차 날짜·시간 한 줄: "11월 3일(화)·4일(수)·5일(목) 19:00–21:00"
 function periodText() {
   const p = OPTIONS.studyPeriod;
   const days = p.dates.map((d, i) => {
@@ -76,6 +75,26 @@ const todayStr = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
+// 날짜 범위: 같은 달이면 "11월 3일–5일", 다른 달이면 "10월 30일–11월 2일" (시간 범위와 같은 – 기호)
+function fmtDateRange(a, b) {
+  const [, am, ad] = a.split('-').map(Number);
+  const [, bm, bd] = b.split('-').map(Number);
+  if (a === b) return `${am}월 ${ad}일`;
+  return am === bm ? `${am}월 ${ad}일–${bd}일` : `${am}월 ${ad}일–${bm}월 ${bd}일`;
+}
+
+// ── 약속 지키기 (보증금 대신): 약속 날 안 나오거나 매칭을 그만두면 1회.
+//    정해진 횟수가 되면 일정 기간 매칭 신청이 멈추고, 끝나면 0회부터 다시 센다. (server/options.js PROMISE_RULE)
+const rule = () => OPTIONS.promiseRule ?? { strikeLimit: 2, suspendDays: 30, from: '' };
+const ruleOn = () => todayStr() >= rule().from;
+// ISO 시각 → 한국 날짜 "12월 6일"
+function kDay(iso) {
+  const d = new Date(new Date(iso).getTime() + 9 * 3600000);
+  return `${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일`;
+}
+const reopenText = (st) => `${kDay(st.suspendedUntil)}부터 다시 신청할 수 있어요.`;
+const RULE_TEXT = () => `약속 날 안 나오거나 매칭을 그만두면 1회로 기록돼요. ${rule().strikeLimit}회가 되면 ${rule().suspendDays}일 동안 매칭 신청이 멈추고, 정지가 끝나면 다시 0회부터 시작해요.`;
+let myStrikes = null; // 내 약속 기록 (메이트 화면을 열 때 받아 둔다)
 
 async function api(path, { method = 'GET', body } = {}) {
   // 단독 실행 HTML(npm run build:standalone)에서는 브라우저 안의 가짜 서버를 쓴다.
@@ -444,8 +463,9 @@ const introBody = () => `
       <ol class="steps mt">
         <li><b>매칭 신청</b><span class="small muted">날짜, 장소, 공부 스타일을 고르면 조건이 맞는 메이트와 바로 연결돼요.</span></li>
         <li><b>함께 공부</b><span class="small muted">약속한 날 만나서 각자 공부하고, 서로의 QR을 찍어 출석을 확인해요.</span></li>
+        <li><b>약속 지키기</b><span class="small muted">약속 날 안 나오거나 매칭을 그만두면 1회로 기록돼요. ${rule().strikeLimit}회가 되면 ${rule().suspendDays}일 동안 매칭 신청이 멈춰요.</span></li>
       </ol>
-      <p class="small mt"><b>3회차</b> ${periodText()}</p>
+      <p class="small mt"><b>이번 회차</b> ${periodText()}</p>
       <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a></p>`;
 
 function showIntro() {
@@ -610,7 +630,13 @@ async function renderHome(alive) {
   const [state, u] = await Promise.all([api('/me'), api('/chat/unread').catch(() => null)]);
   if (!alive()) return;
   if (u) unread = u;
-  const { user, matches, pendingRequests, personal, mateLeft, community, exam } = state;
+  const { user, matches, pendingRequests, personal, mateLeft, community, exam, strikes } = state;
+  // 약속 지키기: 기록이 있으면 한 줄로 알리고, 정지 중이면 신청 버튼 대신 다시 신청할 수 있는 날을 보여 준다
+  const st = strikes ?? { count: 0, limit: rule().strikeLimit };
+  const stopped = !!st.suspendedUntil;
+  const ruleNote = stopped
+    ? `<p class="rule-line"><b class="warn-text">매칭 정지 중</b> · ${reopenText(st)}</p>`
+    : st.count ? `<p class="rule-line">약속 기록 <b>${st.count}/${st.limit}회</b> · ${st.limit}회가 되면 ${rule().suspendDays}일 동안 매칭 신청이 멈춰요.</p>` : '';
 
   const reportCard = (m) => `
       <div class="card lime">
@@ -644,10 +670,10 @@ async function renderHome(alive) {
           <div class="spinner sm"></div>
           <div style="flex:1">
             <b>메이트를 찾는 중</b>
-            <p class="tiny muted">${esc(scheduleText(req.schedule))}<br>${esc(req.location)} · ${styleLabels(req.styles)}${req.deposit ? ` · 보증금 ${won(req.deposit)}P` : ''}</p>
+            <p class="tiny muted">${esc(scheduleText(req.schedule))}<br>${esc(req.location)} · ${styleLabels(req.styles)}</p>
           </div>
         </div>
-        <button class="btn ghost block mt danger sm" data-cancel="${req.id}">신청 취소하기</button>
+        <button class="btn ghost block mt sm" data-cancel="${req.id}">신청 취소하기</button>
       </div>`;
 
   let leftNote = '';
@@ -676,14 +702,16 @@ async function renderHome(alive) {
   const main = hasAny
     ? ttCard
       + [...matches.map((m) => (m.status === 'reported' ? reportCard(m) : matchCard(m))), ...pendingRequests.map(pendingCard)].join('')
-      + '<a class="btn block mt" href="#/apply">다른 날짜에도 신청하기</a>'
+      + (stopped ? '' : '<a class="btn block mt" href="#/apply">다른 날짜에도 신청하기</a>')
+      + ruleNote
       + homeStats
     : `${leftNote}
       <div class="card hero compact">
-        <h2>이번 주 메이트 신청</h2>
-        <p class="small muted">${periodText()} 중 원하는 시간만 고르면 돼요.</p>
+        <h2>${stopped ? '지금은 매칭을 신청할 수 없어요' : '이번 주 메이트 신청'}</h2>
+        <p class="small muted">${stopped ? `약속 기록이 ${st.limit}회가 되어 ${rule().suspendDays}일 동안 매칭 신청이 멈췄어요. ${reopenText(st)}`
+          : `${periodText()} 중 원하는 시간만 고르면 돼요.`}</p>
         ${heroStats}
-        <a class="btn lime block" href="#/apply">매칭 신청하기</a>
+        ${stopped ? '' : `<a class="btn lime block" href="#/apply">매칭 신청하기</a>${ruleNote}`}
       </div>
       ${ttCard}`;
 
@@ -799,6 +827,7 @@ async function renderApply(alive) {
   const state = await api('/me');
   if (!alive()) return;
   const { user } = state;
+  const stopped = !!state.strikes?.suspendedUntil; // 약속 지키기: 매칭 정지 중
   // 스터디 날짜(화·수·목) 19~21시를 1시간 칸으로 보여 주고, 원하는 칸을 여러 개 고른다.
   // 이미 끝난 칸, 이미 신청·매칭한 칸은 고를 수 없다.
   const period = OPTIONS.studyPeriod;
@@ -818,6 +847,7 @@ async function renderApply(alive) {
   const form = { locations: new Set(), styles: new Set(), cells: new Set() };
 
   view.innerHTML = `
+    ${stopped ? `<div class="notice warn"><b>매칭 정지 중이에요.</b> ${reopenText(state.strikes)}</div>` : ''}
     <section class="card">
       <div class="card-head"><h2>내 프로필</h2><a class="link" href="#/me/edit">수정하기 ›</a></div>
       <div class="profile">
@@ -860,7 +890,7 @@ async function renderApply(alive) {
       </div>
     </section>
 
-    <div class="sticky-cta"><button class="btn primary block" id="submit">매칭 신청하기</button></div>`;
+    <div class="sticky-cta"><button class="btn primary block" id="submit"${stopped ? ' disabled' : ''}>매칭 신청하기</button></div>`;
 
   $('#styles').addEventListener('click', (e) => {
     const b = e.target.closest('button');
@@ -909,18 +939,30 @@ async function renderApply(alive) {
 
 // ───────────────────────── 내 메이트 (매칭된 메이트·약속·출석) ─────────────────────────
 
-const STATUS_PILL = {
-  done: '<span class="pill">출석</span>',
-  studying: '<span class="pill lime">공부중</span>',
-  missed: '<span class="pill red">미참석</span>',
-  open: '<span class="pill lime">출석 가능</span>',
-  scheduled: '<span class="pill gray">예정</span>',
-  cancelled: '<span class="pill gray">취소</span>',
+// 약속 상태: 알약 배지 대신 색 글자 (출석은 초록, 미참석은 빨강, 나머지는 회색)
+const APPT_STATUS = {
+  done: ['출석', 'ok'], studying: ['공부 중', 'ok'], missed: ['미참석', 'bad'],
+  open: ['출석 가능', 'now'], scheduled: ['예정', ''], cancelled: ['취소', 'off'],
 };
-const MARK = {
-  done: ['✓', '출석'], studying: ['✓', '공부중'], missed: ['✕', '미참석'],
-  open: ['', '예정'], scheduled: ['', '예정'], off: ['–', '휴식'], cancelled: ['–', '취소'],
-};
+function statusHTML(status, { mate = false, minutes = 0 } = {}) {
+  // 메이트 칸의 '출석 가능'은 내 할 일이 아니므로 '예정'으로
+  const [label, cls] = mate && status === 'open' ? APPT_STATUS.scheduled : APPT_STATUS[status] ?? [status, ''];
+  return `<span class="st${cls ? ` ${cls}` : ''}">${label}</span>${minutes ? `<small>${fmtMinutes(minutes)}</small>` : ''}`;
+}
+// 약속별 출석 표: 날짜·시간 | 나 | 메이트 (예전의 '약속 목록'과 '요일별 출석 칸'을 하나로)
+function apptTable(m, { highlight = null, minutes = false } = {}) {
+  if (!m.appointments.length) return '<p class="small muted">약속이 없어요.</p>';
+  return `
+    <table class="att-table">
+      <thead><tr><th>날짜</th><th>나</th><th title="${esc(m.mate.name)}">${esc(m.mate.name)}</th></tr></thead>
+      <tbody>${m.appointments.map((a) => `
+        <tr${a.id === highlight ? ' class="is-open"' : ''}>
+          <td><b>${fmtDate(a.date)}</b> <span class="muted">(${WD[a.weekday]})</span><small>${fmtRange(a.startTime, a.endTime)}</small></td>
+          <td>${statusHTML(a.me.status, { minutes: minutes ? a.me.minutes : 0 })}</td>
+          <td>${statusHTML(a.mate.status, { mate: true })}</td>
+        </tr>`).join('')}</tbody>
+    </table>`;
+}
 
 // 메이트가 여럿이면 화면 위에 메이트 고르는 버튼을 보여 준다
 let mateTabs = '';
@@ -933,8 +975,9 @@ async function renderMatch(alive, id) {
   setTop({ title: '내 메이트' });
   setTabs('match');
   loading();
-  const { matches } = await api('/matches/active');
+  const { matches, strikes } = await api('/matches/active');
   if (!alive()) return;
+  myStrikes = strikes ?? null;
   const match = matches.find((m) => m.id === id) ?? matches[0];
   mateTabs = mateTabsHTML(matches, match?.id, 'match');
   if (!match) {
@@ -951,14 +994,14 @@ async function renderMatch(alive, id) {
 }
 
 function drawMatch(m, alive) {
-  const today = todayStr();
   const tabs = mateTabs;
   const target = m.appointments.find((a) => a.me.status === 'studying' || a.mate.status === 'studying')
     ?? m.appointments.find((a) => a.me.status === 'open' || a.mate.status === 'open');
   const next = m.appointments.find((a) => a.me.status === 'scheduled');
 
   // 현장 출석 확인: 내 코드는 메이트가 입력해서 내 출석을 확인해 주고, 나는 메이트의 코드를 입력해서 메이트 출석을 확인한다.
-  let checkin;
+  let checkinCard = '';
+  let nextLine = '';
   if (target) {
     const meIn = ['studying', 'done'].includes(target.me.status);
     const mateIn = ['studying', 'done'].includes(target.mate.status);
@@ -991,26 +1034,20 @@ function drawMatch(m, alive) {
           <input class="input code" name="code" maxlength="6" placeholder="메이트 코드" autocomplete="off" style="text-transform:uppercase" required>
           <button class="btn inline-btn">확인</button>
         </form>`;
-    checkin = `
-      <p class="tiny muted">${fmtDate(target.date, true)} ${fmtRange(target.startTime, target.endTime)} 약속</p>
+    checkinCard = `
+    <section class="card">
+      <div class="card-head"><h2>현장 출석 확인</h2><span class="hint">${fmtDate(target.date, true)} ${fmtRange(target.startTime, target.endTime)}</span></div>
       <div class="att-part">${myPart}</div>
-      <div class="att-part">${matePart}</div>`;
+      <div class="att-part">${matePart}</div>
+    </section>`;
   } else if (next) {
-    checkin = `<p class="small">다음 약속은 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b>이에요. 시작 ${OPTIONS.checkinEarlyMin}분 전부터 출석할 수 있어요.</p>`;
+    nextLine = `<p class="next-line">다음 약속 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b> · 시작 ${OPTIONS.checkinEarlyMin}분 전부터 출석할 수 있어요.</p>`;
   } else {
-    checkin = '<p class="small">이번 주 약속이 모두 끝났어요. 주간이 끝나면 리포트가 도착해요.</p>';
+    nextLine = '<p class="next-line">이번 주 약속이 모두 끝났어요. 주간이 끝나면 리포트가 도착해요.</p>';
   }
 
-  const weekRow = (who) => m.week.map((d) => {
-    const st = d[who];
-    const [sym, label] = MARK[st];
-    return `<div class="d${d.date === today ? ' today' : ''}">
-      <b>${WD[d.weekday]}</b><span class="muted">${Number(d.date.slice(8))}일</span>
-      <div class="mark ${st}">${sym}</div><span class="tiny">${label}</span>
-    </div>`;
-  }).join('');
-
   view.innerHTML = `${tabs}
+    ${checkinCard}
     <section class="card">
       <div class="card-head"><h2>메이트 프로필</h2><span class="hint">${m.round}주차</span></div>
       <div class="profile">
@@ -1022,34 +1059,14 @@ function drawMatch(m, alive) {
         </div>
       </div>
       ${m.mate.isBot ? '<div class="notice">체험용 <b>가상 메이트</b>예요. 실제로 약속 장소에 나오지 않아요. 내가 출석하면 함께 출석하고, 채팅에 자동으로 답해요.</div>' : ''}
-      <p class="meta-line">${esc(styleLabels(m.styles))} · ${esc(m.location)}${m.stake ? ` · 보증금 ${won(m.stake)}원` : ''}</p>
+      <p class="meta-line">${esc(styleLabels(m.styles))} · ${esc(m.location)}</p>
     </section>
 
-    <section class="card">
-      <div class="card-head"><h2>예정된 약속</h2><span class="hint">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)}</span></div>
-      ${m.appointments.length ? m.appointments.map((a) => `
-        <div class="appt${a.id === target?.id ? ' is-open' : ''}">
-          <div class="date"><b>${fmtDate(a.date)}</b><span>(${WD[a.weekday]})</span></div>
-          <div class="meta">
-            <div>${fmtRange(a.startTime, a.endTime)}</div>
-            <div class="muted">${esc(a.location)}</div>
-          </div>
-          <div>${STATUS_PILL[a.me.status]}</div>
-        </div>`).join('') : '<p class="small muted">이번 주 약속이 없어요.</p>'}
-    </section>
-
-    <section class="card">
-      <div class="card-head"><h2>현장 출석 확인</h2></div>
-      ${checkin}
-    </section>
-
-    <section class="card">
-      <div class="card-head"><h2>이번 주 출석</h2></div>
+    <section class="section">
+      <div class="section-head"><h2 class="section-title">이번 주 약속</h2><span class="hint">${fmtDateRange(m.weekStart, m.weekEnd)}</span></div>
       <p class="meta-line">내 출석 <b>${m.stats.me.attended}/${m.stats.me.total}</b> · 공부 <b>${fmtMinutes(m.stats.me.minutes)}</b> · 메이트 출석 <b>${m.stats.mate.attended}/${m.stats.mate.total}</b></p>
-      <div class="week-label">나</div>
-      <div class="week">${weekRow('me')}</div>
-      <div class="week-label">${esc(m.mate.name)}</div>
-      <div class="week">${weekRow('mate')}</div>
+      ${apptTable(m, { highlight: target?.id })}
+      ${nextLine}
     </section>
 
     ${OPTIONS.demo ? `
@@ -1059,8 +1076,8 @@ function drawMatch(m, alive) {
       </div>` : ''}
 
     <div class="leave-box">
-      <button class="btn ghost block danger" id="leave">매칭 그만두기</button>
-      <p class="tiny muted center">${esc(LEAVE_HINT[m.leavePolicy]?.(m) ?? '')}</p>
+      <button type="button" class="text-btn danger" id="leave">매칭 그만두기</button>
+      <p class="tiny muted center">${esc(leaveHint(m))}</p>
     </div>`;
 
   $$('img[data-qr]').forEach(async (img) => {
@@ -1118,7 +1135,7 @@ function drawMatch(m, alive) {
     } catch (err) { toast(err.message, true); }
   });
   $('#leave')?.addEventListener('click', async () => {
-    if (!confirm(LEAVE_CONFIRM[m.leavePolicy](m))) return;
+    if (!confirm(leaveConfirm(m))) return;
     try {
       const res = await api(`/matches/${m.id}/leave`, { method: 'POST' });
       if (res.result === 'settled') {
@@ -1126,14 +1143,14 @@ function drawMatch(m, alive) {
         router();
         return;
       }
-      toast(!res.stake ? '매칭을 그만뒀어요.'
-        : res.lostTo === 'mate' ? `매칭을 그만뒀어요. 보증금 ${won(res.stake)}P는 메이트에게 전달됐어요.`
-          : `매칭을 그만뒀어요. 보증금 ${won(res.stake)}P는 돌려받지 못해요.`);
+      const st = res.strikes;
+      toast(st?.suspendedUntil ? `매칭을 그만뒀어요. 약속 기록이 ${st.limit}회가 되어 매칭 신청이 멈췄어요. ${reopenText(st)}`
+        : st?.count ? `매칭을 그만뒀어요. 약속 기록 ${st.count}/${st.limit}회` : '매칭을 그만뒀어요.');
       location.hash = '#/home';
     } catch (err) { toast(err.message, true); }
   });
   $('#settle')?.addEventListener('click', async () => {
-    if (!confirm('이번 주를 마감하고 보증금을 정산할까요?')) return;
+    if (!confirm('이번 주를 마감하고 리포트를 받을까요?')) return;
     try {
       const res = await api(`/matches/${m.id}/settle`, { method: 'POST' });
       refresh(res.match);
@@ -1141,24 +1158,21 @@ function drawMatch(m, alive) {
   });
 }
 
-// 매칭 그만두기 규칙 안내 (server/service.js leavePolicy 와 같은 규칙)
-const LEAVE_HINT = {
-  penalty: (m) => (m.stake ? '지금 그만두면 내 보증금은 돌려받을 수 없어요.' : '지금 그만두면 이번 주 매칭이 바로 끝나요.'),
-  settle: () => '남은 약속이 없어서, 지금까지 출석으로 이번 주를 정산해요.',
-};
-const LEAVE_CONFIRM = {
-  penalty: (m) => (m.stake
-    ? '정말 매칭을 그만둘까요?\n\n내 보증금은 돌려받을 수 없어요.'
-    : `정말 매칭을 그만둘까요?\n\n${m.mate.name}님과의 이번 주 매칭이 바로 끝나요.`),
-  settle: () => '남은 약속이 없어요. 지금까지 출석으로 이번 주를 정산하고 리포트를 받을까요?',
-};
-
-const DEPOSIT_TEXT = {
-  none: () => '보증금 없이 진행했어요.',
-  refunded: (n) => `약속을 지켜 보증금 ${won(n)}원을 돌려받았어요.`,
-  to_mate: (n) => `약속을 지키지 못해 보증금 ${won(n)}원이 메이트에게 전달됐어요.`,
-  forfeited: (n) => `둘 다 약속을 지키지 못해 보증금 ${won(n)}원이 반환되지 않았어요.`,
-};
+// 매칭 그만두기 안내 (server/service.js leavePolicy 와 같은 규칙).
+// 약속 지키기: 그만두기 1회 + 이미 지난 약속 중 안 나온 날도 함께 기록된다.
+function leaveHint(m) {
+  if (m.leavePolicy === 'settle') return '남은 약속이 없어서, 지금까지 출석으로 이번 주를 정산해요.';
+  if (!ruleOn()) return '지금 그만두면 이번 주 매칭이 바로 끝나요.';
+  const st = myStrikes ?? { count: 0, limit: rule().strikeLimit };
+  const add = 1 + m.appointments.filter((a) => a.me.status === 'missed' && a.date >= rule().from).length;
+  return st.count + add >= st.limit
+    ? `지금 그만두면 약속 기록이 ${st.limit}회가 되어 ${rule().suspendDays}일 동안 매칭 신청이 멈춰요.`
+    : `지금 그만두면 약속 기록 ${add}회가 남아요. (지금 ${st.count}/${st.limit}회)`;
+}
+function leaveConfirm(m) {
+  if (m.leavePolicy === 'settle') return '남은 약속이 없어요. 지금까지 출석으로 이번 주를 정산하고 리포트를 받을까요?';
+  return `정말 매칭을 그만둘까요?\n\n${m.mate.name}님과의 이번 주 매칭이 바로 끝나요.${ruleOn() ? `\n${leaveHint(m)}` : ''}`;
+}
 
 function renderReport(m, alive) {
   setTop({ title: '주간 리포트' });
@@ -1173,8 +1187,13 @@ function renderReport(m, alive) {
       <div class="tiny muted">공부시간</div>
     </div>`;
 
+  const stopped = !!myStrikes?.suspendedUntil; // 약속 지키기: 정지 중이면 같은 메이트와 이어 갈 수 없음
   let choice;
-  if (m.myChoice === 'continue') {
+  if (stopped && m.myChoice !== 'continue') {
+    choice = `
+      <p class="small">매칭 정지 중이라 다음 주를 이어 갈 수 없어요. ${reopenText(myStrikes)}</p>
+      <button class="btn block mt" data-choice="new">이번 매칭 마치기</button>`;
+  } else if (m.myChoice === 'continue') {
     choice = `<div class="notice">${esc(m.mate.name)}님의 선택을 기다리고 있어요. 둘 다 '계속하기'를 고르면 다음 주 약속이 바로 만들어져요.</div>`;
   } else {
     choice = `
@@ -1186,22 +1205,15 @@ function renderReport(m, alive) {
   }
 
   view.innerHTML = `${mateTabs}
-    <section class="card hero">
-      <div class="small muted">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)} · ${m.round}주차</div>
-      <h2 style="font-size:20px;margin-top:4px">${me.kept ? '이번 주 약속을 모두 지켰어요' : '이번 주는 아쉬웠어요'}</h2>
-    </section>
+    <header class="page-head">
+      <p class="small muted">${fmtDateRange(m.weekStart, m.weekEnd)} · ${m.round}주차</p>
+      <h2>${me.kept ? '이번 주 약속을 모두 지켰어요' : '이번 주는 아쉬웠어요'}</h2>
+    </header>
 
     <section class="card">
       <div class="card-head"><h2>출석률과 공부시간</h2></div>
       <div class="vs">${col('me', me, '나')}${col('mate', mate, m.mate.name)}</div>
     </section>
-
-    ${me.deposit.result !== 'none' ? `
-    <section class="card">
-      <div class="card-head"><h2>보증금 정산</h2></div>
-      <p class="small">${DEPOSIT_TEXT[me.deposit.result](me.deposit.amount)}</p>
-      ${me.reward ? `<p class="small mt"><span class="plus">+${won(me.reward)}P</span> 메이트의 미이행 보상을 받았어요.</p>` : ''}
-    </section>` : ''}
 
     <section class="card">
       <div class="card-head"><h2>다음 주 선택</h2></div>
@@ -1215,8 +1227,8 @@ function renderReport(m, alive) {
         toast(`다음 주도 ${m.mate.name}님과 함께해요.`);
         router();
       } else if (res.next === 'new') {
-        toast('새 메이트를 신청해 주세요.');
-        location.hash = '#/apply';
+        toast(stopped ? '이번 매칭을 마쳤어요.' : '새 메이트를 신청해 주세요.');
+        location.hash = stopped ? '#/home' : '#/apply';
       } else {
         toast('선택을 저장했어요.');
         router();
@@ -1235,13 +1247,6 @@ function renderReport(m, alive) {
 
 // ───────────────────────── 지난 스터디 다시 보기 ─────────────────────────
 
-const PAST_DEPOSIT = {
-  none: () => '보증금 없이 진행했어요.',
-  refunded: (n) => `보증금 ${won(n)}P를 돌려받았어요.`,
-  to_mate: (n) => `보증금 ${won(n)}P가 메이트에게 전달됐어요.`,
-  forfeited: (n) => `둘 다 약속을 지키지 못해 보증금 ${won(n)}P가 반환되지 않았어요.`,
-};
-
 async function renderPast(alive, id) {
   setTop({ title: '지난 스터디', back: '#/me' });
   setTabs('me');
@@ -1257,11 +1262,6 @@ async function renderPast(alive, id) {
     : m.left === 'mate' ? `${m.mate.name}님이 중간에 그만둔 스터디예요`
     : r?.me?.kept ? '약속을 모두 지킨 주였어요' : '아쉬움이 남은 주였어요';
 
-  const weekRow = (who) => m.week.map((d) => {
-    const [sym, label] = MARK[d[who]];
-    return `<div class="d"><b>${WD[d.weekday]}</b><span class="muted">${Number(d.date.slice(8))}일</span>
-      <div class="mark ${d[who]}">${sym}</div><span class="tiny">${label}</span></div>`;
-  }).join('');
   const col = (u, name) => `
     <div class="col">
       <div class="small muted">${esc(name)}</div>
@@ -1273,10 +1273,10 @@ async function renderPast(alive, id) {
     </div>`;
 
   view.innerHTML = `
-    <section class="card hero">
-      <div class="small muted">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)} · ${esc(m.label ?? `${m.round}주차`)} · ${esc(m.location)}</div>
-      <h2 style="font-size:18px;margin-top:4px">${esc(headline)}</h2>
-    </section>
+    <header class="page-head">
+      <p class="small muted">${fmtDateRange(m.weekStart, m.weekEnd)} · ${esc(m.label ?? `${m.round}주차`)} · ${esc(m.location)}</p>
+      <h2>${esc(headline)}</h2>
+    </header>
 
     <section class="card">
       <div class="card-head"><h2>메이트</h2></div>
@@ -1287,34 +1287,18 @@ async function renderPast(alive, id) {
           ${tagsHTML(m.mate.tags)}
         </div>
       </div>
-      <p class="meta-line">${esc(styleLabels(m.styles))}${m.stake ? ` · 보증금 ${won(m.stake)}P` : ''}</p>
+      <p class="meta-line">${esc(styleLabels(m.styles))}</p>
     </section>
 
     ${r ? `
     <section class="card">
       <div class="card-head"><h2>출석률과 공부시간</h2></div>
       <div class="vs">${col(r.me, '나')}${col(r.mate, m.mate.name)}</div>
-      ${r.me.deposit.result !== 'none' ? `<p class="small mt">${PAST_DEPOSIT[r.me.deposit.result](r.me.deposit.amount)}
-        ${r.me.reward ? ` 보상으로 <span class="plus">+${won(r.me.reward)}P</span>를 받았어요.` : ''}</p>` : ''}
     </section>` : ''}
 
-    <section class="card">
-      <div class="card-head"><h2>약속</h2></div>
-      ${m.appointments.map((a) => `
-        <div class="appt">
-          <div class="date"><b>${fmtDate(a.date)}</b><span>(${WD[a.weekday]})</span></div>
-          <div class="meta"><div>${fmtRange(a.startTime, a.endTime)}</div>
-            ${a.me.minutes ? `<div class="muted">공부 ${fmtMinutes(a.me.minutes)}</div>` : ''}</div>
-          <div>${STATUS_PILL[a.me.status]}</div>
-        </div>`).join('') || '<p class="small muted">약속이 없었어요.</p>'}
-    </section>
-
-    <section class="card">
-      <div class="card-head"><h2>출석</h2></div>
-      <div class="week-label">나</div>
-      <div class="week">${weekRow('me')}</div>
-      <div class="week-label">${esc(m.mate.name)}</div>
-      <div class="week">${weekRow('mate')}</div>
+    <section class="section">
+      <h2 class="section-title">약속별 출석</h2>
+      ${apptTable(m, { minutes: true })}
     </section>`;
 }
 
@@ -1538,8 +1522,9 @@ async function renderMe(alive) {
   setTop({ title: '마이페이지' });
   setTabs('me');
   loading();
-  const [{ user }, { matches }] = await Promise.all([api('/me'), api('/me/history')]);
+  const [{ user, strikes }, { matches }] = await Promise.all([api('/me'), api('/me/history')]);
   if (!alive()) return;
+  const st = strikes ?? { count: 0, limit: rule().strikeLimit };
 
   view.innerHTML = `
     <section class="card">
@@ -1556,20 +1541,26 @@ async function renderMe(alive) {
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-head"><h2>지난 스터디</h2></div>
+    <section class="section">
+      <div class="section-head"><h2 class="section-title">약속 기록</h2>
+        <b class="${st.suspendedUntil ? 'warn-text' : ''}">${st.suspendedUntil ? '매칭 정지 중' : `${st.count}/${st.limit}회`}</b></div>
+      <p class="small muted">${st.suspendedUntil ? `${reopenText(st)} ` : ''}${RULE_TEXT()}</p>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">지난 스터디</h2>
       ${matches.length ? matches.map((h) => `
         <a class="list-item link-item" href="#/history/${h.id}">
           <div class="row">
             ${avatarHTML(h.mate, 'sm')}
-            <div><div><b>${esc(h.mate.name)}</b></div><div class="tiny muted">${fmtDate(h.weekStart)} ~ ${fmtDate(h.weekEnd)} · ${esc(h.location)}</div></div>
+            <div><div><b>${esc(h.mate.name)}</b></div><div class="tiny muted">${fmtDateRange(h.weekStart, h.weekEnd)} · ${esc(h.location)}</div></div>
           </div>
           <span class="row" style="gap:6px">${h.left ? `<span class="small" style="color:var(--red)">${h.left === 'me' ? '내가 그만둠' : '메이트가 그만둠'}</span>` : h.report ? `<span class="small muted">${h.report.me.rate}% · ${fmtMinutes(h.report.me.minutes)}</span>` : ''}<span class="chev">${icon('caret-right')}</span></span>
         </a>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
     </section>
 
     ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">개발자 화면</a>' : ''}
-    <button class="btn ghost block mt-lg danger" id="logout">로그아웃</button>
+    <button type="button" class="text-btn" id="logout">로그아웃</button>
     ${window.__mockReset ? '<button class="btn ghost block small muted" id="reset">이 브라우저의 데모 데이터 모두 지우기</button>' : ''}`;
 
   $('#reset')?.addEventListener('click', () => {

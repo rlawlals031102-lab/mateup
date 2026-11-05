@@ -17,6 +17,8 @@ const ADDED_COLUMNS = [
   ['users', 'personal', 'TEXT'], // 내 개인 일정 [{ cell, title }]
   ['users', 'department', 'TEXT'], // 학과 (가입 때 수집, 본인·운영자만 봄)
   ['users', 'phone', 'TEXT'], // 전화번호 (가입 때 수집, 본인·운영자만 봄)
+  ['users', 'suspended_until', 'TEXT'], // 매칭 정지가 끝나는 시각 (약속 지키기 규칙)
+  ['users', 'strikes_since', 'TEXT'], // 이 시각 뒤의 그만두기·미참석만 센다 (정지가 끝나면 0번부터)
 ];
 
 export function migrations(dialect) {
@@ -122,6 +124,18 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL
 );
 
+-- 약속 지키기 기록: 매칭 그만두기(left)·약속 날 미참석(missed). 같은 일은 한 번만 센다.
+-- 정해진 횟수가 쌓이면 users.suspended_until 까지 매칭 신청 정지 (server/options.js PROMISE_RULE)
+CREATE TABLE IF NOT EXISTS strikes (
+  id             ${ID},
+  user_id        INTEGER NOT NULL REFERENCES users(id),
+  kind           TEXT NOT NULL,
+  match_id       INTEGER NOT NULL REFERENCES matches(id),
+  appointment_id INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL,
+  UNIQUE (user_id, kind, match_id, appointment_id)
+);
+
 -- 채팅 읽음: 매칭마다 사람별로 어디까지 읽었는지 (안 읽은 메시지 수, 보낸 메시지 옆 '1' 표시)
 CREATE TABLE IF NOT EXISTS chat_reads (
   match_id     INTEGER NOT NULL REFERENCES matches(id),
@@ -168,12 +182,13 @@ CREATE INDEX IF NOT EXISTS idx_messages_match ON messages(match_id);
 CREATE INDEX IF NOT EXISTS idx_tokens_user ON auth_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_email_codes ON email_codes(email, purpose);
 CREATE INDEX IF NOT EXISTS idx_visits_day ON visits(day);
+CREATE INDEX IF NOT EXISTS idx_strikes_user ON strikes(user_id);
 ${dialect === 'pg' ? RLS : ''}`;
 }
 
 // PostgreSQL(Supabase)에서는 모든 테이블에 RLS를 켜 둔다. 정책이 없으므로 Supabase 공개 API(anon 키)로는
 // 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
-const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'email_codes', 'attendance_codes', 'visits', 'chat_reads']
+const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'email_codes', 'attendance_codes', 'visits', 'chat_reads', 'strikes']
   .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
   .join('\n');
 

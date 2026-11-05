@@ -3,7 +3,7 @@ import { isUniqueViolation } from './db.js';
 import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
-  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS,
+  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS, PROMISE_RULE,
 } from './options.js';
 
 // 모든 함수는 첫 인자로 db(server/db.js 인터페이스)를 받는다.
@@ -318,7 +318,7 @@ const DEMO_HISTORY = {
   },
   location: '경상관 102A호',
   label: '첫 베타기간', // '1주차' 대신 보여 줄 이름
-  headline: '오후 7:00 ~ 오후 9:00 5일간의 실서비스', // 지난 스터디 화면 맨 위 문구
+  headline: '5일간의 실서비스 · 19:00–21:00', // 지난 스터디 화면 맨 위 문구
   days: [1, 2, 3, 4, 5],
   startTime: '19:00',
   endTime: '21:00',
@@ -534,6 +534,7 @@ export async function busyCells(db, userId) {
 }
 
 export async function createRequest(db, userId, input) {
+  await assertNotSuspended(db, userId); // 약속 지키기: 매칭 정지 중이면 신청 불가
   const req = validateRequest(input);
   try {
     return await db.tx(async (t) => {
@@ -554,6 +555,59 @@ export async function createRequest(db, userId, input) {
   } catch (err) {
     if (isUniqueViolation(err)) throw new AppError(409, '이미 대기 중인 매칭 신청이 있어요.');
     throw err;
+  }
+}
+
+// ───────────────────────── 약속 지키기 (보증금 대신) ─────────────────────────
+// 매칭 그만두기(left)·약속 날 미참석(missed)을 기록하고, PROMISE_RULE.strikeLimit번이 되면
+// suspendDays일 동안 매칭 신청을 막는다. 정지가 끝나면 0번부터 다시 센다. 데모 메이트·공용 데모 계정은 세지 않는다.
+
+const kDate = (at) => { const [, m, d] = T.dateStr(new Date(at)).split('-').map(Number); return `${m}월 ${d}일`; };
+const suspendedMessage = (until) => `매칭 정지 중이에요. ${kDate(until)}부터 다시 신청할 수 있어요.`;
+
+export async function strikeStatus(db, userId) {
+  const u = await getUser(db, userId);
+  const { strikeLimit: limit, suspendDays } = PROMISE_RULE;
+  const suspendedUntil = u?.suspended_until && new Date(u.suspended_until) > T.now() ? u.suspended_until : null;
+  const count = suspendedUntil ? limit : Number((await db.get(
+    'SELECT COUNT(*) AS n FROM strikes WHERE user_id = ? AND created_at > ?', userId, u?.strikes_since ?? '',
+  )).n);
+  return { count: Math.min(count, limit), limit, suspendDays, suspendedUntil };
+}
+
+async function assertNotSuspended(db, userId) {
+  const { suspendedUntil } = await strikeStatus(db, userId);
+  if (suspendedUntil) throw new AppError(403, suspendedMessage(suspendedUntil));
+}
+
+async function addStrike(db, userId, kind, matchId, appointmentId = 0) {
+  const u = await getUser(db, userId);
+  if (!u || u.is_bot || u.email === DEMO_ACCOUNT.email) return;
+  const { changes } = await db.run(
+    `INSERT INTO strikes (user_id, kind, match_id, appointment_id, created_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT DO NOTHING`,
+    userId, kind, matchId, appointmentId, iso(),
+  );
+  if (!changes) return; // 이미 센 일
+  const st = await strikeStatus(db, userId);
+  if (st.suspendedUntil || st.count < st.limit) return; // 정지 중에 생긴 일은 다음 횟수에 넣지 않는다
+  // 정지: 오늘부터 suspendDays일 뒤 0시(한국 시간)까지. 정지가 끝나는 시각 뒤의 일만 다시 센다.
+  const until = T.at(T.addDays(T.today(), st.suspendDays), '00:00').toISOString();
+  await db.run('UPDATE users SET suspended_until = ?, strikes_since = ? WHERE id = ?', until, until, userId);
+  // 기다리던 신청은 취소 (정지 중에 매칭되지 않게)
+  await db.run("UPDATE match_requests SET status = 'cancelled' WHERE user_id = ? AND status = 'pending'", userId);
+}
+
+// 끝난 약속(until 이전)에 출석 기록이 없는 사람을 '미참석'으로 기록한다. 규칙 시작일 이전 약속은 세지 않는다.
+async function recordNoShows(db, matchId, until = T.now()) {
+  const m = await getMatchRow(db, matchId);
+  if (!m) return;
+  const appts = await db.all('SELECT * FROM appointments WHERE match_id = ? ORDER BY date, start_time', m.id);
+  for (const a of appts) {
+    if (a.date < PROMISE_RULE.from || T.at(a.date, a.end_time) > until) continue;
+    for (const uid of [m.user_a, m.user_b]) {
+      if (!(await attendanceOf(db, a.id, uid))) await addStrike(db, uid, 'missed', m.id, a.id);
+    }
   }
 }
 
@@ -877,6 +931,7 @@ export async function homeState(db, userId, opts) {
     mateLeft: matches.length ? null : await recentMateLeft(db, userId),
     community: await communityStats(db),
     exam: examDday(),
+    strikes: await strikeStatus(db, userId), // 약속 지키기: 그만두기·미참석 횟수, 매칭 정지
   };
 }
 
@@ -1152,10 +1207,16 @@ async function attendanceStats(db, appts, uid) {
 }
 
 export async function settleMatch(db, matchId) {
+  const { row, claimed } = await settleMatchTx(db, matchId);
+  if (claimed) await recordNoShows(db, matchId); // 이번에 정산한 경우에만: 약속 날 안 나온 사람 기록
+  return row;
+}
+
+async function settleMatchTx(db, matchId) {
   return db.tx(async (t) => {
     // 먼저 상태를 바꿔 자리를 차지한다. 다른 요청이 이미 정산했다면 아무것도 하지 않는다.
     const claimed = await t.run("UPDATE matches SET status = 'reported' WHERE id = ? AND status = 'active'", matchId);
-    if (!claimed.changes) return getMatchRow(t, matchId);
+    if (!claimed.changes) return { row: await getMatchRow(t, matchId), claimed: false };
     const m = await getMatchRow(t, matchId);
     const appts = await t.all('SELECT * FROM appointments WHERE match_id = ?', m.id);
 
@@ -1190,11 +1251,12 @@ export async function settleMatch(db, matchId) {
     for (const [uid, col] of [[m.user_a, 'choice_a'], [m.user_b, 'choice_b']]) {
       if ((await getUser(t, uid)).is_bot) await t.run(`UPDATE matches SET ${col} = 'continue' WHERE id = ?`, m.id);
     }
-    return getMatchRow(t, m.id);
+    return { row: await getMatchRow(t, m.id), claimed: true };
   });
 }
 
 // 매칭 그만두기 규칙 (첫 약속 전이어도 같음)
+// ※ 보증금은 2026-11-05에 없앴다 (stake 는 항상 0). 대신 '약속 지키기' 기록이 남는다 → leaveMatch, addStrike
 //   penalty : 그만둔 사람의 보증금은 메이트에게 보상, 메이트는 자기 보증금 반환
 //             (메이트가 데모 메이트면 그만둔 사람의 보증금은 그냥 소멸)
 //   settle  : 남은 약속이 없음 → 그만두는 대신 지금까지의 출석으로 주간 정산
@@ -1210,9 +1272,17 @@ export async function leaveMatch(db, userId, matchId) {
   const policy = leavePolicy(appts);
   if (policy === 'settle') {
     await settleMatch(db, m.id);
-    return { result: 'settled' };
+    return { result: 'settled', strikes: await strikeStatus(db, userId) };
   }
 
+  const leftAt = T.now();
+  const res = await leaveMatchTx(db, userId, m, appts, policy);
+  await recordNoShows(db, m.id, leftAt); // 그만두기 전에 이미 지난 약속만
+  if (T.today() >= PROMISE_RULE.from) await addStrike(db, userId, 'left', m.id);
+  return { ...res, strikes: await strikeStatus(db, userId) };
+}
+
+async function leaveMatchTx(db, userId, m, appts, policy) {
   return db.tx(async (t) => {
     // 동시에 정산·그만두기가 겹쳐도 한 번만 처리되도록 상태를 먼저 바꾼다.
     const claimed = await t.run("UPDATE matches SET status = 'closed' WHERE id = ? AND status = 'active'", m.id);
@@ -1258,6 +1328,7 @@ export async function forceSettle(db, userId, matchId) {
 
 export async function chooseNext(db, userId, matchId, choice) {
   if (!['continue', 'new'].includes(choice)) throw new AppError(400, '선택이 올바르지 않습니다.');
+  if (choice === 'continue') await assertNotSuspended(db, userId);
   return db.tx(async (t) => {
     const m = await loadMatchForUser(t, userId, matchId);
     const col = m.user_a === userId ? 'choice_a' : 'choice_b';

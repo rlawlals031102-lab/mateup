@@ -5,7 +5,7 @@ export const LOCATIONS = [
 
 // 스터디 기간: 정해진 날짜·시간에만 약속을 잡는다 (매칭 신청에서는 이 중 원하는 날짜만 고름)
 export const STUDY_PERIOD = {
-  dates: ['2026-11-10', '2026-11-11', '2026-11-12'], // 화·수·목
+  dates: ['2026-11-03', '2026-11-04', '2026-11-05'], // 화·수·목
   start: '19:00',
   end: '21:00',
   // 날짜별로 시간을 다르게 할 날이 있으면: times: { 'YYYY-MM-DD': { start, end, label } }
@@ -24,6 +24,11 @@ export const MIN_OVERLAP_MIN = 60;
 
 // 실서비스 가입·로그인을 허용하는 학교 메일 도메인 (데모 모드에서는 제한 없음)
 export const EMAIL_DOMAIN = 'kookmin.ac.kr';
+
+// 약속 지키기 (보증금 대신, 도서관 연체 정지처럼):
+// 매칭 그만두기·약속 날 미참석이 strikeLimit번 쌓이면 suspendDays일 동안 매칭 신청 정지. 정지가 끝나면 0번부터 다시 센다.
+// from 이전의 약속·그만두기는 세지 않는다 (규칙을 알린 다음 회차부터 적용).
+export const PROMISE_RULE = { strikeLimit: 2, suspendDays: 30, from: '2026-11-06' };
 
 // 개발자 화면을 볼 수 있는 계정 (운영자). 메일은 소문자로 적는다.
 export const ADMIN_EMAIL = 'rlawlals031102@kookmin.ac.kr'; // 김지민

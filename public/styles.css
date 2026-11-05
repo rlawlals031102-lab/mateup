@@ -11,8 +11,8 @@
   --green-dark: #375a20;
   --green-2: #5b7b3f;
   --lime: #d4ef83;
-  --lime-soft: var(--lime-soft);
-  --lime-line: var(--lime-line);
+  --lime-soft: #eef7cf;   /* 대기 칸 */
+  --lime-line: #c4e070;
   --soft: #e3f0d6;        /* 포스터 민트 크림 */
   --sand: #f1ece0;        /* 회색 대신 따뜻한 모래색 */
   --sand-line: #ddd6c4;
@@ -185,16 +185,6 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 .pill.red { background: var(--red-soft); color: var(--red); }
 .pill.gray { background: var(--sand); color: var(--muted); }
 
-/* ── 약속 리스트 ── */
-.appt { display: grid; grid-template-columns: 70px 1fr auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-lg); }
-.appt + .appt { margin-top: 8px; }
-.appt .date { text-align: center; border-right: 1px solid var(--line); padding-right: 10px; }
-.appt .date b { display: block; font-size: 16px; }
-.appt .date span { font-size: 12px; color: var(--muted); }
-.appt .meta { font-size: 13px; }
-.appt .meta div { display: flex; gap: 6px; align-items: center; }
-.appt.is-open { border-color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
-
 /* ── 출석 ── */
 .checkin { display: grid; grid-template-columns: 1fr 112px; gap: 14px; align-items: center; }
 .qr-box { width: 112px; height: 112px; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 6px; background: #fff; }
@@ -207,16 +197,6 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 .code { font-family: ui-monospace, Consolas, monospace; letter-spacing: .18em; font-weight: 700; font-size: 16px; }
 .timer { font-family: ui-monospace, Consolas, monospace; font-size: 28px; font-weight: 700; letter-spacing: .02em; color: var(--green); }
 
-.week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
-.week .d { border: 1px solid var(--line); border-radius: var(--r); text-align: center; padding: 7px 0 6px; font-size: 12px; }
-.week .d b { display: block; font-size: 13px; }
-.week .d .mark { width: 24px; height: 24px; border-radius: 50%; margin: 5px auto 3px; display: grid; place-items: center; font-size: 13px; font-weight: 700; }
-.week .d.today { border-color: var(--green); }
-.mark.done, .mark.studying { background: var(--green); color: #fff; }
-.mark.missed { background: var(--red); color: #fff; }
-.mark.scheduled, .mark.open { border: 1.5px dashed var(--line-strong); }
-.mark.off { background: transparent; color: var(--line-strong); }
-.week-label { font-size: 12px; color: var(--muted); margin: 10px 0 6px; font-weight: 700; }
 
 /* ── 리포트 ── */
 .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -233,8 +213,6 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 
 .list-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--soft); font-size: 14px; }
 .list-item:last-child { border-bottom: 0; }
-.plus { color: var(--green); font-weight: 700; }
-.minus { color: var(--red); font-weight: 700; }
 
 /* ── 채팅 ── */
 .chat { display: flex; flex-direction: column; gap: 8px; padding-bottom: 300px; }
@@ -299,8 +277,8 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
   .topbar h1 { font-size: 16px; }
   .logo { height: 28px; }
   .view { padding: 4px 12px calc(var(--tabbar-h) + 20px); }
-  :root { --tabbar-h: 56px; --radius: 14px; }
-  .card { padding: 13px; margin-top: 9px; }
+  :root { --tabbar-h: 56px; }
+  .card { padding: 12px; margin-top: 8px; }
   .card-head { margin-bottom: 8px; }
   .card-head h2 { font-size: 14px; }
   .btn { height: 42px; font-size: 14px; border-radius: var(--r); }
@@ -315,36 +293,24 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
   .style-picker b { font-size: 13px; }
   .style-picker small { font-size: 10px; }
   .toggle-pair button { height: 40px; font-size: 13px; }
-  .notice { font-size: 12px; padding: 8px 10px; margin-top: 9px; }
+  .notice { font-size: 12px; padding: 8px 12px; margin-top: 8px; }
   .avatar { width: 48px; height: 48px; font-size: 28px; }
   .avatar.lg { width: 64px; height: 64px; font-size: 28px; }
   .profile { gap: 12px; }
   .profile .name { font-size: 16px; }
   .tag { font-size: 12px; padding: 2px 8px; }
-  .appt { grid-template-columns: auto 1fr auto; gap: 10px; padding: 7px 10px; }
-  .appt + .appt { margin-top: 6px; }
-  .appt .date { display: flex; gap: 3px; align-items: baseline; white-space: nowrap; border-right: 0; padding-right: 0; }
-  .appt .date b { display: inline; font-size: 13px; }
-  .appt .date span { font-size: 12px; }
-  .appt .meta .muted { display: none; } /* 장소는 위 안내에 이미 있음 */
   .pill { font-size: 12px; padding: 1px 7px; }
-  .appt .meta { font-size: 12px; }
   .checkin { grid-template-columns: 1fr 88px; gap: 10px; }
   .qr-box { width: 88px; height: 88px; }
   .timer { font-size: 28px; }
-  .week { gap: 3px; }
-  .week .d { padding: 5px 0 4px; font-size: 10px; border-radius: var(--r); }
-  .week .d b { font-size: 12px; }
-  .week .d .mark { width: 20px; height: 20px; margin: 3px auto 2px; font-size: 12px; }
   .vs .col { padding: 10px; }
   .vs .col .big { font-size: 20px; }
   .steps li { margin-top: 8px; font-size: 13px; padding-left: 30px; }
   .steps li::before { width: 21px; height: 21px; font-size: 12px; }
-  .bubble { font-size: 13px; padding: 7px 11px; }
-  .quick-card { padding: 7px 8px; gap: 6px; }
-  .chat-input { padding: 6px 10px 8px; }
+  .bubble { font-size: 13px; padding: 8px 12px; }
+  .chat-input { padding: 8px 12px; }
   .chat-input .input, .chat-input .btn { height: 38px; }
-  .tabbar a { font-size: 10px; }
+  .tabbar a { font-size: 12px; }
   .tabbar a .ti { font-size: 16px; }
   .auth { padding-top: 3vh; }
   .auth h2 { font-size: 20px; margin: 12px 0 4px; }
@@ -439,7 +405,7 @@ a.link-item:hover { background: var(--soft); }
 .mate-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 2px; scrollbar-width: none; }
 .mate-tabs::-webkit-scrollbar { display: none; }
 .mate-tabs a { flex: none; text-decoration: none; border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-lg); padding: 6px 10px; font-size: 13px; font-weight: 700; }
-.mate-tabs a small { display: block; font-size: 10px; font-weight: 400; color: var(--muted); }
+.mate-tabs a small { display: block; font-size: 12px; font-weight: 400; color: var(--muted); }
 .mate-tabs a.on { background: var(--green); border-color: var(--green); color: #fff; }
 .mate-tabs a.on small { color: rgba(255, 255, 255, .78); }
 /* 신청 화면: 이미 매칭·신청했거나 개인 일정이 있는 칸은 회색 빗금 (고르는 칸 초록과 구분) */
@@ -609,3 +575,86 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .bubble time { opacity: 1; color: var(--muted); }
 .bubble.me time { color: rgba(255, 255, 255, .72); }
 .read-mark { color: var(--lime); font-weight: 700; margin-right: 4px; }
+
+/* ───────── 디자인 정리 3차 (2026-11-05) ─────────
+   위계: 카드는 지금 할 일(출석·선택)과 사람 정보에만, 읽기만 하는 내용은 선으로 나눈 구역.
+   같은 정보는 한 번만 (약속 목록 + 요일별 출석 칸 → 약속별 출석 표 하나).
+   김지민님 화면(홈 시간표 구성·매칭 신청·개발자 화면)은 색만 손봄 */
+
+/* 숫자는 같은 폭으로: 시간·횟수·디데이가 줄마다 흔들리지 않게 */
+body { font-variant-numeric: tabular-nums; }
+
+/* 키보드로 움직일 때만 보이는 초점 테두리 (입력칸은 테두리 색으로 따로 표시) */
+:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.input:focus-visible { outline: none; }
+.tt-cell:focus-visible { outline-offset: 0; }
+
+/* 코드 입력칸의 안내 글자에는 넓은 자간·고정폭 글꼴을 쓰지 않는다 ("메 이 트  코 드" 처럼 보이던 것) */
+.input.code::placeholder { letter-spacing: 0; font-weight: 400;
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; }
+
+/* 카드: 모서리 12px 하나로 */
+.card { border-radius: var(--r-lg); }
+
+/* 페이지 머리말 (리포트·지난 스터디): 진한 초록 상자 대신 큰 제목 */
+.page-head { margin-top: 12px; }
+.page-head h2 { font-size: 20px; line-height: 1.35; margin-top: 4px; letter-spacing: -0.02em; }
+
+/* 구역 머리: 제목 + 오른쪽 보조 글 */
+.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.section-head .section-title { margin-bottom: 0; }
+.section-head .hint { font-size: 12px; color: var(--muted); }
+.section-head + .meta-line { margin-top: 0; }
+
+/* 약속별 출석 표: 줄은 가는 선으로만, 지금 출석할 약속은 옅은 초록 줄 */
+.att-table { width: calc(100% + 16px); margin: 8px -8px 0; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
+.att-table th { padding: 0 8px 8px; text-align: left; font-size: 12px; font-weight: 600; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.att-table th:not(:first-child) { width: 84px; }
+.att-table td { padding: 12px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+.att-table td small { display: block; font-size: 12px; color: var(--muted); }
+.att-table tr.is-open td { background: var(--soft); border-top-color: transparent; }
+.att-table tr.is-open + tr td { border-top-color: transparent; }
+.st { font-weight: 600; color: var(--muted); white-space: nowrap; }
+.st.ok { color: var(--green); }
+.st.bad { color: var(--red); }
+.st.now { color: var(--green-dark); font-weight: 700; }
+.st.off { color: var(--line-strong); font-weight: 400; }
+
+/* 현장 출석 확인: 카드 제목 바로 아래 첫 구역은 선 없이 */
+.card-head + .att-part { border-top: 0; padding-top: 0; }
+
+/* 글자 버튼: 로그아웃·매칭 그만두기처럼 자주 쓰지 않는 동작은 테두리 없이 */
+.text-btn { display: block; width: 100%; min-height: 44px; margin-top: 16px; border: 0; background: none;
+  font-size: 14px; font-weight: 600; color: var(--muted); text-align: center; border-radius: var(--r); }
+.text-btn:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.text-btn.danger { color: var(--red); }
+.leave-box { margin-top: 32px; padding-top: 8px; border-top: 1px solid var(--line); }
+.leave-box .text-btn { margin-top: 0; }
+.leave-box p { margin-top: 0; }
+
+/* 손가락으로 누르는 곳은 36px 이상: '수정하기 ›' 같은 작은 글자 링크도 누르는 범위를 넓힌다 */
+.card-head .link { display: inline-flex; align-items: center; min-height: 36px; padding: 0 8px; margin: -8px -8px -8px 0; }
+@media (max-width: 480px) {
+  .btn.sm { height: 36px; }
+  .text-btn { font-size: 14px; }
+}
+
+/* 채팅: 보낸 시각 10px → 12px, 자주 쓰는 메시지는 버튼과 같은 모서리 */
+.bubble time { font-size: 12px; }
+.quick-chip { border-radius: var(--r); height: 36px; }
+
+/* 약속 지키기 (보증금 대신): 조용한 한 줄 안내, 정지 중일 때만 빨간 글자 */
+.rule-line { margin-top: 12px; font-size: 13px; color: var(--muted); }
+.rule-line b { color: var(--ink); }
+.warn-text, .rule-line b.warn-text { color: var(--red); }
+.notice.warn { background: var(--red-soft); color: var(--ink); margin: 8px 0 0; }
+.notice.warn b { color: var(--red); }
+.section-head > b { font-size: 16px; }
+
+/* 홈 시간표 (구성은 그대로, 색만): 빈 칸은 테두리 없이 옅은 바탕, 일정이 있는 칸만 또렷하게 */
+#my-tt .tt-cell:not(.match):not(.pending):not(.personal) { background: #f6f3ea; border-color: transparent; }
+#my-tt.editing .tt-cell:not(.match):not(.pending):not(.personal) { background: #f1ede2; }
+.tt-cell.personal { background: #ebe5d4; border-color: #d8d0bb; color: var(--muted); }
+.lg.personal { background: #ebe5d4; border: 1px solid #d8d0bb; }
+.tt-legend .lg { width: 12px; height: 12px; }

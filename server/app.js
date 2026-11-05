@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import * as S from './service.js';
-import { LOCATIONS, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD } from './options.js';
+import { LOCATIONS, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE_RULE } from './options.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const COOKIE = 'sb_token';
@@ -53,7 +53,7 @@ export function createApp({
   api.get('/options', (req, res) => {
     res.json({
       locations: LOCATIONS, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD,
-      emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, demoLogin,
+      emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, demoLogin, promiseRule: PROMISE_RULE,
     });
   });
 
@@ -123,7 +123,9 @@ export function createApp({
 
   // 매칭
   api.get('/matches/current', auth, async (req, res) => res.json({ match: await S.currentMatch(db, req.user.id, opts) }));
-  api.get('/matches/active', auth, async (req, res) => res.json({ matches: await S.activeMatches(db, req.user.id, opts) }));
+  api.get('/matches/active', auth, async (req, res) => res.json({
+    matches: await S.activeMatches(db, req.user.id, opts), strikes: await S.strikeStatus(db, req.user.id),
+  }));
   // 지난 매칭 다시 보기 (/matches/current 보다 뒤에 둬야 'current'를 가로채지 않음)
   api.get('/matches/:id', auth, async (req, res) => {
     res.json({ match: await S.matchById(db, req.user.id, Number(req.params.id), opts) });
