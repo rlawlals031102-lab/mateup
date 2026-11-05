@@ -3,7 +3,7 @@ import { isUniqueViolation } from './db.js';
 import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
-  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAIL,
+  EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS,
 } from './options.js';
 
 // 모든 함수는 첫 인자로 db(server/db.js 인터페이스)를 받는다.
@@ -107,7 +107,7 @@ export const publicUser = (u) => u && {
 
 export const privateUser = (u) => u && {
   ...publicUser(u), email: u.email, department: u.department ?? null, phone: u.phone ?? null,
-  isAdmin: u.email === ADMIN_EMAIL,
+  isAdmin: ADMIN_EMAILS.includes(u.email),
 };
 
 const getUser = (db, id) => db.get('SELECT * FROM users WHERE id = ?', id);
@@ -903,12 +903,12 @@ export async function recordVisit(db, visitorId) {
 }
 
 // ───────────────────────── 개발자 화면 ─────────────────────────
-// 운영자(ADMIN_EMAIL)만 볼 수 있는 운영 현황. 실제 사용자만 센다 (데모 메이트·공용 데모 계정 제외).
+// 운영자(ADMIN_EMAILS)만 볼 수 있는 운영 현황. 실제 사용자만 센다 (데모 메이트·공용 데모 계정 제외).
 // 전화번호는 뒷자리를 가리고, 메일은 앞 3글자만 보인다. 비밀번호·인증번호는 원래부터 암호로만 저장돼 없다.
 
 export async function assertAdmin(db, userId) {
   const u = await getUser(db, userId);
-  if (u?.email !== ADMIN_EMAIL) throw new AppError(403, '개발자만 볼 수 있어요.');
+  if (!ADMIN_EMAILS.includes(u?.email)) throw new AppError(403, '개발자만 볼 수 있어요.');
 }
 
 const maskPhone = (p) => (p ? p.replace(/\d{4}$/, '****') : null);

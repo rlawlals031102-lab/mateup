@@ -25,8 +25,9 @@ export const MIN_OVERLAP_MIN = 60;
 // 실서비스 가입·로그인을 허용하는 학교 메일 도메인 (데모 모드에서는 제한 없음)
 export const EMAIL_DOMAIN = 'kookmin.ac.kr';
 
-// 개발자 화면을 볼 수 있는 계정 (운영자)
-export const ADMIN_EMAIL = 'rlawlals031102@kookmin.ac.kr';
+// 개발자 화면을 볼 수 있는 계정 (운영자). 메일은 소문자로 적는다.
+export const ADMIN_EMAIL = 'rlawlals031102@kookmin.ac.kr'; // 김지민
+export const ADMIN_EMAILS = [ADMIN_EMAIL, 'yunbinna6@kookmin.ac.kr']; // 김지민, 나윤빈
 
 // 이메일 인증번호: 유효 시간(분), 최대 입력 시도, 재발송 간격(초)
 export const EMAIL_CODE_TTL_MIN = 10;

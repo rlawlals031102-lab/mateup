@@ -589,3 +589,9 @@ a.link-item:hover { background: var(--soft); }
   .hello { font-size: 20px; }
   .section { margin-top: 24px; padding-top: 14px; }
 }
+
+/* 아이폰(사파리)은 글자가 16px보다 작은 입력칸을 누르면 화면을 자동으로 확대하고,
+   로그인 뒤 홈으로 넘어가도 확대가 그대로 남는다. 입력칸 글자는 어느 화면에서나 16px. */
+input, textarea, select, .input, .select { font-size: 16px; }
+/* 가로로 돌렸을 때 사파리가 글자를 멋대로 키우지 않게 */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
