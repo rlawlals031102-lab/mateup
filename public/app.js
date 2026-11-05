@@ -12,7 +12,32 @@ const scroller = () => {
 };
 
 const WD = ['', '월', '화', '수', '목', '금', '토', '일'];
-const AVATARS = ['🙂', '😎', '🤓', '😺', '🐻', '🐰', '🦊', '🐼', '👩', '🧑', '👦', '👧', '👩‍🎓', '🧑‍💻', '🙋‍♀️', '🙋‍♂️', '🌱', '📚'];
+// 선 아이콘 (Phosphor Icons, MIT 라이선스 — public/vendor/PHOSPHOR_LICENSE.txt)
+const ICON_D = {
+  'caret-left': 'M165.66,202.34a8,8,0,0,1-11.32,11.32l-80-80a8,8,0,0,1,0-11.32l80-80a8,8,0,0,1,11.32,11.32L91.31,128Z',
+  'caret-right': 'M181.66,133.66l-80,80a8,8,0,0,1-11.32-11.32L164.69,128,90.34,53.66a8,8,0,0,1,11.32-11.32l80,80A8,8,0,0,1,181.66,133.66Z',
+};
+const icon = (name, cls = '') => `<svg class="ic${cls ? ` ${cls}` : ''}" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true" focusable="false"><path d="${ICON_D[name]}"/></svg>`;
+
+// 프로필 동그라미: 이모지 대신 이름 글자. 성을 빼고 이름 두 글자 (김지민 → 지민, 남궁민수 → 민수), 별명은 앞 두 글자.
+const SURNAMES = '김이박최정강조윤장임한오서신권황안송류유전홍고문양손배백허남심노하곽성차주우구민진나지엄채원천방공현함변염여추도소석선설마길연위표명기반왕금옥육인맹제모탁국어은편용예경봉사부';
+const SURNAMES_2 = ['남궁', '제갈', '황보', '선우', '독고', '서문'];
+function initials(name) {
+  const first = String(name ?? '').trim().split(/\s+/)[0] || '?';
+  if (!/^[가-힣]+$/.test(first)) return first.slice(0, 1).toUpperCase();
+  if (first.length >= 4 && SURNAMES_2.includes(first.slice(0, 2))) return first.slice(2, 4);
+  if (first.length >= 3 && SURNAMES.includes(first[0])) return first.slice(1, 3);
+  return first.slice(0, 2);
+}
+// 사람마다 다른 은은한 색 (포스터의 올리브·연두·모래색 계열)
+const AV_TONES = [['#e3f0d6', '#3d6125'], ['#eef3c6', '#4f5c1a'], ['#f1e8d2', '#6a5226'], ['#e6eadb', '#465a31']];
+function avatarHTML(u, size = '') {
+  const n = [...String(u?.name ?? '')].reduce((sum, c) => sum + c.codePointAt(0), 0);
+  const [bg, fg] = AV_TONES[n % AV_TONES.length];
+  return `<div class="avatar${size ? ` ${size}` : ''}" style="background:${bg};color:${fg}" aria-hidden="true">${esc(initials(u?.name))}</div>`;
+}
+// 태그는 알약 모양 대신 글자로
+const tagsHTML = (tags) => (tags?.length ? `<p class="tags">${tags.map((t) => esc(t)).join(' ')}</p>` : '');
 
 let OPTIONS = null;
 let timers = [];
@@ -28,10 +53,18 @@ function fmtDate(s, withWeekday = false) {
 }
 function fmtTime(t) {
   const [h, m] = t.split(':').map(Number);
-  if (h === 24) return '자정';
-  const ap = h < 12 ? '오전' : '오후';
-  const hh = h % 12 === 0 ? 12 : h % 12;
-  return `${ap} ${hh}:${String(m).padStart(2, '0')}`;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+const fmtRange = (a, b) => `${fmtTime(a)}–${fmtTime(b)}`;
+// 이번 회차 날짜·시간 한 줄: "11월 3일(화)·4일(수)·5일(목) 19:00–21:00"
+function periodText() {
+  const p = OPTIONS.studyPeriod;
+  const days = p.dates.map((d, i) => {
+    const [, mo, dd] = d.split('-').map(Number);
+    const wd = WD[new Date(`${d}T00:00:00`).getDay() || 7];
+    return i === 0 ? `${mo}월 ${dd}일(${wd})` : `${dd}일(${wd})`;
+  });
+  return `${days.join('·')} ${fmtRange(p.start, p.end)}`;
 }
 function fmtMinutes(min) {
   const h = Math.floor(min / 60);
@@ -80,11 +113,12 @@ function toast(msg, isError = false) {
 }
 
 // 일이 빨리 끝나도 로딩 화면을 최소 ms 동안 보여 준다 (오류는 기다리지 않고 바로 알림)
-async function withLoading(icon, text, task, ms = 3000) {
+// 첫 인자(예전 이모지 자리)는 쓰지 않는다.
+async function withLoading(_icon, text, task, ms = 600) {
   const modal = $('#modal');
   modal.innerHTML = `
     <div class="finding">
-      <div class="pulse">${icon}</div>
+      <div class="spinner sm"></div>
       <b>${text}</b>
     </div>`;
   modal.hidden = false;
@@ -105,8 +139,8 @@ function every(ms, fn) {
 function setTop({ title = '', back = null, brand = false, right = '' } = {}) {
   topbar.hidden = false;
   topbar.innerHTML = `
-    <div>${back ? `<a class="icon-btn" href="${back}" aria-label="뒤로">‹</a>` : ''}</div>
-    ${brand ? '<div class="center"><img class="logo" src="logo.png" alt="스터디버디"></div>' : `<h1>${esc(title)}</h1>`}
+    <div>${back ? `<a class="icon-btn" href="${back}" aria-label="뒤로">${icon('caret-left')}</a>` : ''}</div>
+    ${brand ? '<div class="center"><img class="logo" src="logo.svg" alt="스터디버디"></div>' : `<h1>${esc(title)}</h1>`}
     <div>${right}</div>`;
 }
 
@@ -119,7 +153,7 @@ function setTabs(active) {
 const loading = () => { view.innerHTML = '<div class="spinner"></div>'; };
 
 // 데모(가상) 메이트 표시
-const botBadge = (u) => (u?.isBot ? ' <span class="pill gray" title="실제 사람이 아닌 체험용 메이트">데모 메이트</span>' : '');
+const botBadge = (u) => (u?.isBot ? ' <small class="bot-note" title="실제 사람이 아닌 체험용 메이트">데모</small>' : '');
 
 // 시간표 칸("요일-시간대번호") → 요일별 이어진 시간 [{ day, start, end }]
 function runsOfCells(cells) {
@@ -146,7 +180,7 @@ function runsOfCells(cells) {
 function scheduleText(runs) {
   const groups = new Map();
   for (const r of runs) {
-    const key = `${fmtTime(r.start)}~${fmtTime(r.end)}`;
+    const key = fmtRange(r.start, r.end);
     groups.set(key, [...(groups.get(key) ?? []), r.day]);
   }
   return [...groups].map(([time, days]) => `${[...new Set(days)].map((d) => WD[d]).join('·')} ${time}`).join(' · ');
@@ -193,7 +227,7 @@ async function router() {
       return;
     }
     console.error(err);
-    view.innerHTML = `<div class="empty"><div class="em">⚠️</div><h3>문제가 생겼어요</h3><p>${esc(err.message)}</p></div>`;
+    view.innerHTML = `<div class="empty"><h3>문제가 생겼어요</h3><p>${esc(err.message)}</p></div>`;
   }
 }
 
@@ -223,7 +257,7 @@ function authShell(inner) {
   topbar.hidden = true;
   view.innerHTML = `
     <div class="auth">
-      <img class="logo lg" src="logo.png" alt="스터디버디">
+      <img class="logo lg" src="logo-stack.svg" alt="STUDY BUDDY 스터디버디">
       ${inner}
     </div>`;
   $$('.email-input input').forEach(placeDomain);
@@ -317,7 +351,7 @@ function bindSendCode(form, purpose) {
 async function renderLogin() {
   authShell(`
     <h2>같은 시간에<br>함께 시작하는 공부</h2>
-    <p class="lead">${OPTIONS.emailDomain ? '국민대 학생을 위한 ' : ''}1주일 단위 1:1 스터디 메이트 매칭, 스터디버디</p>
+    <p class="lead">${OPTIONS.emailDomain ? '국민대 학생끼리 ' : ''}일주일 동안 같은 시간에 만나, 각자 공부해요.</p>
     <form id="f" class="card">
       <label class="field"><span>${emailLabel()}</span>${emailInput()}</label>
       <label class="field"><span>비밀번호</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
@@ -326,7 +360,7 @@ async function renderLogin() {
     <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a>${OPTIONS.emailVerification ? ' · <a href="#/reset">비밀번호 찾기</a>' : ''}</p>
     ${OPTIONS.demoLogin ? `
       <div class="demo-login">
-        <button type="button" class="btn block" id="demo-login">🧪 데모 계정으로 로그인</button>
+        <button type="button" class="btn block" id="demo-login">데모 계정으로 로그인</button>
         <p class="tiny muted center">가입 없이 둘러볼 수 있는 체험용 계정이에요.</p>
       </div>` : ''}`);
   showIntro();
@@ -349,7 +383,7 @@ async function renderLogin() {
 
 async function renderSignup() {
   authShell(`
-    <h2>공부 약속이<br>지켜지는 구조</h2>
+    <h2>회원가입</h2>
     <p class="lead">${OPTIONS.emailDomain ? '국민대학교 메일로 가입할 수 있어요.' : ''}</p>
     <form id="f" class="card">
       ${emailCodeFields()}
@@ -369,8 +403,8 @@ async function renderSignup() {
     const fd = Object.fromEntries(new FormData(form));
     fd.email = withDomain(fd.email);
     try {
-      await withLoading('📝', '가입하는 중이에요', () => api('/auth/signup', { method: 'POST', body: fd }));
-      toast('환영해요! 이번 주 메이트를 찾아볼까요?');
+      await withLoading('', '가입하는 중이에요', () => api('/auth/signup', { method: 'POST', body: fd }));
+      toast('가입을 마쳤어요.');
       location.hash = '#/home';
     } catch (err) { toast(err.message, true); }
   });
@@ -378,22 +412,22 @@ async function renderSignup() {
 
 // 로그인 화면에 들어오면 스터디버디 소개 팝업을 띄운다
 // 스터디버디 소개 (로그인 팝업·홈 진행 안내 카드 공용)
-const INTRO_BODY = `
-      <p class="intro-team">🏫 국민대학교 창업동아리 <b>MateUp팀</b>이 운영해요</p>
+const introBody = () => `
+      <p class="small">국민대학교 창업동아리 <b>MateUp팀</b>이 운영해요.</p>
       <p class="small muted">국민대생끼리 1:1 공부 메이트를 이어 주는 서비스입니다.</p>
       <ol class="steps mt">
         <li><b>매칭 신청</b><span class="small muted">날짜, 장소, 공부 스타일을 고르면 조건이 맞는 메이트와 바로 연결돼요.</span></li>
         <li><b>함께 공부</b><span class="small muted">약속한 날 만나서 각자 공부하고, 서로의 QR을 찍어 출석을 확인해요.</span></li>
       </ol>
-      <div class="notice mt"><span>🗓</span><span>2회차 베타: 11/3(화)·4(수)·5(목) 오후 7~9시</span></div>
+      <p class="small mt"><b>이번 회차</b> ${periodText()}</p>
       <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a></p>`;
 
 function showIntro() {
   const modal = $('#modal');
   modal.innerHTML = `
     <div class="sheet intro">
-      <h3>📚 스터디버디는요</h3>
-      ${INTRO_BODY}
+      <h3>스터디버디는요</h3>
+      ${introBody()}
       <button class="btn primary block mt" id="intro-ok">확인했어요</button>
     </div>`;
   modal.hidden = false;
@@ -553,7 +587,7 @@ async function renderHome(alive) {
 
   const reportCard = (m) => `
       <div class="card lime">
-        <div class="card-head"><h2>📊 주간 리포트가 도착했어요</h2></div>
+        <div class="card-head"><h2>주간 리포트가 도착했어요</h2></div>
         <p class="small">${esc(m.mate.name)}님과의 ${m.round}주차 결과를 확인하고, 다음 주를 골라 주세요.</p>
         <a class="btn primary block mt" href="#/match/${m.id}">리포트 보기</a>
       </div>`;
@@ -561,9 +595,9 @@ async function renderHome(alive) {
     const next = m.appointments.find((x) => ['open', 'studying', 'scheduled'].includes(x.me.status));
     return `
       <div class="card">
-        <div class="card-head"><h2>👥 이번 주 메이트</h2><span class="pill">${m.round}주차</span></div>
+        <div class="card-head"><h2>이번 주 메이트</h2><span class="hint">${m.round}주차</span></div>
         <div class="profile">
-          <div class="avatar">${esc(m.mate.avatar)}</div>
+          ${avatarHTML(m.mate)}
           <div>
             <div class="name">${esc(m.mate.name)}${botBadge(m.mate)}</div>
             <div class="small muted">${esc(scheduleText(m.schedule))}</div>
@@ -571,15 +605,15 @@ async function renderHome(alive) {
           </div>
         </div>
         ${next ? `
-          <div class="notice"><span>📅</span><span>다음 약속 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b> · ${esc(next.location)}</span></div>`
-        : '<div class="notice"><span>✅</span><span>이번 주 약속을 모두 마쳤어요. 주간이 끝나면 리포트가 도착해요.</span></div>'}
+          <p class="next-line">다음 약속 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b> · ${esc(next.location)}</p>`
+        : '<p class="next-line">이번 주 약속을 모두 마쳤어요. 주간이 끝나면 리포트가 도착해요.</p>'}
         <a class="btn primary block mt" href="#/match/${m.id}">${next && ['open', 'studying'].includes(next.me.status) ? '지금 출석하러 가기' : '매칭 정보 보기'}</a>
       </div>`;
   };
   const pendingCard = (req) => `
       <div class="card">
         <div class="row" style="gap:12px">
-          <div class="pulse sm">🔍</div>
+          <div class="spinner sm"></div>
           <div style="flex:1">
             <b>메이트를 찾는 중</b>
             <p class="tiny muted">${esc(scheduleText(req.schedule))}<br>${esc(req.location)} · ${styleLabels(req.styles)}${req.deposit ? ` · 보증금 ${won(req.deposit)}P` : ''}</p>
@@ -592,7 +626,7 @@ async function renderHome(alive) {
   if (mateLeft) {
     leftNote = `
       <div class="card">
-        <div class="card-head"><h2>👋 메이트가 매칭을 그만뒀어요</h2></div>
+        <div class="card-head"><h2>메이트가 매칭을 그만뒀어요</h2></div>
         <p class="small">${esc(mateLeft.mateName)}님이 이번 주 매칭을 중간에 그만뒀어요.</p>
       </div>`;
   }
@@ -601,41 +635,37 @@ async function renderHome(alive) {
   const STUDYING_SHOWN = 4;
   // 기말고사 디데이 · 국민대 통계 (매칭 전에는 첫 카드 안에, 매칭 후에는 매칭 카드 아래에)
   const dday = exam ? (exam.dday === 0 ? 'D-DAY' : `D-${exam.dday}`) : '';
-  const heroStats = `
-        <div class="hero-stats">
-          ${exam ? `<div><span>📅 ${esc(exam.name)}까지</span><p class="stat-row"><b>${dday}</b><span>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</span></p></div>` : ''}
-          <div><span>🎓 국민대생</span><p class="stat-row"><b>${STUDYING_SHOWN}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></p></div>
-        </div>`;
-  const homeStats = `
-    <div class="home-stats">
-      ${exam ? `<div class="stat"><span>📅 ${esc(exam.name)}까지</span><b>${dday}</b><span>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</span></div>` : ''}
-      <div class="stat"><span>🎓 국민대생</span><b>${STUDYING_SHOWN}명</b><span>이번 주 함께 공부 중${community.waiting ? ` · 대기 ${community.waiting}명` : ''}</span></div>
-    </div>`;
+  const facts = `
+        <ul class="facts">
+          ${exam ? `<li><span>${esc(exam.name)}까지</span><b>${dday}</b><small>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</small></li>` : ''}
+          <li><span>이번 주 함께 공부하는 국민대생</span><b>${STUDYING_SHOWN}명</b>${community.waiting ? `<small>대기 ${community.waiting}명</small>` : ''}</li>
+        </ul>`;
+  const heroStats = facts;
+  const homeStats = `<section class="section">${facts}</section>`;
   const ttCard = '<section class="card" id="my-tt-card"></section>';
   // 매칭·신청이 있으면: 시간표 → 매칭 상태 카드들 → 통계
   // 없으면: 매칭 신청 카드(통계 포함) → 시간표 (첫 화면에서 시간표가 잘리지 않게 위쪽을 작게)
   const main = hasAny
     ? ttCard
       + [...matches.map((m) => (m.status === 'reported' ? reportCard(m) : matchCard(m))), ...pendingRequests.map(pendingCard)].join('')
-      + '<a class="btn block mt" href="#/apply">＋ 다른 날짜에 매칭 추가 신청</a>'
+      + '<a class="btn block mt" href="#/apply">다른 날짜에도 신청하기</a>'
       + homeStats
     : `${leftNote}
       <div class="card hero compact">
-        <h2>이번 주, 같이 공부할 메이트를 찾아볼까요?</h2>
+        <h2>이번 주 메이트 신청</h2>
+        <p class="small muted">${periodText()} 중 원하는 시간만 고르면 돼요.</p>
         ${heroStats}
-        <a class="btn lime block" href="#/apply">매칭 신청하기 →</a>
+        <a class="btn lime block" href="#/apply">매칭 신청하기</a>
       </div>
       ${ttCard}`;
 
   view.innerHTML = `
-    <div class="row between home-hello">
-      <div style="font-size:19px;font-weight:800">${esc(user.name)}님</div>
-    </div>
+    <p class="hello">${esc(user.name)}님</p>
     ${main}
-    <div class="card">
-      <div class="card-head"><h2>스터디버디는 이렇게 진행돼요</h2></div>
-      ${INTRO_BODY}
-    </div>`;
+    <section class="section">
+      <h2 class="section-title">스터디버디는 이렇게 진행돼요</h2>
+      ${introBody()}
+    </section>`;
 
   // ── 내 시간표 (매칭 · 대기 · 개인 일정) + 개인 일정 편집
   let mine = personal.map((p) => ({ ...p }));
@@ -656,13 +686,13 @@ async function renderHome(alive) {
     const card = $('#my-tt-card');
     const empty = !matches.length && !pendingRequests.length && !mine.length;
     card.innerHTML = `
-      <div class="card-head"><h2>🗓 내 시간표</h2>
-        ${editing ? '' : '<button class="btn sm ghost" id="tt-edit">✏️ 개인 일정</button>'}</div>
+      <div class="card-head"><h2>내 시간표</h2>
+        ${editing ? '' : '<button class="btn sm ghost" id="tt-edit">개인 일정</button>'}</div>
       <div class="tt-legend tiny">
         <span><i class="lg match"></i>매칭</span><span><i class="lg pending"></i>대기</span><span><i class="lg personal"></i>개인 일정</span>
       </div>
       ${editing ? `
-        <div class="notice"><span>✏️</span><span>일정 이름을 적고 칸을 누르거나 끌어서 넣어요. 같은 칸을 다시 누르면 빠져요.</span></div>
+        <div class="notice">일정 이름을 적고 칸을 누르거나 끌어서 넣어요. 같은 칸을 다시 누르면 빠져요.</div>
         <div class="row mt"><input class="input" id="tt-title" maxlength="20" value="${esc(editTitle)}" placeholder="예: 마케팅 수업"></div>` : ''}
       ${timetableHTML('my-tt', (cell) => {
         const info = map.get(cell);
@@ -714,7 +744,7 @@ async function renderHome(alive) {
   $$('[data-cancel]').forEach((b) => b.addEventListener('click', async () => {
     if (!confirm('이 매칭 신청을 취소할까요?')) return;
     try {
-      await withLoading('↩️', '신청을 취소하는 중이에요', () => api(`/requests/${b.dataset.cancel}`, { method: 'DELETE' }));
+      await withLoading('', '신청을 취소하는 중이에요', () => api(`/requests/${b.dataset.cancel}`, { method: 'DELETE' }));
       toast('신청을 취소했어요.');
       router();
     } catch (err) { toast(err.message, true); }
@@ -725,7 +755,7 @@ async function renderHome(alive) {
     every(4000, async () => {
       const s = await api('/me').catch(() => null);
       if (s && s.matches.length > before && alive()) {
-        toast('🎉 메이트를 찾았어요!');
+        toast('메이트가 정해졌어요.');
         location.hash = `#/match/${s.matches.at(-1).id}`;
       }
     });
@@ -761,18 +791,18 @@ async function renderApply(alive) {
 
   view.innerHTML = `
     <section class="card">
-      <div class="card-head"><h2>👤 내 프로필</h2><a class="link" href="#/me/edit">수정하기 ›</a></div>
+      <div class="card-head"><h2>내 프로필</h2><a class="link" href="#/me/edit">수정하기 ›</a></div>
       <div class="profile">
-        <div class="avatar">${esc(user.avatar)}</div>
+        ${avatarHTML(user)}
         <div>
           <div class="name">${esc(user.name)}</div>
-          <div class="tags">${user.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('') || '<span class="small muted">태그를 추가하면 메이트가 나를 더 잘 알 수 있어요</span>'}</div>
+          ${tagsHTML(user.tags) || '<p class="small muted">태그를 추가하면 메이트가 나를 더 잘 알 수 있어요</p>'}
         </div>
       </div>
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>📅 공부 일정 및 장소 설정</h2></div>
+      <div class="card-head"><h2>공부 일정 및 장소 설정</h2></div>
       <div class="field"><span>공부할 시간 (중복 선택 가능)</span>
         <div class="tt apply-tt" id="days">
           <div class="tt-corner"></div>${studyDays.map((d) => `<div class="tt-day">${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8))} (${WD[d.day]})</div>`).join('')}
@@ -793,7 +823,7 @@ async function renderApply(alive) {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>📖 공부 스타일 선택</h2><span class="hint">중복 선택 가능</span></div>
+      <div class="card-head"><h2>공부 스타일 선택</h2><span class="hint">중복 선택 가능</span></div>
       <div class="style-picker" id="styles">
         ${Object.entries(OPTIONS.styles).map(([k, s], i) => `
           <button type="button" data-style="${k}" aria-pressed="false">
@@ -802,7 +832,7 @@ async function renderApply(alive) {
       </div>
     </section>
 
-    <div class="sticky-cta"><button class="btn primary block" id="submit">매칭 신청하기 →</button></div>`;
+    <div class="sticky-cta"><button class="btn primary block" id="submit">매칭 신청하기</button></div>`;
 
   $('#styles').addEventListener('click', (e) => {
     const b = e.target.closest('button');
@@ -831,15 +861,15 @@ async function renderApply(alive) {
     e.target.disabled = true;
     try {
       // 바로 매칭되더라도 메이트를 찾는 화면을 3초 동안 보여 준다
-      const res = await withLoading('🔍', '메이트를 찾는 중이에요', () => api('/requests', {
+      const res = await withLoading('', '메이트를 찾는 중이에요', () => api('/requests', {
         method: 'POST',
         body: { days: [...new Set([...form.cells].map((c) => Number(c.split('-')[0])))], cells: [...form.cells], locations: [...form.locations], styles: [...form.styles] },
-      }));
+      }), 3000);
       if (res.matchId) {
-        toast('🎉 바로 메이트를 찾았어요!');
+        toast('메이트가 정해졌어요.');
         location.hash = `#/match/${res.matchId}`;
       } else {
-        toast('신청 완료! 조건이 맞는 메이트를 기다리는 중이에요.');
+        toast('신청했어요. 조건이 맞는 메이트가 생기면 바로 연결해 드려요.');
         location.hash = '#/home';
       }
     } catch (err) {
@@ -868,7 +898,7 @@ const MARK = {
 let mateTabs = '';
 const mateTabsHTML = (matches, current, base) => (matches.length < 2 ? '' : `
   <div class="mate-tabs">${matches.map((m) => `
-    <a href="#/${base}/${m.id}" class="${m.id === current ? 'on' : ''}">${esc(m.mate.avatar)} ${esc(m.mate.name)}<small>${esc(scheduleText(m.schedule))}</small></a>`).join('')}
+    <a href="#/${base}/${m.id}" class="${m.id === current ? 'on' : ''}">${esc(m.mate.name)}<small>${esc(scheduleText(m.schedule))}</small></a>`).join('')}
   </div>`);
 
 async function renderMatch(alive, id) {
@@ -882,7 +912,6 @@ async function renderMatch(alive, id) {
   if (!match) {
     view.innerHTML = `
       <div class="empty">
-        <div class="em">🌱</div>
         <h3>진행 중인 매칭이 없어요</h3>
         <p>매칭을 신청하면 1주일 동안 함께할 메이트를 찾아드려요.</p>
         <a class="btn primary mt-lg" href="#/home">홈으로</a>
@@ -908,11 +937,11 @@ function drawMatch(m, alive) {
     const myPart = meIn
       ? (target.me.status === 'studying' ? `
         <div class="center">
-          <p class="small muted">✅ 메이트가 내 출석을 확인했어요</p>
+          <p class="small muted">메이트가 내 출석을 확인했어요</p>
           <div class="timer mt" id="timer" data-since="${esc(target.me.checkedInAt)}">00:00:00</div>
           <p class="tiny muted">공부 시간 기록 중</p>
           <button class="btn primary block mt" id="checkout" data-id="${target.id}">공부 종료하고 기록하기</button>
-        </div>` : '<p class="small">✅ 오늘 내 출석 완료 · 공부 기록을 마쳤어요</p>')
+        </div>` : '<p class="small">오늘 내 출석 완료 · 공부 기록을 마쳤어요</p>')
       : `
         <div class="checkin">
           <div>
@@ -923,25 +952,25 @@ function drawMatch(m, alive) {
           <div class="qr-box"><img data-qr="${target.id}" alt="내 출석 QR 코드"></div>
         </div>`;
     const matePart = mateIn
-      ? `<p class="small">✅ ${esc(m.mate.name)}님 출석 확인 완료</p>`
+      ? `<p class="small">${esc(m.mate.name)}님 출석 확인 완료</p>`
       : `
         <p class="small"><b>${esc(m.mate.name)}님 출석 확인하기</b></p>
         <p class="tiny muted">메이트 화면의 QR을 찍으면 메이트 출석이 바로 확인돼요.</p>
-        <button class="btn primary block mt" id="scan" data-id="${target.id}">📷 메이트 QR 찍기</button>
+        <button class="btn primary block mt" id="scan" data-id="${target.id}">메이트 QR 찍기</button>
         <p class="tiny muted mt">QR이 안 되면 메이트 화면의 출석 코드를 입력해 주세요.</p>
-        ${target.mateCode ? `<p class="tiny muted">🤖 데모 메이트 코드: <b class="code" style="font-size:12px">${esc(target.mateCode)}</b></p>` : ''}
+        ${target.mateCode ? `<p class="tiny muted">데모 메이트 코드: <b class="code" style="font-size:12px">${esc(target.mateCode)}</b></p>` : ''}
         <form class="row mt" id="confirm-form" data-id="${target.id}">
           <input class="input code" name="code" maxlength="6" placeholder="메이트 코드" autocomplete="off" style="text-transform:uppercase" required>
           <button class="btn inline-btn">확인</button>
         </form>`;
     checkin = `
-      <p class="tiny muted">${fmtDate(target.date, true)} ${fmtTime(target.startTime)} ~ ${fmtTime(target.endTime)} 약속</p>
+      <p class="tiny muted">${fmtDate(target.date, true)} ${fmtRange(target.startTime, target.endTime)} 약속</p>
       <div class="att-part">${myPart}</div>
       <div class="att-part">${matePart}</div>`;
   } else if (next) {
-    checkin = `<div class="notice" style="margin-top:0"><span>⏰</span><span>다음 약속은 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b>이에요. 시작 ${OPTIONS.checkinEarlyMin}분 전부터 출석할 수 있어요.</span></div>`;
+    checkin = `<p class="small">다음 약속은 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b>이에요. 시작 ${OPTIONS.checkinEarlyMin}분 전부터 출석할 수 있어요.</p>`;
   } else {
-    checkin = '<div class="notice" style="margin-top:0"><span>✅</span><span>이번 주 약속이 모두 끝났어요. 주간이 끝나면 리포트가 도착해요.</span></div>';
+    checkin = '<p class="small">이번 주 약속이 모두 끝났어요. 주간이 끝나면 리포트가 도착해요.</p>';
   }
 
   const weekRow = (who) => m.week.map((d) => {
@@ -955,47 +984,40 @@ function drawMatch(m, alive) {
 
   view.innerHTML = `${tabs}
     <section class="card">
-      <div class="card-head"><h2>👥 메이트 프로필</h2><span class="pill">${m.round}주차</span></div>
+      <div class="card-head"><h2>메이트 프로필</h2><span class="hint">${m.round}주차</span></div>
       <div class="profile">
-        <div class="avatar lg">${esc(m.mate.avatar)}</div>
+        ${avatarHTML(m.mate, 'lg')}
         <div>
           <div class="name">${esc(m.mate.name)}${botBadge(m.mate)}</div>
           ${m.mate.bio ? `<div class="small muted">${esc(m.mate.bio)}</div>` : ''}
-          <div class="tags">${m.mate.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
+          ${tagsHTML(m.mate.tags)}
         </div>
       </div>
-      ${m.mate.isBot ? '<div class="notice"><span>🤖</span><span>체험용 <b>가상 메이트</b>예요. 실제로 약속 장소에 나오지 않아요. 내가 출석하면 함께 출석하고, 채팅에 자동으로 답해요.</span></div>' : ''}
-      <div class="notice">
-        <span>🤝</span>
-        <span>${esc(styleLabels(m.styles))} · ${esc(m.location)}${m.stake ? ` · 보증금 ${won(m.stake)}원` : ''}</span>
-      </div>
+      ${m.mate.isBot ? '<div class="notice">체험용 <b>가상 메이트</b>예요. 실제로 약속 장소에 나오지 않아요. 내가 출석하면 함께 출석하고, 채팅에 자동으로 답해요.</div>' : ''}
+      <p class="meta-line">${esc(styleLabels(m.styles))} · ${esc(m.location)}${m.stake ? ` · 보증금 ${won(m.stake)}원` : ''}</p>
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>📅 예정된 약속</h2><span class="hint">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)}</span></div>
+      <div class="card-head"><h2>예정된 약속</h2><span class="hint">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)}</span></div>
       ${m.appointments.length ? m.appointments.map((a) => `
         <div class="appt${a.id === target?.id ? ' is-open' : ''}">
           <div class="date"><b>${fmtDate(a.date)}</b><span>(${WD[a.weekday]})</span></div>
           <div class="meta">
-            <div>🕒 ${fmtTime(a.startTime)} ~ ${fmtTime(a.endTime)}</div>
-            <div class="muted">📍 ${esc(a.location)}</div>
+            <div>${fmtRange(a.startTime, a.endTime)}</div>
+            <div class="muted">${esc(a.location)}</div>
           </div>
           <div>${STATUS_PILL[a.me.status]}</div>
         </div>`).join('') : '<p class="small muted">이번 주 약속이 없어요.</p>'}
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>⌗ 현장 출석 확인</h2></div>
+      <div class="card-head"><h2>현장 출석 확인</h2></div>
       ${checkin}
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>📊 이번주 출석</h2></div>
-      <div class="stat-grid">
-        <div class="stat"><b>${m.stats.me.attended}/${m.stats.me.total}</b><span>내 출석</span></div>
-        <div class="stat"><b>${fmtMinutes(m.stats.me.minutes)}</b><span>내 공부시간</span></div>
-        <div class="stat"><b>${m.stats.mate.attended}/${m.stats.mate.total}</b><span>메이트 출석</span></div>
-      </div>
+      <div class="card-head"><h2>이번 주 출석</h2></div>
+      <p class="meta-line">내 출석 <b>${m.stats.me.attended}/${m.stats.me.total}</b> · 공부 <b>${fmtMinutes(m.stats.me.minutes)}</b> · 메이트 출석 <b>${m.stats.mate.attended}/${m.stats.mate.total}</b></p>
       <div class="week-label">나</div>
       <div class="week">${weekRow('me')}</div>
       <div class="week-label">${esc(m.mate.name)}</div>
@@ -1051,7 +1073,7 @@ function drawMatch(m, alive) {
   const confirmMate = async (id, code) => {
     try {
       const res = await api(`/appointments/${id}/confirm`, { method: 'POST', body: { code } });
-      toast(`✅ ${m.mate.name}님 출석을 확인했어요. 함께 시작해요 📚`);
+      toast(`${m.mate.name}님 출석을 확인했어요.`);
       refresh(res.match);
     } catch (err) { toast(err.message, true); }
   };
@@ -1063,7 +1085,7 @@ function drawMatch(m, alive) {
   $('#checkout')?.addEventListener('click', async (e) => {
     try {
       const res = await api(`/appointments/${e.target.dataset.id}/checkout`, { method: 'POST' });
-      toast(`수고했어요! ${fmtMinutes(res.minutes)} 공부를 기록했어요.`);
+      toast(`${fmtMinutes(res.minutes)} 공부를 기록했어요.`);
       refresh(res.match);
     } catch (err) { toast(err.message, true); }
   });
@@ -1125,10 +1147,10 @@ function renderReport(m, alive) {
 
   let choice;
   if (m.myChoice === 'continue') {
-    choice = `<div class="notice"><span>⏳</span><span>${esc(m.mate.name)}님의 선택을 기다리고 있어요. 둘 다 '계속하기'를 고르면 다음 주 약속이 바로 만들어져요.</span></div>`;
+    choice = `<div class="notice">${esc(m.mate.name)}님의 선택을 기다리고 있어요. 둘 다 '계속하기'를 고르면 다음 주 약속이 바로 만들어져요.</div>`;
   } else {
     choice = `
-      <p class="small muted">${m.mateChoice === 'continue' ? `💚 ${esc(m.mate.name)}님은 계속하고 싶어해요!` : '다음 주는 어떻게 할까요?'}</p>
+      <p class="small muted">${m.mateChoice === 'continue' ? `${esc(m.mate.name)}님은 계속하고 싶어 해요.` : '다음 주는 어떻게 할까요?'}</p>
       <div class="stack mt">
         <button class="btn primary block" data-choice="continue">${esc(m.mate.name)}님과 계속하기</button>
         <button class="btn block" data-choice="new">새 메이트 만나기</button>
@@ -1138,23 +1160,23 @@ function renderReport(m, alive) {
   view.innerHTML = `${mateTabs}
     <section class="card hero">
       <div class="small muted">${fmtDate(m.weekStart)} ~ ${fmtDate(m.weekEnd)} · ${m.round}주차</div>
-      <h2 style="font-size:20px;margin-top:4px">${me.kept ? '이번 주 약속을 모두 지켰어요 🎉' : '이번 주는 아쉬웠어요'}</h2>
+      <h2 style="font-size:20px;margin-top:4px">${me.kept ? '이번 주 약속을 모두 지켰어요' : '이번 주는 아쉬웠어요'}</h2>
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>📈 출석률과 공부시간</h2></div>
+      <div class="card-head"><h2>출석률과 공부시간</h2></div>
       <div class="vs">${col('me', me, '나')}${col('mate', mate, m.mate.name)}</div>
     </section>
 
     ${me.deposit.result !== 'none' ? `
     <section class="card">
-      <div class="card-head"><h2>💰 보증금 정산</h2></div>
+      <div class="card-head"><h2>보증금 정산</h2></div>
       <p class="small">${DEPOSIT_TEXT[me.deposit.result](me.deposit.amount)}</p>
       ${me.reward ? `<p class="small mt"><span class="plus">+${won(me.reward)}P</span> 메이트의 미이행 보상을 받았어요.</p>` : ''}
     </section>` : ''}
 
     <section class="card">
-      <div class="card-head"><h2>🔁 다음 주 선택</h2></div>
+      <div class="card-head"><h2>다음 주 선택</h2></div>
       ${choice}
     </section>`;
 
@@ -1162,10 +1184,10 @@ function renderReport(m, alive) {
     try {
       const res = await api(`/matches/${m.id}/choice`, { method: 'POST', body: { choice: b.dataset.choice } });
       if (res.next === 'continue') {
-        toast(`${m.mate.name}님과 다음 주도 함께해요!`);
+        toast(`다음 주도 ${m.mate.name}님과 함께해요.`);
         router();
       } else if (res.next === 'new') {
-        toast('새 메이트를 찾아볼까요?');
+        toast('새 메이트를 신청해 주세요.');
         location.hash = '#/apply';
       } else {
         toast('선택을 저장했어요.');
@@ -1205,7 +1227,7 @@ async function renderPast(alive, id) {
   const r = m.report;
   const headline = m.headline ? m.headline : m.left === 'me' ? '내가 중간에 그만둔 스터디예요'
     : m.left === 'mate' ? `${m.mate.name}님이 중간에 그만둔 스터디예요`
-    : r?.me?.kept ? '약속을 모두 지킨 주였어요 🎉' : '아쉬움이 남은 주였어요';
+    : r?.me?.kept ? '약속을 모두 지킨 주였어요' : '아쉬움이 남은 주였어요';
 
   const weekRow = (who) => m.week.map((d) => {
     const [sym, label] = MARK[d[who]];
@@ -1229,38 +1251,38 @@ async function renderPast(alive, id) {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>👥 메이트</h2></div>
+      <div class="card-head"><h2>메이트</h2></div>
       <div class="profile">
-        <div class="avatar">${esc(m.mate.avatar)}</div>
+        ${avatarHTML(m.mate)}
         <div>
           <div class="name">${esc(m.mate.name)}${botBadge(m.mate)}</div>
-          <div class="tags">${m.mate.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
+          ${tagsHTML(m.mate.tags)}
         </div>
       </div>
-      <div class="notice"><span>🤝</span><span>${esc(styleLabels(m.styles))}${m.stake ? ` · 보증금 ${won(m.stake)}P` : ''}</span></div>
+      <p class="meta-line">${esc(styleLabels(m.styles))}${m.stake ? ` · 보증금 ${won(m.stake)}P` : ''}</p>
     </section>
 
     ${r ? `
     <section class="card">
-      <div class="card-head"><h2>📈 출석률과 공부시간</h2></div>
+      <div class="card-head"><h2>출석률과 공부시간</h2></div>
       <div class="vs">${col(r.me, '나')}${col(r.mate, m.mate.name)}</div>
-      ${r.me.deposit.result !== 'none' ? `<p class="small mt">💰 ${PAST_DEPOSIT[r.me.deposit.result](r.me.deposit.amount)}
+      ${r.me.deposit.result !== 'none' ? `<p class="small mt">${PAST_DEPOSIT[r.me.deposit.result](r.me.deposit.amount)}
         ${r.me.reward ? ` 보상으로 <span class="plus">+${won(r.me.reward)}P</span>를 받았어요.` : ''}</p>` : ''}
     </section>` : ''}
 
     <section class="card">
-      <div class="card-head"><h2>📅 약속</h2></div>
+      <div class="card-head"><h2>약속</h2></div>
       ${m.appointments.map((a) => `
         <div class="appt">
           <div class="date"><b>${fmtDate(a.date)}</b><span>(${WD[a.weekday]})</span></div>
-          <div class="meta"><div>🕒 ${fmtTime(a.startTime)} ~ ${fmtTime(a.endTime)}</div>
+          <div class="meta"><div>${fmtRange(a.startTime, a.endTime)}</div>
             ${a.me.minutes ? `<div class="muted">공부 ${fmtMinutes(a.me.minutes)}</div>` : ''}</div>
           <div>${STATUS_PILL[a.me.status]}</div>
         </div>`).join('') || '<p class="small muted">약속이 없었어요.</p>'}
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>📊 출석</h2></div>
+      <div class="card-head"><h2>출석</h2></div>
       <div class="week-label">나</div>
       <div class="week">${weekRow('me')}</div>
       <div class="week-label">${esc(m.mate.name)}</div>
@@ -1335,7 +1357,7 @@ function openScanner(appointmentId, onDone) {
     try {
       const res = await api(`/appointments/${appointmentId}/confirm`, { method: 'POST', body: { code } });
       closeModal();
-      toast('✅ 메이트 출석을 확인했어요. 함께 시작해요 📚');
+      toast('메이트 출석을 확인했어요.');
       onDone(res.match);
       return true;
     } catch (err) {
@@ -1385,25 +1407,18 @@ async function renderChat(alive, id) {
   const match = matches.find((m) => m.id === id) ?? matches[0];
   if (!match) {
     view.innerHTML = `
-      <div class="empty"><div class="em">💬</div><h3>대화할 메이트가 없어요</h3>
+      <div class="empty"><h3>대화할 메이트가 없어요</h3>
       <p>매칭이 되면 메이트와 약속을 이야기할 수 있어요.</p></div>`;
     return;
   }
-  setTop({ title: `${match.mate.avatar} ${match.mate.name}` });
+  setTop({ title: match.mate.name });
   const quick = quickMessages(match);
   view.innerHTML = `${mateTabsHTML(matches, match.id, 'chat')}
-    <div class="notice"><span>📌</span><span>${esc(match.location)} · ${esc(scheduleText(match.schedule))}</span></div>
+    <p class="chat-meta">${esc(match.location)} · ${esc(scheduleText(match.schedule))}</p>
     <div class="chat mt" id="chat"></div>
     <div class="chat-dock">
-      <div class="quick">
-        <div class="quick-head"><b>⚡ 메이트 빠른 연락</b><span>원클릭 알림</span></div>
-        <div class="quick-list" id="quick">
-          ${quick.map((q, i) => `
-            <button type="button" class="quick-card" data-i="${i}">
-              <span class="quick-icon">${q.icon}</span>
-              <span class="quick-text"><b>${esc(q.title)}</b><small>"${esc(q.body)}"</small></span>
-            </button>`).join('')}
-        </div>
+      <div class="quick" id="quick" aria-label="자주 쓰는 메시지">
+        ${quick.map((q, i) => `<button type="button" class="quick-chip" data-i="${i}" title="${esc(q.body)}">${esc(q.label)}</button>`).join('')}
       </div>
       <form class="chat-input" id="send">
         <input class="input" name="body" maxlength="500" placeholder="메시지를 입력하세요" autocomplete="off">
@@ -1428,7 +1443,7 @@ async function renderChat(alive, id) {
     scroller().scrollTo(0, scroller().scrollHeight);
   };
   await load();
-  if (!box.children.length) box.innerHTML = `<p class="center small muted" id="hello">${esc(match.mate.name)}님께 먼저 인사해 보세요 👋</p>`;
+  if (!box.children.length) box.innerHTML = `<p class="center small muted" id="hello">${esc(match.mate.name)}님께 먼저 인사해 보세요.</p>`;
   every(3000, () => load().catch(() => {}));
 
   const send = (body) => api(`/matches/${match.id}/messages`, { method: 'POST', body: { body } }).then(load);
@@ -1448,13 +1463,13 @@ async function renderChat(alive, id) {
   });
 
   $('#quick').addEventListener('click', async (e) => {
-    const card = e.target.closest('.quick-card');
+    const card = e.target.closest('.quick-chip');
     if (!card || card.disabled) return;
     const q = quick[Number(card.dataset.i)];
     card.disabled = true;
     try {
       await send(q.body);
-      toast(`${q.icon} ${match.mate.name}님께 알림을 보냈어요.`);
+      toast(`${match.mate.name}님께 보냈어요.`);
     } catch (err) {
       toast(err.message, true);
     } finally {
@@ -1463,13 +1478,13 @@ async function renderChat(alive, id) {
   });
 }
 
-// 채팅 '메이트 빠른 연락' 원클릭 메시지
+// 채팅 입력창 위 자주 쓰는 메시지 (누르면 바로 보냄)
 function quickMessages(match) {
   return [
-    { icon: '🚶', title: '도착 완료 알림', body: `${match.location}에 도착했어요! 먼저 자리 잡고 있을게요.` },
-    { icon: '⏰', title: '5분 지연 양해', body: '5분 정도 늦을 것 같아요. 죄송해요, 금방 갈게요!' },
-    { icon: '☕', title: '쉬는 시간 제안', body: '잠깐 10분 쉬었다 할까요?' },
-    { icon: '👋', title: '오늘 수고 인사', body: '오늘도 같이 공부해서 좋았어요. 수고 많으셨어요!' },
+    { label: '도착했어요', body: `${match.location}에 도착했어요. 먼저 자리 잡고 있을게요.` },
+    { label: '5분 늦어요', body: '5분 정도 늦을 것 같아요. 죄송해요, 금방 갈게요.' },
+    { label: '잠깐 쉴까요', body: '잠깐 10분 쉬었다 할까요?' },
+    { label: '수고했어요', body: '오늘도 같이 공부해서 좋았어요. 수고 많으셨어요.' },
   ];
 }
 
@@ -1484,32 +1499,32 @@ async function renderMe(alive) {
 
   view.innerHTML = `
     <section class="card">
-      <div class="card-head"><h2>👤 내 프로필</h2><a class="link" href="#/me/edit">수정하기 ›</a></div>
+      <div class="card-head"><h2>내 프로필</h2><a class="link" href="#/me/edit">수정하기 ›</a></div>
       <div class="profile">
-        <div class="avatar lg">${esc(user.avatar)}</div>
+        ${avatarHTML(user, 'lg')}
         <div>
           <div class="name">${esc(user.name)}</div>
           <div class="small muted">${esc(user.email)}</div>
           ${user.department || user.phone ? `<div class="small muted">${esc([user.department, user.phone].filter(Boolean).join(' · '))}</div>` : ''}
           ${user.bio ? `<div class="small mt">${esc(user.bio)}</div>` : ''}
-          <div class="tags">${user.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
+          ${tagsHTML(user.tags)}
         </div>
       </div>
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>📚 지난 스터디</h2></div>
+      <div class="card-head"><h2>지난 스터디</h2></div>
       ${matches.length ? matches.map((h) => `
         <a class="list-item link-item" href="#/history/${h.id}">
           <div class="row">
-            <div class="avatar sm">${esc(h.mate.avatar)}</div>
+            ${avatarHTML(h.mate, 'sm')}
             <div><div><b>${esc(h.mate.name)}</b></div><div class="tiny muted">${fmtDate(h.weekStart)} ~ ${fmtDate(h.weekEnd)} · ${esc(h.location)}</div></div>
           </div>
-          <span class="row" style="gap:6px">${h.left ? `<span class="pill red">${h.left === 'me' ? '내가 그만둠' : '메이트가 그만둠'}</span>` : h.report ? `<span class="pill">${h.report.me.rate}% · ${fmtMinutes(h.report.me.minutes)}</span>` : ''}<span class="chev">›</span></span>
+          <span class="row" style="gap:6px">${h.left ? `<span class="small" style="color:var(--red)">${h.left === 'me' ? '내가 그만둠' : '메이트가 그만둠'}</span>` : h.report ? `<span class="small muted">${h.report.me.rate}% · ${fmtMinutes(h.report.me.minutes)}</span>` : ''}<span class="chev">${icon('caret-right')}</span></span>
         </a>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
     </section>
 
-    ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">🛠 개발자 화면 보기</a>' : ''}
+    ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">개발자 화면</a>' : ''}
     <button class="btn ghost block mt-lg danger" id="logout">로그아웃</button>
     ${window.__mockReset ? '<button class="btn ghost block small muted" id="reset">이 브라우저의 데모 데이터 모두 지우기</button>' : ''}`;
 
@@ -1562,13 +1577,13 @@ async function renderAdmin(alive) {
 
   view.innerHTML = `
     <section class="card">
-      <div class="card-head"><h2>🪜 전환 단계</h2><button type="button" class="btn sm" id="funnel-today" aria-pressed="false">오늘만 보기</button></div>
+      <div class="card-head"><h2>전환 단계</h2><button type="button" class="btn sm" id="funnel-today" aria-pressed="false">오늘만 보기</button></div>
       <div id="funnel">${funnelHTML(a.funnel.all)}</div>
       <p class="tiny muted mt">사람 수 기준이에요. 방문은 11/4부터 기록해서, 그 전에 가입한 사람은 방문 수에 없어요.</p>
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>👀 방문 통계</h2><span class="hint">총 ${a.visits.total}번 방문</span></div>
+      <div class="card-head"><h2>방문 통계</h2><span class="hint">총 ${a.visits.total}번 방문</span></div>
       <p class="small">지금까지 들어온 사람 <b>${a.visits.people}명</b></p>
       <p class="small muted mt">날짜별 들어온 사람</p>
       ${a.visits.byDay.map((d) => `<div class="list-item"><span>${shortDay(d.day)}</span><span><b>${d.people}명</b> <span class="tiny muted">· ${d.visits}번</span></span></div>`).join('') || '<p class="small muted">아직 기록이 없어요.</p>'}
@@ -1582,7 +1597,7 @@ async function renderAdmin(alive) {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>👥 가입자</h2><span class="hint">${a.users.length}명</span></div>
+      <div class="card-head"><h2>가입자</h2><span class="hint">${a.users.length}명</span></div>
       ${a.users.map((u) => `
         <div class="admin-item">
           <div class="row" style="justify-content:space-between"><b>${esc(u.name)}</b><span class="tiny muted">${esc(u.department ?? '학과 없음')}</span></div>
@@ -1592,14 +1607,14 @@ async function renderAdmin(alive) {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>✉️ 인증메일</h2><span class="hint">가입 못 마친 사람 ${a.emailCodes.notJoined}명</span></div>
+      <div class="card-head"><h2>인증메일</h2><span class="hint">가입 못 마친 사람 ${a.emailCodes.notJoined}명</span></div>
       ${a.emailCodes.list.map((c) => `
         <div class="list-item"><span class="small">${esc(c.email)} <span class="tiny muted">${c.purpose === 'reset' ? '비번 찾기' : '가입'}</span></span>
           <span class="tiny">${fmtAt(c.created_at)} · ${c.used ? '사용함' : '<b style="color:var(--red)">안 씀</b>'}${c.attempts ? ` · 틀림 ${c.attempts}` : ''}${c.purpose === 'signup' && !c.joined ? ' · 미가입' : ''}</span></div>`).join('')}
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>📝 매칭 신청</h2><span class="hint">대기 ${a.summary.pendingRequests}건 · 전체 ${a.requests.length}건</span></div>
+      <div class="card-head"><h2>매칭 신청</h2><span class="hint">대기 ${a.summary.pendingRequests}건 · 전체 ${a.requests.length}건</span></div>
       ${a.requests.map((r) => `
         <div class="admin-item">
           <div class="row" style="justify-content:space-between"><b>${esc(r.name)}</b><span class="pill${r.status === 'pending' ? ' lime' : r.status === 'cancelled' ? ' gray' : ''}">${STATUS[r.status] ?? r.status}</span></div>
@@ -1609,7 +1624,7 @@ async function renderAdmin(alive) {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>🤝 매칭</h2><span class="hint">전체 ${a.matches.length}건</span></div>
+      <div class="card-head"><h2>매칭</h2><span class="hint">전체 ${a.matches.length}건</span></div>
       ${a.matches.map((m) => `
         <div class="admin-item">
           <div class="row" style="justify-content:space-between"><b>${esc(m.names.join(' ↔ '))}</b><span class="pill${m.status === 'closed' ? ' gray' : ' lime'}">${STATUS[m.status] ?? m.status}</span></div>
@@ -1619,7 +1634,7 @@ async function renderAdmin(alive) {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>💬 채팅</h2><span class="hint">${a.chats.length}개 방</span></div>
+      <div class="card-head"><h2>채팅</h2><span class="hint">${a.chats.length}개 방</span></div>
       ${a.chats.map((c) => `
         <details class="admin-chat"><summary class="small"><b>${esc(c.names.join(' ↔ '))}</b> <span class="tiny muted">· ${c.messages.length}개</span></summary>
           ${c.messages.map((m) => `<div class="admin-msg"><span class="tiny muted">${fmtAt(m.createdAt)} · ${esc(m.name)}</span><div class="small">${esc(m.body)}</div></div>`).join('')}
@@ -1641,15 +1656,12 @@ async function renderEditProfile(alive) {
   loading();
   const { user } = await api('/me');
   if (!alive()) return;
-  let avatar = user.avatar;
-  const avatars = AVATARS.includes(avatar) ? AVATARS : [avatar, ...AVATARS.slice(0, -1)];
 
   view.innerHTML = `
     <form id="f" class="card">
-      <div class="field"><span>아바타</span>
-        <div class="avatar-picker" id="avatars">
-          ${avatars.map((a) => `<button type="button" aria-pressed="${a === avatar}">${a}</button>`).join('')}
-        </div>
+      <div class="profile">
+        ${avatarHTML(user)}
+        <p class="tiny muted">프로필 동그라미에는 이름 글자가 보여요.</p>
       </div>
       <label class="field"><span>이름 (닉네임)</span><input class="input" name="name" maxlength="20" value="${esc(user.name)}" required></label>
       <label class="field"><span>학과</span><input class="input" name="department" maxlength="30" value="${esc(user.department ?? '')}" placeholder="예: 경영정보학부" required></label>
@@ -1659,19 +1671,13 @@ async function renderEditProfile(alive) {
       <button class="btn primary block mt-lg">저장하기</button>
     </form>`;
 
-  $('#avatars').addEventListener('click', (e) => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    avatar = b.textContent;
-    $$('#avatars button').forEach((x) => x.setAttribute('aria-pressed', x === b));
-  });
   $('#f').addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
     try {
-      await withLoading('💾', '프로필을 저장하는 중이에요', () => api('/me', {
+      await withLoading('', '프로필을 저장하는 중이에요', () => api('/me', {
         method: 'PUT',
-        body: { ...fd, avatar, tags: fd.tags.split(/[,\s]+/).filter(Boolean) },
+        body: { ...fd, tags: fd.tags.split(/[,\s]+/).filter(Boolean) },
       }));
       toast('프로필을 저장했어요.');
       history.back();

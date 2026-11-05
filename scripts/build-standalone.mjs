@@ -32,16 +32,16 @@ const result = await build({
 });
 
 const read = (p) => readFile(path.join(ROOT, p), 'utf8');
-const [html, css, app, icon, logo] = await Promise.all([
+const [html, css, app, favicon, logo, logoStack] = await Promise.all([
   read('public/index.html'),
   read('public/styles.css'),
   read('public/app.js'),
-  readFile(path.join(ROOT, 'public', 'logo.webp')), // 정사각형 원본 → 탭 아이콘
-  readFile(path.join(ROOT, 'public', 'logo.png')), // 한 줄 로고 → 화면
+  readFile(path.join(ROOT, 'public', 'favicon.svg')), // 탭 아이콘
+  readFile(path.join(ROOT, 'public', 'logo.svg')), // 한 줄 로고 → 위쪽 띠
+  readFile(path.join(ROOT, 'public', 'logo-stack.svg')), // 두 줄 로고 → 로그인·가입 화면
 ]);
 
-const iconUri = `data:image/webp;base64,${icon.toString('base64')}`;
-const logoUri = `data:image/png;base64,${logo.toString('base64')}`;
+const svgUri = (buf) => `data:image/svg+xml;base64,${buf.toString('base64')}`;
 const safeScript = (js) => js.replace(/<\/script/gi, '<\\/script');
 
 // String.replace의 $ 치환 패턴을 피하려고 모두 함수로 넘긴다.
@@ -51,8 +51,9 @@ const out = html
     '<script type="module" src="app.js"></script>',
     () => `<script>\n${safeScript(result.outputFiles[0].text)}\n</script>\n<script type="module">\n${safeScript(app)}\n</script>`,
   )
-  .replaceAll('logo.webp', () => iconUri)
-  .replaceAll('logo.png', () => logoUri);
+  .replaceAll('favicon.svg', () => svgUri(favicon))
+  .replaceAll('logo-stack.svg', () => svgUri(logoStack))
+  .replaceAll('logo.svg', () => svgUri(logo));
 
 if (out.includes('src="app.js"') || out.includes('href="styles.css"')) {
   throw new Error('index.html 구조가 바뀌어 인라인에 실패했습니다.');
