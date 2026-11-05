@@ -17,12 +17,6 @@ const ADDED_COLUMNS = [
   ['users', 'personal', 'TEXT'], // 내 개인 일정 [{ cell, title }]
   ['users', 'department', 'TEXT'], // 학과 (가입 때 수집, 본인·운영자만 봄)
   ['users', 'phone', 'TEXT'], // 전화번호 (가입 때 수집, 본인·운영자만 봄)
-  ['users', 'photo_id', 'INTEGER'], // 프로필 사진 (photos.id)
-  ['users', 'refund_bank', 'TEXT'], // 보증금 환급 계좌: 은행 (본인·운영자만 봄)
-  ['users', 'refund_account', 'TEXT'], // 보증금 환급 계좌: 계좌번호
-  ['users', 'refund_holder', 'TEXT'], // 보증금 환급 계좌: 예금주
-  ['messages', 'photo_id', 'INTEGER'], // 채팅 사진 (photos.id)
-  ['match_requests', 'depositor', 'TEXT'], // 보증금 입금자명
 ];
 
 export function migrations(dialect) {
@@ -68,7 +62,7 @@ CREATE TABLE IF NOT EXISTS match_requests (
   location   TEXT NOT NULL,
   styles     TEXT NOT NULL,
   deposit    INTEGER NOT NULL DEFAULT 0,
-  status     TEXT NOT NULL DEFAULT 'pending', -- awaiting_deposit(입금 확인 전) | pending | matched | cancelled
+  status     TEXT NOT NULL DEFAULT 'pending', -- pending | matched | cancelled
   created_at TEXT NOT NULL
 );
 
@@ -157,71 +151,6 @@ CREATE TABLE IF NOT EXISTS visits (
   created_at TEXT NOT NULL
 );
 
--- 사진 (프로필·채팅). 화면에서 줄인 이미지를 data URL(base64) 그대로 저장한다.
-CREATE TABLE IF NOT EXISTS photos (
-  id         ${ID},
-  user_id    INTEGER NOT NULL REFERENCES users(id),
-  match_id   INTEGER REFERENCES matches(id), -- 채팅 사진이면 그 매칭, 프로필 사진이면 NULL
-  mime       TEXT NOT NULL,
-  data       TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
--- 보증금 계좌이체 장부. 운영진이 실제로 주고받을 돈을 한 줄씩 기록한다.
---   kind   : deposit(받을 돈: 학생 → 운영진) | refund(돌려줄 돈) | reward(메이트 미이행 보상) | kept(둘 다 미이행 · 운영진 귀속)
---   status : todo(확인·이체 전) | done(완료) | cancelled(취소)
-CREATE TABLE IF NOT EXISTS money_logs (
-  id         ${ID},
-  user_id    INTEGER NOT NULL REFERENCES users(id),
-  kind       TEXT NOT NULL,
-  amount     INTEGER NOT NULL,
-  status     TEXT NOT NULL DEFAULT 'todo',
-  reason     TEXT NOT NULL,
-  request_id INTEGER REFERENCES match_requests(id),
-  match_id   INTEGER REFERENCES matches(id),
-  created_at TEXT NOT NULL,
-  done_at    TEXT,
-  done_by    INTEGER REFERENCES users(id)
-);
-
--- 인증 메일 발송 기록 (안 왔다는 문의가 오면 여기서 원인을 본다)
-CREATE TABLE IF NOT EXISTS email_logs (
-  id         ${ID},
-  email      TEXT NOT NULL,
-  purpose    TEXT NOT NULL,
-  status     TEXT NOT NULL, -- sent | failed
-  provider   TEXT,
-  attempts   INTEGER NOT NULL DEFAULT 1,
-  error      TEXT,
-  created_at TEXT NOT NULL
-);
-
--- 인증 메일을 못 받은 학생의 도움 요청. 운영진이 본인 확인 후 인증번호를 직접 전달한다.
-CREATE TABLE IF NOT EXISTS email_help (
-  id         ${ID},
-  email      TEXT NOT NULL,
-  purpose    TEXT NOT NULL,
-  name       TEXT NOT NULL,
-  phone      TEXT NOT NULL,
-  status     TEXT NOT NULL DEFAULT 'open', -- open | resolved
-  created_at TEXT NOT NULL,
-  resolved_at TEXT,
-  resolved_by INTEGER REFERENCES users(id)
-);
-
--- 운영자가 채팅을 열어 본 기록
-CREATE TABLE IF NOT EXISTS admin_logs (
-  id         ${ID},
-  admin_id   INTEGER NOT NULL REFERENCES users(id),
-  action     TEXT NOT NULL,
-  target     TEXT,
-  created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_photos_match ON photos(match_id);
-CREATE INDEX IF NOT EXISTS idx_money_status ON money_logs(status, kind);
-CREATE INDEX IF NOT EXISTS idx_money_user ON money_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_email_logs ON email_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON match_requests(status);
 CREATE INDEX IF NOT EXISTS idx_matches_users ON matches(user_a, user_b);
 CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
@@ -235,8 +164,7 @@ ${dialect === 'pg' ? RLS : ''}`;
 
 // PostgreSQL(Supabase)에서는 모든 테이블에 RLS를 켜 둔다. 정책이 없으므로 Supabase 공개 API(anon 키)로는
 // 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
-const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'email_codes', 'attendance_codes',
-  'photos', 'money_logs', 'email_logs', 'email_help', 'admin_logs', 'visits']
+const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'email_codes', 'attendance_codes', 'visits']
   .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
   .join('\n');
 
