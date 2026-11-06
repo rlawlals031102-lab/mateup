@@ -25,28 +25,45 @@ export async function createSession(db, userId) {
 // 예전 토큰(auth_tokens)을 새 세션으로 옮긴다. 같은 토큰으로 동시에 들어와도 한 번만 옮겨진다.
 async function adoptLegacy(db, token, hash) {
   const old = await db.get('SELECT * FROM auth_tokens WHERE token = ?', token);
-  if (!old) return null;
+  if (!old) return false;
   await db.run(
     `INSERT INTO sessions (token_hash, user_id, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (token_hash) DO NOTHING`,
     hash, old.user_id, old.created_at, T.now().toISOString(), later(SESSION_DAYS * DAY),
   );
   await db.run('DELETE FROM auth_tokens WHERE token = ?', token);
-  return db.get('SELECT * FROM sessions WHERE token_hash = ?', hash);
+  return true;
+}
+
+// 세션과 사용자를 쿼리 한 번에 (모든 요청이 거치는 길이라 DB 왕복을 줄인다). 세션 열은 s_ 를 붙여 사용자 열과 섞이지 않게.
+async function sessionRow(db, hash) {
+  const row = await db.get(
+    `SELECT s.user_id AS s_user_id, s.last_seen_at AS s_last_seen_at, s.expires_at AS s_expires_at, u.*
+       FROM sessions s LEFT JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`,
+    hash,
+  );
+  if (!row) return null;
+  const { s_user_id: userId, s_last_seen_at: lastSeenAt, s_expires_at: expiresAt, ...user } = row;
+  return { s: { user_id: userId, last_seen_at: lastSeenAt, expires_at: expiresAt }, user: user.id == null ? null : user };
 }
 
 // 토큰 → { user, refreshed } 또는 null. refreshed 이면 쿠키 만료도 다시 늘려 준다 (server/app.js).
 export async function sessionUser(db, token) {
   if (typeof token !== 'string' || !TOKEN_RE.test(token)) return null;
   const hash = hashToken(token);
-  const s = (await db.get('SELECT * FROM sessions WHERE token_hash = ?', hash)) ?? (await adoptLegacy(db, token, hash));
-  if (!s) return null;
+  let found = await sessionRow(db, hash);
+  if (!found) {
+    // 예전 토큰이면 옮긴다. 같은 토큰의 다른 요청이 방금 옮겼을 수도 있으니 결과와 상관없이 한 번 더 찾는다.
+    await adoptLegacy(db, token, hash);
+    found = await sessionRow(db, hash);
+  }
+  if (!found) return null;
+  const { s, user } = found;
   const now = T.now();
   if (new Date(s.expires_at) <= now) {
     await db.run('DELETE FROM sessions WHERE token_hash = ?', hash);
     return null;
   }
-  const user = await db.get('SELECT * FROM users WHERE id = ?', s.user_id);
   if (!user || user.deleted_at) return null;
   let refreshed = false;
   if (now.getTime() - new Date(s.last_seen_at).getTime() > DAY) {

@@ -7,7 +7,7 @@ import * as T from './time.js';
 import { AppError, passwordMatches, strikeStatus, chooseNext } from './service.js';
 import { PRIVACY_POLICY } from './options.js';
 import { endAllSessions } from './sessions.js';
-import { encryptField, encryptionOn, emailHash } from './fieldcrypt.js';
+import { encryptField, decryptField, encryptionOn, emailHash } from './fieldcrypt.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 export const RETENTION_DAYS = {
@@ -91,4 +91,41 @@ export async function purgeOldData(db) {
     }
   }
   return out;
+}
+
+// 내 정보 내려받기 (개인정보 열람권): 내가 낸 정보와 서비스를 쓰며 생긴 내 기록을 JSON 하나로.
+// 상대방이 보낸 메시지·상대방의 연락처처럼 다른 사람의 개인정보는 넣지 않는다 (메이트는 이름만).
+const json = (v, fallback) => { try { return JSON.parse(v); } catch { return v ?? fallback; } };
+export async function exportMyData(db, userId) {
+  const u = await db.get('SELECT * FROM users WHERE id = ?', userId);
+  if (!u) throw new AppError(404, '계정을 찾을 수 없어요.');
+  const nameOf = async (id) => (await db.get('SELECT name FROM users WHERE id = ?', id))?.name ?? null;
+  const matches = await db.all('SELECT * FROM matches WHERE user_a = ? OR user_b = ? ORDER BY id', userId, userId);
+  return {
+    exportedAt: T.now().toISOString(),
+    privacyPolicyVersion: PRIVACY_POLICY.version,
+    profile: {
+      email: u.email, name: u.name, department: u.department ?? null, phone: decryptField(u.phone), age: u.age ?? null,
+      tags: json(u.tags, []), bio: u.bio, personalSchedule: json(u.personal, []), createdAt: u.created_at,
+      agreedAt: u.agreed_at ?? null, agreedPolicyVersion: u.privacy_version ?? null,
+    },
+    matchRequests: (await db.all('SELECT * FROM match_requests WHERE user_id = ? ORDER BY id', userId)).map((r) => ({
+      createdAt: r.created_at, status: r.status, days: json(r.days, []), cells: json(r.cells, []),
+      locations: json(r.location, r.location), styles: json(r.styles, []),
+    })),
+    matches: await Promise.all(matches.map(async (m) => ({
+      id: m.id, status: m.status, weekStart: m.week_start, weekEnd: m.week_end, location: m.location,
+      mateName: await nameOf(m.user_a === userId ? m.user_b : m.user_a), createdAt: m.created_at,
+    }))),
+    attendance: await db.all(
+      `SELECT p.date, p.start_time AS "startTime", p.end_time AS "endTime", a.checked_in_at AS "checkedInAt",
+         a.checked_out_at AS "checkedOutAt", a.minutes FROM attendance a JOIN appointments p ON p.id = a.appointment_id
+       WHERE a.user_id = ? ORDER BY p.date`, userId,
+    ),
+    messagesSent: await db.all('SELECT match_id AS "matchId", body, created_at AS "createdAt" FROM messages WHERE user_id = ? ORDER BY id', userId),
+    promiseRecords: await db.all('SELECT kind, match_id AS "matchId", created_at AS "createdAt" FROM strikes WHERE user_id = ? ORDER BY id', userId),
+    suspendedUntil: u.suspended_until ?? null,
+    reportsMade: await db.all('SELECT match_id AS "matchId", reason, detail, status, created_at AS "createdAt" FROM reports WHERE reporter_id = ? ORDER BY id', userId),
+    loginSessions: await db.all('SELECT created_at AS "createdAt", last_seen_at AS "lastSeenAt", expires_at AS "expiresAt" FROM sessions WHERE user_id = ? ORDER BY created_at', userId),
+  };
 }

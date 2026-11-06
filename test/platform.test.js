@@ -233,6 +233,66 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal((await a('GET', '/me')).data.user.phone, '010-5555-6666');
     });
 
+    test('성능 예산: 몇 초마다 불리는 요청의 DB 쿼리 수가 늘지 않음 (docs/operations-guide.md 9장)', async () => {
+      const [a, b] = [browser(), browser()];
+      await join(a, 'qa@test.dev');
+      await join(b, 'qb@test.dev');
+      await a('POST', '/requests', REQ);
+      const { data: { matchId } } = await b('POST', '/requests', REQ);
+      await b('POST', `/matches/${matchId}/messages`, { body: '안녕하세요' });
+      await a('GET', '/matches/active'); // 출석 코드가 이미 있는지 한 번 확인한 뒤부터 잰다
+      let n = 0;
+      for (const k of ['get', 'all', 'run']) {
+        const f = db[k];
+        db[k] = (...args) => { n += 1; return f.apply(db, args); };
+      }
+      const tx = db.tx;
+      db.tx = (fn) => { n += 2; return tx.call(db, fn); }; // BEGIN·COMMIT (안의 쿼리는 세지 않음 → 넉넉한 하한)
+      const count = async (method, p, body) => {
+        n = 0;
+        const r = await a(method, p, body);
+        assert.ok(r.status < 300, `${p}: ${r.status}`);
+        return n;
+      };
+      assert.ok((await count('GET', '/chat/unread')) <= 2, '안 읽은 수');
+      assert.ok((await count('GET', `/matches/${matchId}/messages?after=0`)) <= 4, '채팅 확인');
+      assert.ok((await count('POST', `/matches/${matchId}/read`, { lastId: 1 })) <= 4, '읽음 표시');
+      const active = await count('GET', '/matches/active');
+      assert.ok(active <= 9, `매칭 목록 ${active}번 (볼 때마다 출석 코드를 쓰지 않음)`);
+    });
+
+    test('내 정보 내려받기: 내 정보·기록만 (상대 메시지·연락처·비밀번호 없음), 하루 10번까지', async () => {
+      process.env.DATA_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
+      const [a, b] = [browser(), browser()];
+      assert.equal((await a('GET', '/me/export')).status, 401);
+      await join(a, 'ex@test.dev', { phone: '010-1111-2222' });
+      await join(b, 'mate@test.dev', { phone: '010-3333-4444' });
+      await a('POST', '/requests', REQ);
+      const { data: { matchId } } = await b('POST', '/requests', REQ);
+      await a('POST', `/matches/${matchId}/messages`, { body: '내가 보낸 말' });
+      await b('POST', `/matches/${matchId}/messages`, { body: '메이트가 보낸 말' });
+      await b('POST', `/matches/${matchId}/report`, { reason: 'rude' });
+
+      const res = await a('GET', '/me/export');
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('cache-control'), 'no-store');
+      const d = res.data;
+      assert.equal(d.profile.email, 'ex@test.dev');
+      assert.equal(d.profile.phone, '010-1111-2222', '저장은 암호문이어도 내려받을 때는 번호');
+      assert.equal(d.matchRequests.length, 1);
+      assert.deepEqual(d.matches.map((m) => [m.id, m.mateName]), [[matchId, 'mate']]);
+      assert.deepEqual(d.messagesSent.map((m) => m.body), ['내가 보낸 말']);
+      assert.deepEqual(d.reportsMade, [], '내가 받은 신고는 넣지 않음');
+      assert.equal(d.loginSessions.length, 1);
+      const text = JSON.stringify(d);
+      const { password_hash: hash } = await db.get('SELECT password_hash FROM users WHERE email = ?', 'ex@test.dev');
+      for (const secret of ['메이트가 보낸 말', 'mate@test.dev', '010-3333-4444', 'enc:v1:', hash, 'password', 'token']) {
+        assert.equal(text.includes(secret), false, `${secret} 이(가) 들어 있으면 안 됨`);
+      }
+      for (let i = 1; i < 10; i++) assert.equal((await a('GET', '/me/export')).status, 200);
+      assert.equal((await a('GET', '/me/export')).status, 429);
+    });
+
     test('신고: 매칭된 사람만, 운영자는 신고된 대화만 보고 열람이 기록됨, 정지 풀기는 운영자만', async () => {
       const [a, b, c, admin] = [browser(), browser(), browser(), browser()];
       const aId = (await join(a, 'ra@test.dev')).data.user.id;

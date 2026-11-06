@@ -21,6 +21,7 @@ export const LIMITS = {
   request: { limit: 20, windowSec: HOUR },
   report: { limit: 10, windowSec: 24 * HOUR, message: '오늘은 더 신고할 수 없어요. 급한 일은 운영진 메일로 알려 주세요.' },
   deleteAccount: { limit: 5, windowSec: HOUR },
+  exportData: { limit: 10, windowSec: 24 * HOUR, message: '오늘은 더 내려받을 수 없어요. 내일 다시 시도해 주세요.' },
 };
 const DEFAULT_MESSAGE = '요청이 너무 많아요. 잠시 후 다시 시도해 주세요.';
 

@@ -11,8 +11,18 @@ export async function createGmailMailer({ user, pass } = {}) {
     auth: { user, pass: pass.replace(/\s+/g, '') }, // 앱 비밀번호는 4자리씩 띄어서 보여지므로 공백 제거
   });
   return {
+    // 잠깐 끊기는 오류(연결·시간 초과·임시 거절)는 한 번 더 보낸다. 로그인 정보 오류(EAUTH)는 바로 알린다.
     async send({ to, subject, text, html }) {
-      await transport.sendMail({ from: `스터디버디 <${user}>`, to, subject, text, html });
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await transport.sendMail({ from: `스터디버디 <${user}>`, to, subject, text, html });
+          return;
+        } catch (err) {
+          const temporary = err.code !== 'EAUTH' && (!err.responseCode || err.responseCode < 500);
+          if (attempt >= 2 || !temporary) throw err;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
     },
   };
 }

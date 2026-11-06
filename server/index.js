@@ -15,6 +15,13 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const demo = process.argv.includes('--demo') || process.env.DEMO_MODE === '1';
 const port = Number(process.env.PORT) || 3000;
 
+// 화면 자동 테스트(e2e/flow.mjs) 전용: 서버 시각 고정, 데모에서도 처리방침 동의 받기
+if (process.env.FAKE_NOW) {
+  const { setNow } = await import('./time.js');
+  setNow(new Date(process.env.FAKE_NOW));
+}
+const consentRequired = !demo || process.env.REQUIRE_CONSENT === '1';
+
 let db;
 if (process.env.DATABASE_URL) {
   const { openPg } = await import('./db-pg.js');
@@ -38,6 +45,6 @@ setInterval(() => autoSettle(db).catch(console.error), 10 * 60 * 1000).unref();
 const mailer = await createGmailMailer({ user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD });
 const emailPolicy = demo ? { domain: null, verify: false } : { domain: EMAIL_DOMAIN, verify: true };
 
-createApp({ db, demo, emailPolicy, mailer }).listen(port, () => {
+createApp({ db, demo, emailPolicy, mailer, consentRequired }).listen(port, () => {
   console.log(`스터디버디 서버 실행 중 → http://localhost:${port}${demo ? '  (데모 모드)' : ''}`);
 });

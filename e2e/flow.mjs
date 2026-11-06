@@ -1,11 +1,11 @@
 // 화면 자동 테스트 (실제 브라우저, 휴대폰 크기): 가입(동의) → 신청 → 매칭 → 출석 화면 → 채팅·안 읽음 표시 → 신고
-// → 리포트 → 탈퇴 → 처리방침 동의 창 → 처리방침 페이지 → 상태 확인.
+// → 리포트 → 탈퇴 → 처리방침 동의 창 → 내 정보 내려받기 → 처리방침 페이지 → 상태 확인.
 // 보안 정책(CSP) 위반이나 화면 오류(pageerror)가 하나라도 나면 실패한다.
 //
 // 실행: npm run test:e2e   (필요: npm i --no-save playwright@1.63.0 && npx playwright install chromium)
 // 서버는 이 스크립트가 데모 모드로 직접 켜고 끈다. 시각은 스터디 첫날 하루 전 10시로 고정(서버·브라우저 모두).
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,6 +109,19 @@ async function main() {
     await shot(B, '05_consent');
     await B.click('#consent-ok');
     await B.waitForSelector('#consent-ok', { state: 'detached' });
+
+    step('내 정보 내려받기 → JSON 파일 (상대 메시지는 없고, 탈퇴한 메이트는 이름만)');
+    await B.goto(`${BASE}/#/me`);
+    await B.waitForSelector('#export-data');
+    const [download] = await Promise.all([B.waitForEvent('download'), B.click('#export-data')]);
+    if (!/^studybuddy-my-data-\d{4}-\d{2}-\d{2}\.json$/.test(download.suggestedFilename())) fail(`파일 이름이 이상해요: ${download.suggestedFilename()}`);
+    const saved = path.join(dir, 'export.json');
+    await download.saveAs(saved);
+    const text = await readFile(saved, 'utf8');
+    const mine = JSON.parse(text);
+    if (mine.profile?.email !== 'e2e-b@test.dev' || mine.reportsMade?.length !== 1) fail('내려받은 파일 내용이 이상해요');
+    if (mine.matches?.[0]?.mateName !== '탈퇴한 사용자') fail('탈퇴한 메이트 이름이 이상해요');
+    if (text.includes('안녕하세요, 내일 봬요')) fail('상대가 보낸 메시지가 들어 있어요');
 
     step('처리방침 페이지, 상태 확인');
     await B.goto(`${BASE}/privacy.html`);

@@ -103,6 +103,8 @@ async function api(path, { method = 'GET', body } = {}) {
     if (status >= 400) {
       const err = new Error(data.error || '요청을 처리하지 못했어요.');
       err.status = status;
+      err.code = data.code ?? null;
+      if (err.code === 'consent_required') goConsent();
       throw err;
     }
     return data;
@@ -117,9 +119,16 @@ async function api(path, { method = 'GET', body } = {}) {
   if (!res.ok) {
     const err = new Error(data.error || '요청을 처리하지 못했어요.');
     err.status = res.status;
+    err.code = data.code ?? null;
+    if (err.code === 'consent_required') goConsent();
     throw err;
   }
   return data;
+}
+
+// 처리방침 동의가 필요하다는 응답을 받으면(화면을 보는 중 주기적으로 묻는 요청 포함) 홈으로 → 동의 창
+function goConsent() {
+  if (!/^#?\/?(home)?$/.test(location.hash)) location.hash = '#/home';
 }
 
 let toastTimer;
@@ -151,8 +160,32 @@ async function withLoading(_icon, text, task, ms = 600) {
   }
 }
 
+// 화면이 바뀌면 멈추는 반복 (화면을 안 보고 있을 때는 건너뜀)
 function every(ms, fn) {
-  timers.push(setInterval(fn, ms));
+  timers.push(setInterval(() => { if (!document.hidden) fn(); }, ms));
+}
+
+// 서버에 주기적으로 묻기: 조용할수록 천천히 묻는다. gaps = [[조용한 시간 ms, 묻는 간격 ms], ...] (앞에서부터 처음 맞는 것)
+// 화면을 안 보고 있으면 묻지 않고, 다시 보면 바로 묻는다. 돌려주는 active()를 부르면 다시 자주 묻는다.
+const POLL_GAPS = [[60 * 1000, 4000], [5 * 60 * 1000, 10000], [Infinity, 20000]];
+function poll(fn, gaps = POLL_GAPS) {
+  let quietSince = Date.now();
+  let nextAt = 0;
+  let busy = false;
+  let away = false;
+  const schedule = () => {
+    const quiet = Date.now() - quietSince;
+    nextAt = Date.now() + gaps.find(([upTo]) => quiet < upTo)[1];
+  };
+  schedule();
+  timers.push(setInterval(async () => {
+    if (document.hidden) { away = true; return; }
+    if (busy || (!away && Date.now() < nextAt)) return;
+    away = false;
+    busy = true;
+    try { await fn(); } catch { /* 다음 차례에 다시 */ } finally { busy = false; schedule(); }
+  }, 1000));
+  return { active: () => { quietSince = Date.now(); nextAt = Math.min(nextAt, Date.now() + gaps[0][1]); } };
 }
 
 function setTop({ title = '', back = null, brand = false, right = '' } = {}) {
@@ -246,6 +279,11 @@ async function router() {
       location.hash = '#/login';
       return;
     }
+    // 처리방침 동의 전: 홈에서 동의 창을 띄운다
+    if (err.code === 'consent_required' && name !== 'home') {
+      location.hash = '#/home';
+      return;
+    }
     console.error(err);
     view.innerHTML = `<div class="empty"><h3>문제가 생겼어요</h3><p>${esc(err.message)}</p></div>`;
   }
@@ -254,7 +292,7 @@ async function router() {
 // ── 안 읽은 채팅: 채팅 탭 아이콘 위 빨간 숫자 (홈 등 탭이 보이는 모든 화면)
 let unread = { total: 0, byMatch: {} };
 async function refreshUnread() {
-  if (tabbar.hidden) return;
+  if (tabbar.hidden || document.hidden) return;
   try { unread = await api('/chat/unread'); } catch { return; }
   const tab = $('a[data-tab="chat"]', tabbar);
   let badge = $('.badge', tab);
@@ -403,6 +441,7 @@ async function renderLogin() {
       <button class="btn primary block mt-lg">로그인</button>
     </form>
     <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a>${OPTIONS.emailVerification ? ' · <a href="#/reset">비밀번호 찾기</a>' : ''}</p>
+    <p class="legal-link"><a href="privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a></p>
     ${OPTIONS.demoLogin ? `
       <div class="demo-login">
         <button type="button" class="btn block" id="demo-login">데모 계정으로 로그인</button>
@@ -437,7 +476,10 @@ async function renderSignup() {
       <label class="field"><span>전화번호</span><input class="input" name="phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="010-1234-5678" required></label>
       <p class="tiny muted">학과와 전화번호는 운영 연락용으로만 쓰고, 메이트에게는 보이지 않아요.</p>
       <label class="field"><span>비밀번호 (6자 이상)</span><input class="input" name="password" type="password" minlength="6" autocomplete="new-password" required></label>
-      <button class="btn primary block mt-lg">가입하고 시작하기</button>
+      ${consentSummary()}
+      <label class="agree"><input type="checkbox" name="agree" required>
+        <span><b>[필수]</b> 개인정보 수집·이용에 동의해요 · <a class="link" href="privacy.html" target="_blank" rel="noopener">처리방침 보기</a></span></label>
+      <button class="btn primary block mt">가입하고 시작하기</button>
     </form>
     <p class="switch-link">이미 계정이 있나요? <a href="#/login">로그인</a></p>`);
   const form = $('#f');
@@ -447,11 +489,49 @@ async function renderSignup() {
     if (OPTIONS.emailVerification && $('#code-field').hidden) return toast("먼저 '인증번호 받기'를 눌러 주세요.", true);
     const fd = Object.fromEntries(new FormData(form));
     fd.email = withDomain(fd.email);
+    fd.agree = fd.agree === 'on';
     try {
       await withLoading('', '가입하는 중이에요', () => api('/auth/signup', { method: 'POST', body: fd }));
       toast('가입을 마쳤어요.');
       location.hash = '#/home';
     } catch (err) { toast(err.message, true); }
+  });
+}
+
+// ── 개인정보 처리방침 (public/privacy.html) 요약과 동의 창 ──
+const consentSummary = () => `
+      <dl class="consent-sum">
+        <dt>받는 정보</dt><dd>국민대 메일, 이름, 학과, 전화번호, 비밀번호(암호화해서 저장)</dd>
+        <dt>쓰는 곳</dt><dd>본인 확인, 매칭·출석 관리, 운영 연락. 메이트에게는 이름·소개만 보여요</dd>
+        <dt>보관</dt><dd>탈퇴하면 바로 지워요 (자세한 기간은 처리방침)</dd>
+      </dl>`;
+
+// 처리방침이 생겼거나 바뀐 뒤 처음 들어온 회원: 동의해야 계속 쓸 수 있다 (바깥을 눌러도 닫히지 않음)
+function showConsent() {
+  const modal = $('#modal');
+  modal.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="consent-title">
+      <h3 id="consent-title">개인정보 처리방침에 동의해 주세요</h3>
+      <p class="small muted">스터디버디가 개인정보를 어떻게 다루는지 정리했어요. 동의하면 지금처럼 이용할 수 있어요.</p>
+      ${consentSummary()}
+      <p class="small"><a class="link" href="privacy.html" target="_blank" rel="noopener">처리방침 전체 보기</a></p>
+      <button class="btn primary block mt" id="consent-ok">동의하고 계속하기</button>
+      <button type="button" class="text-btn" id="consent-no">동의하지 않고 로그아웃</button>
+    </div>`;
+  modal.hidden = false;
+  modal.onclick = null;
+  $('#consent-ok').addEventListener('click', async () => {
+    try {
+      await api('/me/consent', { method: 'POST' });
+      closeModal();
+      toast('동의했어요.');
+      router();
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#consent-no').addEventListener('click', async () => {
+    await api('/auth/logout', { method: 'POST' }).catch(() => {});
+    closeModal();
+    location.hash = '#/login';
   });
 }
 
@@ -796,6 +876,7 @@ async function renderHome(alive) {
     });
   };
   drawTimetable();
+  if (state.consent?.required) showConsent();
 
   $$('[data-cancel]').forEach((b) => b.addEventListener('click', async () => {
     if (!confirm('이 매칭 신청을 취소할까요?')) return;
@@ -808,9 +889,9 @@ async function renderHome(alive) {
 
   if (pendingRequests.length) {
     const before = matches.length;
-    every(4000, async () => {
-      const s = await api('/me').catch(() => null);
-      if (s && s.matches.length > before && alive()) {
+    poll(async () => {
+      const s = await api('/me');
+      if (s.matches.length > before && alive()) {
         toast('메이트가 정해졌어요.');
         location.hash = `#/match/${s.matches.at(-1).id}`;
       }
@@ -1237,9 +1318,9 @@ function renderReport(m, alive) {
   }));
 
   if (m.myChoice === 'continue') {
-    every(4000, async () => {
-      const res = await api('/matches/current').catch(() => null);
-      if (!alive() || !res) return;
+    poll(async () => {
+      const res = await api('/matches/current');
+      if (!alive()) return;
       if (!res.match || res.match.id !== m.id) router();
     });
   }
@@ -1424,7 +1505,8 @@ async function renderChat(alive, id) {
       <p>매칭이 되면 메이트와 약속을 이야기할 수 있어요.</p></div>`;
     return;
   }
-  setTop({ title: match.mate.name });
+  setTop({ title: match.mate.name, right: '<button type="button" class="top-action" id="report">신고</button>' });
+  $('#report').addEventListener('click', () => openReport(match));
   const quick = quickMessages(match);
   view.innerHTML = `${mateTabsHTML(matches, match.id, 'chat')}
     <p class="chat-meta">${esc(match.location)} · ${esc(scheduleText(match.schedule))}</p>
@@ -1448,12 +1530,15 @@ async function renderChat(alive, id) {
   const markMine = (mateLastReadId) => $$('.read-mark', box).forEach((el) => {
     if (Number(el.dataset.id) <= mateLastReadId) el.remove();
   });
-  const load = async () => {
+  let chatPoll = null;
+  const fetchNew = async () => {
     const { messages, mateLastReadId = 0 } = await api(`/matches/${match.id}/messages?after=${lastId}`);
     if (!alive()) return;
     if (messages.length) {
       $('#hello')?.remove();
+      chatPoll?.active();
       for (const msg of messages) {
+        if (msg.id <= lastId) continue;
         lastId = msg.id;
         const mine = msg.userId === user.id;
         const t = new Date(msg.createdAt);
@@ -1470,9 +1555,14 @@ async function renderChat(alive, id) {
       api(`/matches/${match.id}/read`, { method: 'POST', body: { lastId } }).then(refreshUnread).catch(() => {});
     }
   };
+  // 한 번에 하나씩 (보내기 직후 확인과 주기적 확인이 겹쳐 같은 메시지가 두 번 붙지 않게)
+  let queue = Promise.resolve();
+  const load = () => (queue = queue.then(fetchNew, fetchNew));
   await load();
   if (!box.children.length) box.innerHTML = `<p class="center small muted" id="hello">${esc(match.mate.name)}님께 먼저 인사해 보세요.</p>`;
-  every(3000, () => load().catch(() => {}));
+  // 대화가 오가면 3초마다, 30초 조용하면 6초, 2분 조용하면 12초마다 확인 (화면을 안 보면 멈춤)
+  chatPoll = poll(load, [[30 * 1000, 3000], [2 * 60 * 1000, 6000], [Infinity, 12000]]);
+  $('#send input').addEventListener('input', () => chatPoll.active());
 
   const send = (body) => api(`/matches/${match.id}/messages`, { method: 'POST', body: { body } }).then(load);
 
@@ -1503,6 +1593,36 @@ async function renderChat(alive, id) {
     } finally {
       card.disabled = false;
     }
+  });
+}
+
+// 대화 신고 (server/reports.js): 운영진은 신고된 대화만 확인한다
+function openReport(match) {
+  const modal = $('#modal');
+  const reasons = Object.entries(OPTIONS.reportReasons ?? {});
+  modal.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="rep-title">
+      <div class="row between"><h3 id="rep-title">대화 신고</h3><button type="button" class="btn sm ghost" id="close">닫기</button></div>
+      <p class="small muted">신고하면 운영진이 ${esc(match.mate.name)}님과의 대화 내용을 확인해요. 신고한 사실은 상대방에게 알리지 않아요.</p>
+      <form id="rep-form" class="mt">
+        <fieldset class="choice-list"><legend class="sr-only">신고 이유</legend>
+          ${reasons.map(([k, label], i) => `<label class="choice"><input type="radio" name="reason" value="${esc(k)}"${i === 0 ? ' required' : ''}><span>${esc(label)}</span></label>`).join('')}
+        </fieldset>
+        <label class="field mt"><span>어떤 일이 있었나요? (기타는 꼭 적어 주세요)</span><textarea class="input" name="detail" maxlength="500" placeholder="500자까지"></textarea></label>
+        <button class="btn primary block mt">신고하기</button>
+      </form>
+    </div>`;
+  modal.hidden = false;
+  modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+  $('#close').addEventListener('click', closeModal);
+  $('#rep-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await api(`/matches/${match.id}/report`, { method: 'POST', body: { reason: fd.get('reason'), detail: fd.get('detail') } });
+      closeModal();
+      toast('신고했어요. 운영진이 확인할게요.');
+    } catch (err) { toast(err.message, true); }
   });
 }
 
@@ -1560,7 +1680,12 @@ async function renderMe(alive) {
     </section>
 
     ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">개발자 화면</a>' : ''}
-    <button type="button" class="text-btn" id="logout">로그아웃</button>
+    <nav class="me-links" aria-label="계정">
+      <a class="text-btn" href="privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a>
+      <button type="button" class="text-btn" id="export-data">내 정보 내려받기</button>
+      <button type="button" class="text-btn" id="logout">로그아웃</button>
+      <button type="button" class="text-btn quiet" id="delete-account">회원 탈퇴</button>
+    </nav>
     ${window.__mockReset ? '<button class="btn ghost block small muted" id="reset">이 브라우저의 데모 데이터 모두 지우기</button>' : ''}`;
 
   $('#reset')?.addEventListener('click', () => {
@@ -1573,6 +1698,50 @@ async function renderMe(alive) {
   $('#logout').addEventListener('click', async () => {
     await api('/auth/logout', { method: 'POST' }).catch(() => {});
     location.hash = '#/login';
+  });
+  $('#delete-account').addEventListener('click', openDeleteAccount);
+  $('#export-data').addEventListener('click', downloadMyData);
+}
+
+// 내 정보 내려받기 (server/privacy.js exportMyData): 내가 낸 정보와 내 기록을 JSON 파일 하나로
+async function downloadMyData() {
+  try {
+    const data = await api('/me/export');
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: `studybuddy-my-data-${String(data.exportedAt).slice(0, 10)}.json` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast('내 정보를 파일로 내려받았어요.');
+  } catch (err) { toast(err.message, true); }
+}
+
+// 회원 탈퇴 (server/privacy.js): 비밀번호 확인 → 계정 정보 삭제, 기록은 '탈퇴한 사용자'로
+function openDeleteAccount() {
+  const modal = $('#modal');
+  modal.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="del-title">
+      <div class="row between"><h3 id="del-title">회원 탈퇴</h3><button type="button" class="btn sm ghost" id="close">닫기</button></div>
+      <p class="small">탈퇴하면 메일·이름·학과·전화번호·소개를 바로 지워요. 메이트와 나눈 대화와 지난 스터디 기록은 상대방을 위해 '탈퇴한 사용자'로 남아요.</p>
+      <p class="small muted mt">진행 중인 매칭이 있으면 먼저 마치거나 그만둬야 해요. 매칭 정지 중에 탈퇴하면 다시 가입해도 정지는 이어져요.</p>
+      <form id="del-form" class="mt">
+        <label class="field"><span>비밀번호 확인</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
+        <button class="btn block mt danger-solid">탈퇴하기</button>
+      </form>
+    </div>`;
+  modal.hidden = false;
+  modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+  $('#close').addEventListener('click', closeModal);
+  $('#del-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!confirm('정말 탈퇴할까요? 되돌릴 수 없어요.')) return;
+    try {
+      await api('/me/delete', { method: 'POST', body: { password: e.target.password.value } });
+      closeModal();
+      toast('탈퇴했어요. 그동안 함께해 줘서 고마워요.');
+      location.hash = '#/login';
+    } catch (err) { toast(err.message, true); }
   });
 }
 
