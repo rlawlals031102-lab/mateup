@@ -8,7 +8,9 @@ import QRCode from 'qrcode';
 import { openSqlite } from '../server/db.js';
 import { seedBots, retireOldBots } from '../server/seed.js';
 import * as S from '../server/service.js';
-import { LOCATIONS, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE_RULE } from '../server/options.js';
+import { LOCATIONS, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE_RULE, PRIVACY_POLICY } from '../server/options.js';
+import { consentState, recordConsent, deleteAccount, exportMyData } from '../server/privacy.js';
+import { reportChat, REPORT_REASONS } from '../server/reports.js';
 import { persist, clearSaved } from './shims/sqlite.js';
 
 const TOKEN_KEY = 'studybuddy-standalone-token';
@@ -43,7 +45,8 @@ const needUser = (ctx) => {
 };
 
 const routes = [
-  ['GET', '/options', async () => ({ locations: LOCATIONS, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, demoLogin: true, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD, promiseRule: PROMISE_RULE })],
+  ['GET', '/options', async () => ({ locations: LOCATIONS, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, demoLogin: true, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD, promiseRule: PROMISE_RULE,
+    privacyVersion: PRIVACY_POLICY.version, reportReasons: REPORT_REASONS })],
 
   ['POST', '/auth/signup', async ({ db, body }) => {
     const { user, token } = await S.signup(db, body);
@@ -67,7 +70,16 @@ const routes = [
     return { ok: true };
   }],
 
-  ['GET', '/me', (ctx) => S.homeState(ctx.db, needUser(ctx), opts)],
+  // 단독 데모는 처리방침 동의를 받지 않는다 (실서비스만: server/app.js consentRequired)
+  ['GET', '/me', async (ctx) => ({ ...(await S.homeState(ctx.db, needUser(ctx), opts)), consent: consentState(ctx.user, false) })],
+  ['POST', '/me/consent', async (ctx) => ({ consent: await recordConsent(ctx.db, needUser(ctx)) })],
+  ['GET', '/me/export', (ctx) => exportMyData(ctx.db, needUser(ctx))],
+  ['POST', '/me/delete', async (ctx) => {
+    await deleteAccount(ctx.db, needUser(ctx), ctx.body.password);
+    setToken(null);
+    return { ok: true };
+  }],
+  ['POST', '/matches/:id/report', (ctx) => reportChat(ctx.db, needUser(ctx), ctx.id, ctx.body)],
   ['PUT', '/me', async (ctx) => ({ user: await S.updateProfile(ctx.db, needUser(ctx), ctx.body) })],
   ['GET', '/matches/:id', async (ctx) => ({ match: await S.matchById(ctx.db, needUser(ctx), ctx.id, opts) })],
   ['GET', '/me/history', async (ctx) => ({ matches: await S.matchHistory(ctx.db, needUser(ctx)) })],
@@ -96,7 +108,7 @@ const routes = [
   ['POST', '/matches/:id/choice', (ctx) => S.chooseNext(ctx.db, needUser(ctx), ctx.id, ctx.body.choice)],
   ['GET', '/matches/:id/messages', async (ctx) => {
     const uid = needUser(ctx);
-    return { messages: await S.listMessages(ctx.db, uid, ctx.id, ctx.query.after), mateLastReadId: await S.mateLastRead(ctx.db, uid, ctx.id) };
+    return S.chatUpdate(ctx.db, uid, ctx.id, ctx.query.after);
   }],
   ['POST', '/matches/:id/read', (ctx) => S.markChatRead(ctx.db, needUser(ctx), ctx.id, ctx.body.lastId)],
   ['GET', '/chat/unread', (ctx) => S.unreadCounts(ctx.db, needUser(ctx))],

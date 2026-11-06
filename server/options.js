@@ -30,6 +30,14 @@ export const EMAIL_DOMAIN = 'kookmin.ac.kr';
 // from 이전의 약속·그만두기는 세지 않는다 (규칙을 알린 다음 회차부터 적용).
 export const PROMISE_RULE = { strikeLimit: 2, suspendDays: 30, from: '2026-11-06' };
 
+// 개인정보 처리방침 (public/privacy.html). 내용을 바꾸면 version 을 바꾸고 → 모든 회원에게 다시 동의를 받는다.
+// 책임자·담당자는 처리방침에 적힌 사람과 같아야 한다.
+export const PRIVACY_POLICY = {
+  version: '2026-11-06',
+  officer: { name: '김지민', role: '개인정보 보호책임자', email: 'rlawlals031102@kookmin.ac.kr' },
+  manager: { name: '나윤빈', role: '개인정보 보호담당자', email: 'yunbinna6@kookmin.ac.kr' },
+};
+
 // 개발자 화면을 볼 수 있는 계정 (운영자). 메일은 소문자로 적는다.
 export const ADMIN_EMAIL = 'rlawlals031102@kookmin.ac.kr'; // 김지민
 export const ADMIN_EMAILS = [ADMIN_EMAIL, 'yunbinna6@kookmin.ac.kr']; // 김지민, 나윤빈

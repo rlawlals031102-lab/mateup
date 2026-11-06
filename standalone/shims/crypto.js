@@ -92,4 +92,32 @@ if (!globalThis.Buffer) {
   };
 }
 
-export default { randomBytes, randomInt, scryptSync, timingSafeEqual };
+// 비동기 scrypt (서버와 같은 모양). 단독 데모에서는 위의 대체 해시를 다음 차례에 돌려준다.
+export function scrypt(password, salt, keylen, cb) {
+  let key;
+  try { key = scryptSync(password, salt, keylen); } catch (err) { setTimeout(() => cb(err)); return; }
+  setTimeout(() => cb(null, key));
+}
+
+// createHash('sha256') — 로그인 세션 토큰 해시, DB 구조 지문 등에 쓴다.
+export function createHash(alg) {
+  if (alg !== 'sha256') throw new Error('sha256 only');
+  const enc = new TextEncoder();
+  const parts = [];
+  return {
+    update(data) {
+      parts.push(typeof data === 'string' ? enc.encode(data) : new Uint8Array(data));
+      return this;
+    },
+    digest(format) {
+      const all = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+      let off = 0;
+      for (const p of parts) { all.set(p, off); off += p.length; }
+      const out = new Bytes(32);
+      out.set(sha256(all));
+      return format === 'hex' ? out.toString('hex') : out;
+    },
+  };
+}
+
+export default { randomBytes, randomInt, scryptSync, scrypt, createHash, timingSafeEqual };

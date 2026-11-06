@@ -4,7 +4,10 @@ import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
   EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS, PROMISE_RULE,
+  PRIVACY_POLICY,
 } from './options.js';
+import { createSession, sessionUser, endSession, endAllSessions } from './sessions.js';
+import { encryptField, decryptField, emailHash } from './fieldcrypt.js';
 
 // 모든 함수는 첫 인자로 db(server/db.js 인터페이스)를 받는다.
 // 여러 사용자가 동시에 접근해도 데이터가 꼬이지 않도록, 상태를 바꾸는 작업은
@@ -106,7 +109,7 @@ export const publicUser = (u) => u && {
 };
 
 export const privateUser = (u) => u && {
-  ...publicUser(u), email: u.email, department: u.department ?? null, phone: u.phone ?? null,
+  ...publicUser(u), email: u.email, department: u.department ?? null, phone: decryptField(u.phone),
   isAdmin: ADMIN_EMAILS.includes(u.email),
 };
 
@@ -114,25 +117,29 @@ const getUser = (db, id) => db.get('SELECT * FROM users WHERE id = ?', id);
 
 // ───────────────────────── 인증 ─────────────────────────
 
-function hashPassword(password) {
+// 비밀번호: scrypt(비동기 — 계산하는 동안에도 서버가 다른 요청을 받는다) + 사람마다 다른 소금값
+const scrypt = (password, salt) => new Promise((resolve, reject) => {
+  crypto.scrypt(password, salt, 64, (err, key) => (err ? reject(err) : resolve(key)));
+});
+
+async function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
+  return `${salt}:${(await scrypt(password, salt)).toString('hex')}`;
 }
 
-function verifyPassword(password, stored) {
-  const [salt, hash] = stored.split(':');
+export async function passwordMatches(password, stored) {
+  const [salt, hash] = String(stored ?? '').split(':');
   if (!salt || !hash) return false;
-  const actual = crypto.scryptSync(password, salt, 64);
+  const actual = await scrypt(password, salt);
   const expected = Buffer.from(hash, 'hex');
   return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
 }
 
-async function issueToken(db, userId) {
-  const token = crypto.randomBytes(32).toString('hex');
-  await db.run('INSERT INTO auth_tokens (token, user_id, created_at) VALUES (?, ?, ?)', token, userId, iso());
-  return token;
-}
+// 없는 메일로 로그인해도 같은 시간이 걸리게 (응답 시간으로 가입 여부를 알아내지 못하게)
+const DUMMY_HASH = `${'0'.repeat(32)}:${'0'.repeat(128)}`;
+
+// 로그인 세션 (server/sessions.js — 토큰은 해시로만 저장, 30일 만료)
+const issueToken = (db, userId) => createSession(db, userId);
 
 // 전화번호: 숫자만 남겨 010-1234-5678 꼴로
 function normalizePhone(phone) {
@@ -253,21 +260,30 @@ async function verifyEmailCode(db, email, purpose, code) {
   return row.id;
 }
 
-export async function signup(db, { email, password, name, age, department, phone, code }, policy = NO_POLICY) {
+// policy.consent: 개인정보 처리방침 동의가 필요한지 (실서비스). 동의하면 시각과 처리방침 버전을 남긴다.
+export async function signup(db, { email, password, name, age, department, phone, code, agree }, policy = NO_POLICY) {
   const e = normalizeEmail(email, policy);
   checkPassword(password);
   const profile = validateProfile({ name, age, department, phone });
+  if (policy.consent && agree !== true) throw new AppError(400, '개인정보 수집·이용에 동의해 주세요.');
   const codeId = policy.verify ? await verifyEmailCode(db, e, 'signup', code) : null;
-  const passwordHash = hashPassword(String(password));
+  const passwordHash = await hashPassword(String(password));
   return db.tx(async (t) => {
     const { rows } = await t.run(
-      `INSERT INTO users (email, password_hash, name, age, department, phone, points, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+      `INSERT INTO users (email, password_hash, name, age, department, phone, points, created_at, agreed_at, privacy_version)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
        ON CONFLICT (email) DO NOTHING RETURNING id`,
-      e, passwordHash, profile.name, profile.age ?? null, profile.department, profile.phone, iso(),
+      e, passwordHash, profile.name, profile.age ?? null, profile.department, encryptField(profile.phone), iso(),
+      agree === true ? iso() : null, agree === true ? PRIVACY_POLICY.version : null,
     );
     if (!rows.length) throw new AppError(409, '이미 가입된 이메일입니다.');
     if (codeId) await t.run('UPDATE email_codes SET used = 1 WHERE id = ?', codeId);
     const id = rows[0].id;
+    // 매칭 정지 중에 탈퇴했던 메일이면 남은 정지 기간을 이어 간다 (server/privacy.js)
+    const blocked = await t.get('SELECT blocked_until FROM blocked_emails WHERE email_hash = ?', emailHash(e));
+    if (blocked && new Date(blocked.blocked_until) > T.now()) {
+      await t.run('UPDATE users SET suspended_until = ?, strikes_since = ? WHERE id = ?', blocked.blocked_until, blocked.blocked_until, id);
+    }
     return { user: privateUser(await getUser(t, id)), token: await issueToken(t, id) };
   });
 }
@@ -275,7 +291,8 @@ export async function signup(db, { email, password, name, age, department, phone
 export async function login(db, { email, password }, policy = NO_POLICY) {
   const e = normalizeEmail(email, policy);
   const u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', e);
-  if (!u || !verifyPassword(String(password ?? ''), u.password_hash)) {
+  const ok = await passwordMatches(String(password ?? ''), u?.password_hash ?? DUMMY_HASH);
+  if (!u || !ok) {
     throw new AppError(401, '이메일 또는 비밀번호가 올바르지 않습니다.');
   }
   return { user: privateUser(u), token: await issueToken(db, u.id) };
@@ -286,13 +303,13 @@ export async function resetPassword(db, { email, code, password }, policy = NO_P
   const e = normalizeEmail(email, policy);
   checkPassword(password);
   const codeId = await verifyEmailCode(db, e, 'reset', code);
-  const passwordHash = hashPassword(String(password));
+  const passwordHash = await hashPassword(String(password));
   return db.tx(async (t) => {
     const u = await t.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', e);
     if (!u) throw new AppError(400, '인증번호를 다시 받아 주세요.');
     await t.run('UPDATE email_codes SET used = 1 WHERE id = ?', codeId);
     await t.run('UPDATE users SET password_hash = ? WHERE id = ?', passwordHash, u.id);
-    await t.run('DELETE FROM auth_tokens WHERE user_id = ?', u.id);
+    await endAllSessions(t, u.id); // 다른 기기의 로그인은 모두 해제
     return { user: privateUser(u), token: await issueToken(t, u.id) };
   });
 }
@@ -384,16 +401,16 @@ export async function ensureDemoHistory(db, demoUserId) {
 }
 
 export async function logout(db, token) {
-  await db.run('DELETE FROM auth_tokens WHERE token = ?', token);
+  await endSession(db, token);
 }
 
 export async function userByToken(db, token) {
-  if (!token) return null;
-  return db.get('SELECT u.* FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE t.token = ?', token);
+  return (await sessionUser(db, token))?.user ?? null;
 }
 
 export async function updateProfile(db, userId, input) {
   const fields = validateProfile(input, true);
+  if (fields.phone) fields.phone = encryptField(fields.phone);
   const keys = Object.keys(fields);
   if (keys.length) {
     await db.run(`UPDATE users SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
@@ -538,6 +555,7 @@ export async function createRequest(db, userId, input) {
   const req = validateRequest(input);
   try {
     return await db.tx(async (t) => {
+      await t.lock?.('matching'); // PostgreSQL: 매칭은 한 번에 하나씩 (끝나면 자동으로 풀림)
       const busy = await busyCells(t, userId);
       if (req.cells.some((c) => busy.has(c))) {
         throw new AppError(409, '고른 날짜에 이미 신청했거나 매칭됐어요. 다른 날짜를 골라 주세요.');
@@ -622,6 +640,28 @@ export async function cancelRequest(db, userId, requestId = null) {
     if (!rows.length) throw new AppError(404, '대기 중인 매칭 신청이 없어요.');
     if (rows[0].deposit) await adjustPoints(t, userId, rows[0].deposit, '매칭 취소 보증금 반환');
   });
+}
+
+// 대기 중인 신청끼리 다시 맞춰 본다 (매일 작업, 안전망). 데모 메이트·공용 데모 계정의 신청은 건드리지 않는다.
+export async function rematchPending(db) {
+  const ids = (await db.all(
+    `SELECT r.id FROM match_requests r JOIN users u ON u.id = r.user_id
+     WHERE r.status = 'pending' AND u.is_bot = 0 AND u.email <> ? ORDER BY r.id`, DEMO_ACCOUNT.email,
+  )).map((r) => r.id);
+  let made = 0;
+  for (const id of ids) {
+    try {
+      const match = await db.tx(async (t) => {
+        await t.lock?.('matching');
+        const row = await t.get('SELECT status FROM match_requests WHERE id = ?', id);
+        return row?.status === 'pending' ? tryMatch(t, id) : null;
+      });
+      if (match) made++;
+    } catch (err) {
+      if (!(err instanceof AppError)) throw err; // 스터디 기간이 끝난 신청 등은 건너뛴다
+    }
+  }
+  return made;
 }
 
 async function tryMatch(db, requestId) {
@@ -802,10 +842,17 @@ export async function matchDetail(db, userId, m, { demo = false } = {}) {
     'SELECT a.* FROM attendance a JOIN appointments p ON p.id = a.appointment_id WHERE p.match_id = ?', m.id,
   );
   const find = (apptId, uid) => atts.find((a) => a.appointment_id === apptId && a.user_id === uid) ?? null;
-  if (m.status === 'active') await ensureCodes(db, appts.map((a) => a.id), [userId, mateId]);
-  const codes = await db.all(
+  const codesOfMatch = () => db.all(
     'SELECT c.* FROM attendance_codes c JOIN appointments p ON p.id = c.appointment_id WHERE p.match_id = ?', m.id,
   );
+  let codes = await codesOfMatch();
+  // 출석 코드는 매칭할 때 만든다. 예전에 만들어진 매칭에 빠진 코드만 처음 볼 때 채운다 (볼 때마다 DB에 쓰지 않게)
+  const hasCode = (apptId, uid) => codes.some((c) => Number(c.appointment_id) === Number(apptId) && Number(c.user_id) === Number(uid));
+  const missing = m.status === 'active' ? appts.filter((a) => !hasCode(a.id, userId) || !hasCode(a.id, mateId)) : [];
+  if (missing.length) {
+    await ensureCodes(db, missing.map((a) => a.id), [userId, mateId]);
+    codes = await codesOfMatch();
+  }
   const codeOf = (apptId, uid) => codes.find((c) => c.appointment_id === apptId && c.user_id === uid)?.code ?? null;
   const mateUser = await getUser(db, mateId);
   const mateIsBot = !!mateUser.is_bot;
@@ -1001,7 +1048,10 @@ export async function adminDashboard(db) {
     `SELECT * FROM matches WHERE ${real('user_a')} OR ${real('user_b')} ORDER BY id DESC`,
   )).map(parseMatch);
   const attendance = await db.all(`SELECT user_id, checked_in_at FROM attendance WHERE ${real('user_id')}`);
-  const lastLogin = new Map((await db.all('SELECT user_id, MAX(created_at) AS at FROM auth_tokens GROUP BY user_id')).map((r) => [r.user_id, r.at]));
+  const lastLogin = new Map((await db.all(
+    `SELECT user_id, MAX(created_at) AS at FROM (
+       SELECT user_id, created_at FROM auth_tokens UNION ALL SELECT user_id, created_at FROM sessions) x GROUP BY user_id`,
+  )).map((r) => [r.user_id, r.at]));
   const codes = await db.all('SELECT email, purpose, used, attempts, created_at FROM email_codes ORDER BY id DESC');
   const joined = new Set(users.map((u) => u.email));
   const notJoined = new Set(codes.filter((c) => c.purpose === 'signup' && !joined.has(c.email)).map((c) => c.email));
@@ -1048,7 +1098,7 @@ export async function adminDashboard(db) {
       leftBy: m.report?.leftBy ? nameOf.get(m.report.leftBy) : null, createdAt: m.created_at,
     })),
     users: users.map((u) => ({
-      id: u.id, name: u.name, department: u.department ?? null, phone: maskPhone(u.phone),
+      id: u.id, name: u.name, department: u.department ?? null, phone: maskPhone(decryptField(u.phone)),
       createdAt: u.created_at, lastLogin: lastLogin.get(u.id) ?? null,
     })),
     emailCodes: {
@@ -1437,13 +1487,15 @@ export async function markChatRead(db, userId, matchId, lastId) {
   const max = await lastMessageId(db, m.id);
   const upto = Math.min(Number(lastId) > 0 ? Number(lastId) : max, max);
   if (upto > 0) {
-    await db.run(
+    const { rows } = await db.run(
       `INSERT INTO chat_reads (match_id, user_id, last_read_id, updated_at) VALUES (?, ?, ?, ?)
        ON CONFLICT (match_id, user_id) DO UPDATE SET
          last_read_id = CASE WHEN excluded.last_read_id > chat_reads.last_read_id THEN excluded.last_read_id ELSE chat_reads.last_read_id END,
-         updated_at = excluded.updated_at`,
+         updated_at = excluded.updated_at
+       RETURNING last_read_id AS n`,
       m.id, userId, upto, iso(),
     );
+    if (rows?.length) return { lastReadId: Number(rows[0].n) || 0 };
   }
   return { lastReadId: await lastReadOf(db, m.id, userId) };
 }
@@ -1469,6 +1521,23 @@ export async function mateLastRead(db, userId, matchId) {
   const m = await loadMatchForUser(db, userId, matchId);
   const mate = await getUser(db, mateOf(m, userId));
   return mate?.is_bot ? lastMessageId(db, m.id) : lastReadOf(db, m.id, mate.id);
+}
+
+// 채팅 화면이 몇 초마다 묻는 것: 새 메시지 + 메이트가 어디까지 읽었는지.
+// listMessages + mateLastRead 와 같은 결과를 매칭 확인 한 번, DB 왕복 3번으로 (가장 자주 불리는 요청이라 줄임)
+export async function chatUpdate(db, userId, matchId, afterId = 0) {
+  const m = await loadMatchForUser(db, userId, matchId);
+  const messages = await db.all(
+    'SELECT id, user_id AS "userId", body, created_at AS "createdAt" FROM messages WHERE match_id = ? AND id > ? ORDER BY id',
+    m.id, Number(afterId) || 0,
+  );
+  const mate = await db.get(
+    `SELECT u.is_bot AS "isBot", r.last_read_id AS "lastReadId" FROM users u
+       LEFT JOIN chat_reads r ON r.match_id = ? AND r.user_id = u.id WHERE u.id = ?`,
+    m.id, mateOf(m, userId),
+  );
+  const mateLastReadId = mate?.isBot ? await lastMessageId(db, m.id) : Number(mate?.lastReadId) || 0;
+  return { messages, mateLastReadId };
 }
 
 export async function sendMessage(db, userId, matchId, body) {
