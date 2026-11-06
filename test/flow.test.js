@@ -595,7 +595,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.deepEqual(d.summary, { todayVisitors: 1, users: 3, pendingRequests: 0, activeMatches: 1 });
       assert.deepEqual(d.funnel.all.map((f) => f.count), [1, 3, 2, 2, 0]);
       assert.deepEqual(d.funnel.today.map((f) => f.count), [1, 3, 2, 2, 0], '모두 오늘 일어난 일');
-      assert.equal(d.users.find((u) => u.name === '운영자').phone, '010-1111-****');
+      assert.equal(d.users.find((u) => u.name === '운영자').phone, '010-1111-2222');
       assert.deepEqual(d.chats.map((c) => [c.names, c.messages.map((m) => m.body)]), [[['a', 'b'], ['안녕하세요']]]);
     });
 

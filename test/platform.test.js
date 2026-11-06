@@ -214,23 +214,20 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.match(r.data.error, /매칭 정지/);
     });
 
-    test('전화번호 암호화: DB에는 암호문, 본인에게는 번호, 운영자에게는 가린 번호, 매일 작업이 기존 번호도 암호화', async () => {
+    test('전화번호: 암호 키가 있어도 DB에는 번호 그대로, 운영자에게는 번호 전체, 매일 작업도 암호화하지 않음', async () => {
       process.env.DATA_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
       const a = browser();
       const { data } = await join(a, 'p@test.dev');
-      const raw = (await db.get('SELECT phone FROM users WHERE id = ?', data.user.id)).phone;
-      assert.match(raw, /^enc:v1:/);
-      assert.equal(data.user.phone, '010-1234-5678');
+      const phoneInDb = async () => (await db.get('SELECT phone FROM users WHERE id = ?', data.user.id)).phone;
+      assert.equal(await phoneInDb(), '010-1234-5678');
       assert.equal((await a('PUT', '/me', { phone: '010-9999-8888' })).data.user.phone, '010-9999-8888');
+      assert.equal(await phoneInDb(), '010-9999-8888');
       const admin = browser();
       await join(admin, ADMIN);
       const dash = await admin('GET', '/admin');
-      assert.equal(dash.data.users.find((u) => u.id === data.user.id).phone, '010-9999-****');
-      // 키를 넣기 전에 가입한 번호 → 매일 작업이 암호화
-      await db.run("UPDATE users SET phone = '010-5555-6666' WHERE id = ?", data.user.id);
-      assert.equal((await purgeOldData(db)).encryptedPhones >= 1, true);
-      assert.match((await db.get('SELECT phone FROM users WHERE id = ?', data.user.id)).phone, /^enc:v1:/);
-      assert.equal((await a('GET', '/me')).data.user.phone, '010-5555-6666');
+      assert.equal(dash.data.users.find((u) => u.id === data.user.id).phone, '010-9999-8888');
+      await purgeOldData(db);
+      assert.equal(await phoneInDb(), '010-9999-8888');
     });
 
     test('성능 예산: 몇 초마다 불리는 요청의 DB 쿼리 수가 늘지 않음 (docs/operations-guide.md 9장)', async () => {
@@ -278,7 +275,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(res.headers.get('cache-control'), 'no-store');
       const d = res.data;
       assert.equal(d.profile.email, 'ex@test.dev');
-      assert.equal(d.profile.phone, '010-1111-2222', '저장은 암호문이어도 내려받을 때는 번호');
+      assert.equal(d.profile.phone, '010-1111-2222');
       assert.equal(d.matchRequests.length, 1);
       assert.deepEqual(d.matches.map((m) => [m.id, m.mateName]), [[matchId, 'mate']]);
       assert.deepEqual(d.messagesSent.map((m) => m.body), ['내가 보낸 말']);

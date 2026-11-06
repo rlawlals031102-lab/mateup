@@ -7,7 +7,8 @@ import {
   PRIVACY_POLICY,
 } from './options.js';
 import { createSession, sessionUser, endSession, endAllSessions } from './sessions.js';
-import { encryptField, decryptField, emailHash } from './fieldcrypt.js';
+// 전화번호는 운영 결정(2026-11-06)으로 암호화하지 않고 그대로 저장한다. 예전에 암호화된 값이 있으면 읽을 때만 풀어 준다.
+import { decryptField, emailHash } from './fieldcrypt.js';
 
 // 모든 함수는 첫 인자로 db(server/db.js 인터페이스)를 받는다.
 // 여러 사용자가 동시에 접근해도 데이터가 꼬이지 않도록, 상태를 바꾸는 작업은
@@ -273,7 +274,7 @@ export async function signup(db, { email, password, name, age, department, phone
       `INSERT INTO users (email, password_hash, name, age, department, phone, points, created_at, agreed_at, privacy_version)
        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
        ON CONFLICT (email) DO NOTHING RETURNING id`,
-      e, passwordHash, profile.name, profile.age ?? null, profile.department, encryptField(profile.phone), iso(),
+      e, passwordHash, profile.name, profile.age ?? null, profile.department, profile.phone, iso(),
       agree === true ? iso() : null, agree === true ? PRIVACY_POLICY.version : null,
     );
     if (!rows.length) throw new AppError(409, '이미 가입된 이메일입니다.');
@@ -410,7 +411,6 @@ export async function userByToken(db, token) {
 
 export async function updateProfile(db, userId, input) {
   const fields = validateProfile(input, true);
-  if (fields.phone) fields.phone = encryptField(fields.phone);
   const keys = Object.keys(fields);
   if (keys.length) {
     await db.run(`UPDATE users SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
@@ -1006,14 +1006,13 @@ export async function recordVisit(db, visitorId) {
 
 // ───────────────────────── 개발자 화면 ─────────────────────────
 // 운영자(ADMIN_EMAILS)만 볼 수 있는 운영 현황. 실제 사용자만 센다 (데모 메이트·공용 데모 계정 제외).
-// 전화번호는 뒷자리를 가리고, 메일은 앞 3글자만 보인다. 비밀번호·인증번호는 원래부터 암호로만 저장돼 없다.
+// 전화번호는 전체를 보여 주고(운영 결정 2026-11-06), 메일은 앞 3글자만 보인다. 비밀번호·인증번호는 원래부터 암호로만 저장돼 없다.
 
 export async function assertAdmin(db, userId) {
   const u = await getUser(db, userId);
   if (!ADMIN_EMAILS.includes(u?.email)) throw new AppError(403, '개발자만 볼 수 있어요.');
 }
 
-const maskPhone = (p) => (p ? p.replace(/\d{4}$/, '****') : null);
 const maskEmail = (e) => e.replace(/^(.{3}).*@/, '$1***@');
 
 export async function adminDashboard(db) {
@@ -1098,7 +1097,7 @@ export async function adminDashboard(db) {
       leftBy: m.report?.leftBy ? nameOf.get(m.report.leftBy) : null, createdAt: m.created_at,
     })),
     users: users.map((u) => ({
-      id: u.id, name: u.name, department: u.department ?? null, phone: maskPhone(decryptField(u.phone)),
+      id: u.id, name: u.name, department: u.department ?? null, phone: decryptField(u.phone),
       createdAt: u.created_at, lastLogin: lastLogin.get(u.id) ?? null,
     })),
     emailCodes: {

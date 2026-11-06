@@ -7,7 +7,7 @@ import * as T from './time.js';
 import { AppError, passwordMatches, strikeStatus, chooseNext } from './service.js';
 import { PRIVACY_POLICY } from './options.js';
 import { endAllSessions } from './sessions.js';
-import { encryptField, decryptField, encryptionOn, emailHash } from './fieldcrypt.js';
+import { decryptField, emailHash } from './fieldcrypt.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 export const RETENTION_DAYS = {
@@ -63,7 +63,7 @@ export async function deleteAccount(db, userId, password) {
   return { ok: true };
 }
 
-// 보관 기간이 지난 기록 지우기 + 아직 암호화하지 않은 전화번호 암호화 (매일 작업)
+// 보관 기간이 지난 기록 지우기 (매일 작업)
 export async function purgeOldData(db) {
   const now = T.now();
   const ago = (days) => new Date(now.getTime() - days * DAY).toISOString();
@@ -80,16 +80,8 @@ export async function purgeOldData(db) {
       `DELETE FROM messages WHERE match_id IN (SELECT id FROM matches WHERE status <> 'active' AND week_end <= ?)`,
       T.addDays(T.today(), -RETENTION_DAYS.chatsAfterMatch),
     ),
-    encryptedPhones: 0,
   };
-  if (encryptionOn()) {
-    const rows = await db.all("SELECT id, phone FROM users WHERE phone IS NOT NULL AND phone NOT LIKE 'enc:v1:%'");
-    for (const r of rows) {
-      out.encryptedPhones += Number((await db.run(
-        'UPDATE users SET phone = ? WHERE id = ? AND phone = ?', encryptField(r.phone), r.id, r.phone,
-      )).changes ?? 0);
-    }
-  }
+  // 전화번호는 암호화하지 않고 그대로 둔다 (운영 결정 2026-11-06)
   return out;
 }
 
