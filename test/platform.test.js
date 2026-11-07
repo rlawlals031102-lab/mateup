@@ -299,6 +299,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       await a('POST', '/requests', REQ);
       const { data: { matchId } } = await b('POST', '/requests', REQ);
       await a('POST', `/matches/${matchId}/messages`, { body: '불쾌한 말' });
+      assert.deepEqual((await admin('GET', '/admin')).data.chats, [], '신고 전에는 대화가 보이지 않음');
       assert.equal((await b('POST', `/matches/${matchId}/report`, { reason: 'nope' })).status, 400);
       assert.equal((await b('POST', `/matches/${matchId}/report`, { reason: 'other' })).status, 400, '기타는 내용 필수');
       assert.equal((await b('POST', `/matches/${matchId}/report`, { reason: 'rude', detail: '욕설' })).status, 201);
@@ -310,9 +311,11 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.deepEqual(list.data.reports[0].messages.map((m) => m.body), ['불쾌한 말']);
       const dash = await admin('GET', '/admin');
       assert.equal(dash.data.reports[0].messages, undefined, '개발자 첫 화면에는 대화 내용을 싣지 않음');
+      assert.deepEqual(dash.data.chats.map((c) => c.matchId), [matchId], '신고된 대화만');
       const actions = (await db.all('SELECT action FROM admin_logs ORDER BY id')).map((r) => r.action);
-      assert.deepEqual(actions, ['view_reports', 'view_dashboard']);
+      assert.deepEqual(actions, ['view_dashboard', 'view_reports', 'view_dashboard']);
       assert.equal((await admin('POST', `/admin/reports/${list.data.reports[0].id}/close`)).data.ok, true);
+      assert.deepEqual((await admin('GET', '/admin')).data.chats, [], '처리를 마치면 다시 보이지 않음');
 
       // 정지 풀기
       const until = '2026-11-29T15:00:00.000Z';

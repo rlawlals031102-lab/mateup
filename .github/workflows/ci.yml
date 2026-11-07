@@ -1,0 +1,103 @@
+# 자동 확인 (CI): PR을 올리거나 main이 바뀔 때마다 실행된다.
+#  - test: 서버 테스트(SQLite·PostgreSQL), 화면 코드 문법, 배포 파일·단독 HTML 만들기
+#  - e2e : 실제 브라우저(휴대폰 크기)로 가입 → 매칭 → 채팅 → 신고 → 리포트 → 탈퇴 → 동의 창 → 내 정보 내려받기
+#  - postgres: 실제 PostgreSQL 16에서 동시성 테스트(서버 여러 대, 동시 신청, 횟수 제한, 예전 토큰) + 짧은 부하 테스트(결과만 보기)
+# main 보호 설정에서 이 세 확인(test, e2e, postgres)을 '통과 필수'로 지정하면, 실패한 변경은 main에 합칠 수 없다.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 서버 테스트 (SQLite + PostgreSQL)
+        run: npm test
+      - name: 화면 코드 문법 확인
+        run: node --check public/app.js
+      - name: 배포 파일 만들기 (Vercel)
+        run: npm run build:vercel
+      - name: 단독 실행 HTML 만들기
+        run: npm run build:standalone
+      - name: 알려진 보안 취약점 확인 (실패해도 계속, 결과만 보기)
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 브라우저 설치 (Playwright)
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+      - name: 화면 자동 테스트
+        run: npm run test:e2e
+      - name: 실패하면 화면 캡처 올리기
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e/artifacts/
+          retention-days: 7
+
+  postgres:
+    name: postgres
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 실제 PostgreSQL 동시성 테스트
+        run: node --test test/postgres.test.js
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: 부하 테스트 (짧게, 실패해도 계속, 결과만 보기)
+        run: npm run loadtest -- --users=10,25 --seconds=5 --db-rtt=2
+        env:
+          LOADTEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        continue-on-error: true

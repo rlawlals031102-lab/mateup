@@ -1,0 +1,7 @@
+# 리뷰 담당자: 아래 파일이 바뀌는 PR에는 담당자에게 자동으로 리뷰 요청이 간다.
+# main 보호 설정에서 'Require review from Code Owners'를 켜면, 담당자 한 명이 승인해야 합칠 수 있다.
+# (PR을 올린 사람은 자기 PR을 승인할 수 없으므로, 두 사람이 서로의 변경을 확인하게 된다)
+*                       @rlawlals031102-lab @yunbinna6-lgtm
+
+# 김지민님 화면(홈 시간표 구성 · 매칭 신청 · 개발자 화면)이 들어 있는 파일
+/public/app.js          @rlawlals031102-lab @yunbinna6-lgtm

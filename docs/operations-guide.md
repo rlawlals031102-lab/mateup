@@ -6,7 +6,7 @@
 
 | 언제 | 할 일 |
 | --- | --- |
-| 매일 (자동) | 00:00 KST에 Vercel Cron이 `/api/cron/settle` 실행: 주간 정산 → 대기 신청끼리 다시 맞추기 → 보관 기간 지난 기록 정리 → 아직 암호화 안 된 전화번호 암호화. 결과는 `/api/health`의 `daily` |
+| 매일 (자동) | 00:00 KST에 Vercel Cron이 `/api/cron/settle` 실행: 주간 정산 → 대기 신청끼리 다시 맞추기 → 보관 기간 지난 기록 정리. 결과는 `/api/health`의 `daily` |
 | 매주 | GitHub의 Dependabot PR(라이브러리 보안 업데이트) 확인 → CI 통과하면 합치기 |
 | 회차 시작 전 | `npm run backup`으로 백업 → `npm run restore:check -- <파일>`로 복구 연습 |
 | 신고가 들어오면 | 개발자 화면에서 신고 내용 확인 → 처리 후 '처리 완료' (열람 기록이 남음) |
@@ -88,7 +88,7 @@ npm run restore:check -- backups/backup-20261110-0900.json   # 메모리 속 DB�
   - 본인이 할 수 없는 경우: `npm run ops`로 대기 신청을 정리한 뒤 개발자에게 요청한다.
 - **유출이 의심되면** (DB 주소·비밀번호가 새어 나갔거나 이상한 접근이 보이면):
   1. 즉시 비밀값을 바꾼다: Supabase DB 비밀번호 → Vercel `DATABASE_URL` 바꾸기, Gmail 앱 비밀번호, `CRON_SECRET`.
-     - 전화번호 암호 키(`DATA_ENCRYPTION_KEY`)는 바꾸면 기존 번호를 읽을 수 없으니, 새 키로 다시 암호화하는 작업이 먼저 필요하다. 개발자와 상의한다.
+     - 전화번호는 암호화하지 않고 저장하므로(2026-11-06 결정), DB가 새어 나갔다면 전화번호도 새어 나간 것으로 보고 알린다.
   2. 어떤 정보가, 누구의 것이, 언제 새어 나갔는지 정리한다.
   3. 개인정보 보호법에 따라 정보주체에게 알리고, 해당하면 개인정보보호위원회·KISA(118)에 신고한다. 72시간 이내 통지가 원칙이니 학교·전문가와 바로 상의한다.
 - 처리방침을 바꾸면 `server/options.js`의 `PRIVACY_POLICY.version`도 바꾼다. 그러면 모든 회원에게 다시 동의 창이 뜬다.
@@ -99,16 +99,21 @@ npm run restore:check -- backups/backup-20261110-0900.json   # 메모리 속 DB�
 | --- | --- | --- |
 | `DATABASE_URL` | 필수 | Supabase Transaction pooler 주소 |
 | `GMAIL_USER`, `GMAIL_APP_PASSWORD` | 필수 | 인증메일 보내는 Gmail과 앱 비밀번호 |
-| `DATA_ENCRYPTION_KEY` | 권장 | 전화번호 암호 키. `openssl rand -base64 32`로 만든다. **잃어버리면 암호화된 전화번호를 되살릴 수 없으니** 운영진 비밀 보관함에도 적어 둔다 |
+| `DATA_ENCRYPTION_KEY` | 권장 | 접속 IP를 해시할 때 섞는 비밀값. 없으면 누구나 아는 기본값을 써서 IP 해시를 되돌리기 쉬워진다. `openssl rand -base64 32`로 만든다. (전화번호는 2026-11-06 결정으로 암호화하지 않는다) |
 | `CRON_SECRET` | 권장 | 아무 긴 글자. 있으면 매일 작업을 Vercel Cron만 부를 수 있다 |
 | `ALERT_WEBHOOK_URL` | 권장 | 디스코드(또는 슬랙) 웹훅 주소. 서버 오류·매일 작업 실패를 알린다 |
 | `DATABASE_CA_CERT` | 선택 | Supabase → Database → SSL Configuration에서 받은 인증서(PEM 내용). 넣으면 DB 서버가 진짜인지 확인한다 |
 | `PREVIEW_DATABASE_URL` | 선택 | **Environment를 Preview로만** 지정. 미리보기 배포가 쓸 시험용 DB 주소(Supabase에 무료 프로젝트를 하나 더 만들어 그 Transaction pooler 주소). 실서비스 DB 주소를 넣으면 안 된다 |
 | `GMAIL_USER_2`, `ADMIN_EMAILS` 등 | — | 지금 코드에서는 쓰지 않음 |
 
-## 8. 외부 감시 (선택, 무료)
+## 8. 외부 감시
 
-UptimeRobot 같은 서비스에 `https://mateup-gamma.vercel.app/api/health`를 5분 간격으로 등록하고, 응답이 200이 아니면 메일·디스코드로 알리게 한다.
+- **GitHub 상태 확인 (켜져 있음):** `.github/workflows/uptime.yml`이 30분마다 첫 화면과 `/api/health`를 확인한다.
+  - 사이트가 응답하지 않거나, DB가 이상하거나, 매일 작업이 늦거나 실패하면 작업이 실패한다.
+  - 실패하면 이 파일의 일정을 마지막으로 바꾼 사람(지금은 나윤빈)에게 GitHub가 메일을 보낸다. GitHub → Settings → Notifications → Actions에서 실패 알림이 켜져 있어야 한다.
+  - 바로 확인하려면 Actions 탭 → uptime → Run workflow.
+  - 저장소에 60일 동안 활동이 없으면 GitHub가 일정 실행을 멈춘다. Actions 탭에서 다시 켠다.
+- **더 빨리 알고 싶으면 (선택, 무료):** UptimeRobot 같은 서비스에 같은 주소를 5분 간격으로 등록하고, 휴대폰 앱이나 디스코드로 알림을 받는다.
 
 ## 9. 부하 테스트와 수용량
 
