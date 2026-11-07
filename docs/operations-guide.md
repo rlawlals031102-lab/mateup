@@ -7,7 +7,7 @@
 | 언제 | 할 일 |
 | --- | --- |
 | 매일 (자동) | 00:00 KST에 Vercel Cron이 `/api/cron/settle` 실행: 주간 정산 → 대기 신청끼리 다시 맞추기 → 보관 기간 지난 기록 정리. 결과는 `/api/health`의 `daily` |
-| 매주 | GitHub의 Dependabot PR(라이브러리 보안 업데이트) 확인 → CI 통과하면 합치기 |
+| 매주 월요일 | GitHub의 Dependabot PR(라이브러리 새 버전. 작은 업데이트는 PR 하나로 묶여 옴, Actions는 매달) 확인 → CI가 모두 통과하면 합치기, 실패하면 그대로 두고 상의 |
 | 회차 시작 전 | `npm run backup`으로 백업 → `npm run restore:check -- <파일>`로 복구 연습 |
 | 신고가 들어오면 | 개발자 화면에서 신고 내용 확인 → 처리 후 '처리 완료' (열람 기록이 남음) |
 
@@ -15,7 +15,7 @@
 
 1. 바꾼 파일을 새 브랜치에 올린다.
    - 웹 업로드라면 Upload files 화면 아래에서 **Create a new branch for this commit and start a pull request**를 고른다.
-2. PR(변경 요청)을 만든다. 자동 확인(CI)의 **test**와 **e2e**가 돈다(약 5분). 실패하면 `Details`에서 이유를 본다. e2e가 실패하면 화면 캡처가 `e2e-screenshots`로 올라온다.
+2. PR(변경 요청)을 만든다. 자동 확인(CI)의 **test**·**e2e**·**postgres**가 돈다(약 5분). 실패하면 `Details`에서 이유를 본다. e2e가 실패하면 화면 캡처가 `e2e-screenshots`로 올라온다.
 3. 다른 한 사람이 PR을 보고 승인한다.
 4. **Merge**를 누르면 Vercel이 실서비스에 배포한다(1–2분).
 5. 배포 뒤 `https://mateup-gamma.vercel.app/api/health`가 `"ok": true`인지 확인한다.

@@ -23,14 +23,14 @@
   },
   "dependencies": {
     "express": "^5.1.0",
-    "nodemailer": "^10.1.0",
+    "nodemailer": "^10.3.1",
     "pg": "^8.23.1",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.3.16",
-    "esbuild": "^0.25.12",
+    "@electric-sql/pglite": "^0.5.15",
+    "esbuild": "^0.28.2",
     "jsqr": "1.4.0",
-    "sql.js": "1.13"
+    "sql.js": "1.15"
   }
 }
