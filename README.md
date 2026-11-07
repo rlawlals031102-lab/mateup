@@ -51,7 +51,7 @@ GitHub `main` 브랜치에 push하면 Vercel이 `npm run build:vercel`을 실행
 | `/api/*` | 서버 API — `api/index.js` 서버리스 함수(서울 `icn1`)가 `server/app.js`를 실행 |
 
 - DB: Supabase PostgreSQL(서울 `ap-northeast-2`). Vercel 환경 변수 `DATABASE_URL`에 **Transaction pooler(포트 6543)** 주소를 넣습니다. 테이블은 첫 실행 때 자동으로 만들어지고, 모든 테이블에 RLS가 켜져 Supabase 공개 API로는 접근할 수 없습니다.
-- 매일 작업: Vercel Cron이 매일 00:00(KST)에 `/api/cron/settle`을 호출합니다. 주간 정산 → 대기 신청끼리 다시 맞추기 → 보관 기간 지난 기록 정리 → 전화번호 암호화 순서로 돌고, 결과는 `/api/health`에서 봅니다. 사용자가 앱을 열 때도 정산을 확인합니다. 환경 변수 `CRON_SECRET`을 넣으면 크론 호출만 허용합니다.
+- 매일 작업: Vercel Cron이 매일 00:00(KST)에 `/api/cron/settle`을 호출합니다. 주간 정산 → 대기 신청끼리 다시 맞추기 → 보관 기간 지난 기록 정리 순서로 돌고, 결과는 `/api/health`에서 봅니다. 사용자가 앱을 열 때도 정산을 확인합니다. 환경 변수 `CRON_SECRET`을 넣으면 크론 호출만 허용합니다.
 - 환경 변수 전체와 장애 대응·백업·운영자 작업은 [docs/operations-guide.md](docs/operations-guide.md)에 있습니다.
 - 변경은 PR로 올리고 자동 확인(CI: `.github/workflows/ci.yml`)의 test·e2e가 통과해야 합칩니다.
 - 실서비스에는 데모 기능(시간 무관 출석, 즉시 마감)이 없습니다. 데모 버전은 배포하지 않습니다(`npm run build:standalone`으로 HTML 파일만 만들 수 있음).
@@ -77,9 +77,9 @@ GitHub `main` 브랜치에 push하면 Vercel이 `npm run build:vercel`을 실행
 | 비밀번호 | scrypt(비동기), 없는 메일로 로그인해도 같은 시간 | `server/service.js` |
 | 횟수 제한 | 로그인 5번 틀리면 15분 잠금, 인증메일 IP당 1시간 10번·메일당 하루 10번, 메시지 1분 30개 등. DB에 세서 서버가 여러 대여도 같이 셈 | `server/security.js` |
 | 보안 헤더 | CSP(같은 주소의 스크립트만), 화면 끼워 넣기 금지, HSTS 등. `vercel.json`과 같은 값인지 테스트가 확인 | `server/security.js` |
-| 개인정보 | 처리방침(`public/privacy.html`)과 가입 동의, 기존 회원 동의 창, 내 정보 내려받기(JSON, 상대방 정보 제외), 회원 탈퇴(정보 삭제·'탈퇴한 사용자'), 전화번호 AES-256 암호화, 보관 기간 지나면 자동 삭제 | `server/privacy.js`, `server/fieldcrypt.js` |
+| 개인정보 | 처리방침(`public/privacy.html`)과 가입 동의, 기존 회원 동의 창, 내 정보 내려받기(JSON, 상대방 정보 제외), 회원 탈퇴(정보 삭제·'탈퇴한 사용자'), 보관 기간 지나면 자동 삭제. 전화번호는 운영 연락용으로 그대로 저장(2026-11-06 결정: 메이트에게는 안 보이고 운영자 2명만 열람) | `server/privacy.js` |
 | 신고·운영자 | 채팅 신고, 운영자 열람 기록, 정지 풀기 | `server/reports.js`, `server/admin.js` |
-| 운영 | 요청 번호·오류 로그, 디스코드/슬랙 알림, `/api/health`, 매일 작업 기록, 백업·복구 연습·운영 스크립트 | `server/ops.js`, `scripts/` |
+| 운영 | 요청 번호·오류 로그, 디스코드/슬랙 알림, `/api/health`, 매일 작업 기록, GitHub 30분 상태 확인(실패하면 메일), 백업·복구 연습·운영 스크립트 | `server/ops.js`, `scripts/`, `.github/workflows/uptime.yml` |
 | DB 구조 | 구조가 바뀐 경우에만 한 번 적용(지문 비교) + 번호 붙은 변경, 서버 여러 대가 동시에 켜져도 한 번만 | `server/migrate.js` |
 | 매칭 | 매칭은 한 번에 하나씩(PostgreSQL 잠금) → 거의 동시에 들어온 신청끼리도 바로 매칭, 매일 작업에서 대기 신청끼리 다시 맞추기 | `server/service.js` |
 | 미리보기 배포 | PR·브랜치 미리보기는 실서비스 DB를 쓰지 않음(`PREVIEW_DATABASE_URL`, 없으면 API 503) | `api/index.js` |
@@ -125,7 +125,7 @@ server/
   sessions.js  로그인 세션 (토큰 해시·만료)
   security.js  요청 횟수 제한, 보안 헤더
   privacy.js   처리방침 동의, 회원 탈퇴, 보관 기간 정리, 내 정보 내려받기
-  fieldcrypt.js 전화번호 암호화 (DATA_ENCRYPTION_KEY)
+  fieldcrypt.js 메일 해시(탈퇴 뒤 매칭 정지 유지), 예전에 암호화된 값 읽기
   reports.js   채팅 신고
   admin.js     운영자 기록·정지 풀기·신고 목록
   ops.js       로그·알림·상태 확인

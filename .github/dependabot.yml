@@ -1,0 +1,17 @@
+# 쓰는 라이브러리에 보안 업데이트가 나오면 GitHub가 자동으로 PR을 올려 준다 (CI가 통과하면 합치면 됨)
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 5
+    groups:
+      dev-tools:
+        dependency-type: development
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

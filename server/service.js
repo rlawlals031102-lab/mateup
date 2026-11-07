@@ -1054,8 +1054,10 @@ export async function adminDashboard(db) {
   const codes = await db.all('SELECT email, purpose, used, attempts, created_at FROM email_codes ORDER BY id DESC');
   const joined = new Set(users.map((u) => u.email));
   const notJoined = new Set(codes.filter((c) => c.purpose === 'signup' && !joined.has(c.email)).map((c) => c.email));
+  // 운영진은 신고된 대화만 본다 (처리방침 5번). 처리를 마친 신고의 대화는 다시 보이지 않는다.
   const messages = await db.all(
-    `SELECT match_id, user_id, body, created_at FROM messages WHERE match_id IN (SELECT id FROM matches WHERE ${real('user_a')} OR ${real('user_b')}) ORDER BY id`,
+    `SELECT match_id, user_id, body, created_at FROM messages
+     WHERE match_id IN (SELECT match_id FROM reports WHERE status = 'open') ORDER BY id`,
   );
   const realIds = new Set(users.map((u) => u.id));
 

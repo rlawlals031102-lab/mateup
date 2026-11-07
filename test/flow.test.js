@@ -596,7 +596,12 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.deepEqual(d.funnel.all.map((f) => f.count), [1, 3, 2, 2, 0]);
       assert.deepEqual(d.funnel.today.map((f) => f.count), [1, 3, 2, 2, 0], '모두 오늘 일어난 일');
       assert.equal(d.users.find((u) => u.name === '운영자').phone, '010-1111-2222');
-      assert.deepEqual(d.chats.map((c) => [c.names, c.messages.map((m) => m.body)]), [[['a', 'b'], ['안녕하세요']]]);
+      // 운영진은 신고된 대화만 본다
+      assert.deepEqual(d.chats, []);
+      const { reportChat } = await import('../server/reports.js');
+      await reportChat(db, b, matchId, { reason: 'rude' });
+      const after = await S.adminDashboard(db);
+      assert.deepEqual(after.chats.map((c) => [c.names, c.messages.map((m) => m.body)]), [[['a', 'b'], ['안녕하세요']]]);
     });
 
     test('방문자: 열 때마다 기록, 사람 수는 브라우저 id로 센다', async () => {

@@ -1,0 +1,52 @@
+# 실서비스 상태 확인: 30분마다 https://mateup-gamma.vercel.app 의 첫 화면과 /api/health 를 확인한다.
+#  - 사이트가 응답하지 않거나, DB가 이상하거나, 매일 작업(0시 정산)이 늦거나 실패하면 이 작업이 실패한다.
+#  - 실패하면 GitHub가 이 파일의 일정(cron)을 마지막으로 바꾼 사람에게 메일을 보낸다. 고칠 때까지 30분마다 온다.
+#    (GitHub → Settings → Notifications → Actions 에서 '실패한 작업만 알림'이 켜져 있어야 한다)
+#  - GitHub 사정으로 몇 분 늦게 돌 수 있다. Actions 탭 → uptime → Run workflow 로 바로 돌려 볼 수도 있다.
+#  - 공개 저장소에서 60일 동안 저장소 활동이 없으면 GitHub가 일정 실행을 멈춘다 (Actions 탭에서 다시 켜기).
+name: uptime
+
+on:
+  schedule:
+    - cron: '7,37 * * * *' # 30분마다 (정각을 피함)
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  health:
+    name: health
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 첫 화면과 /api/health 확인 (일시적인 오류는 세 번까지 다시 시도)
+        env:
+          SITE: https://mateup-gamma.vercel.app
+        run: |
+          ok=''
+          for i in 1 2 3; do
+            home=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$SITE/" || echo 000)
+            code=$(curl -sS --max-time 20 -o health.json -w '%{http_code}' "$SITE/api/health" || echo 000)
+            if [ "$home" = 200 ] && [ "$code" = 200 ]; then ok=1; break; fi
+            echo "실패 ${i}번째 (첫 화면 $home, /api/health $code), 20초 뒤 다시 시도"
+            sleep 20
+          done
+          cat health.json 2>/dev/null || true
+          echo
+          if [ -z "$ok" ]; then
+            echo "::error::사이트 응답 이상 (첫 화면 $home, /api/health $code)"
+            exit 1
+          fi
+          if ! jq -e '.ok == true and .db == "ok"' health.json > /dev/null; then
+            echo "::error::상태 이상: $(jq -c . health.json)"
+            exit 1
+          fi
+          if jq -e '(.warnings // []) | length > 0' health.json > /dev/null; then
+            echo "::error::경고 $(jq -c '.warnings' health.json): daily-job-late = 매일 작업이 26시간 넘게 안 돔, daily-job-failed = 매일 작업 실패"
+            exit 1
+          fi
+          echo "정상"
