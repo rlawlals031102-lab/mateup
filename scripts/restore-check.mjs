@@ -15,16 +15,20 @@ const { createdAt, tables } = JSON.parse(await readFile(file, 'utf8'));
 const db = await openPglite(); // 지금 코드의 DB 구조로 빈 DB를 만든다
 const quote = (n) => `"${String(n).replace(/"/g, '')}"`;
 let ok = true;
+const skippedCols = new Set(); // 실서비스 DB에는 있지만 지금 코드에는 없는 열 (예전 버전이 남긴 열)
 await db.tx(async (t) => {
   await t.exec('SET session_replication_role = replica'); // 표 사이 참조 확인을 잠시 끄고 순서와 상관없이 넣는다
   for (const [name, rows] of Object.entries(tables)) {
-    const exists = await t.get("SELECT 1 AS x FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ?", name);
-    if (!exists) {
+    const known = new Set((await t.all(
+      "SELECT column_name AS c FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?", name,
+    )).map((r) => r.c));
+    if (!known.size) {
       console.log(`  ${name}: 지금 코드에는 없는 표라 건너뜀 (${rows.length}행)`);
       continue;
     }
     for (const row of rows) {
-      const cols = Object.keys(row);
+      const cols = Object.keys(row).filter((c) => known.has(c));
+      for (const c of Object.keys(row)) if (!known.has(c)) skippedCols.add(`${name}.${c}`);
       await t.run(
         `INSERT INTO ${quote(name)} (${cols.map(quote).join(', ')}) VALUES (${cols.map(() => '?').join(', ')}) ON CONFLICT DO NOTHING`,
         ...cols.map((c) => row[c]),
@@ -34,6 +38,7 @@ await db.tx(async (t) => {
   await t.exec('SET session_replication_role = DEFAULT');
 });
 console.log(`백업 시각: ${createdAt}`);
+if (skippedCols.size) console.log(`  지금 코드에는 없는 열이라 건너뜀: ${[...skippedCols].join(', ')}`);
 for (const [name, rows] of Object.entries(tables)) {
   if (name === 'schema_migrations') continue; // 새 DB가 이미 가지고 있음
   const exists = await db.get("SELECT 1 AS x FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ?", name);
