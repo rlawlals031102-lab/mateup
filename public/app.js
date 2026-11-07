@@ -1771,6 +1771,11 @@ async function renderAdmin(alive) {
   }
   if (!alive()) return;
   const STATUS = { pending: '대기', matched: '매칭됨', cancelled: '취소', active: '진행 중', reported: '리포트 대기', closed: '끝남' };
+  const openReports = (a.reports ?? []).filter((r) => r.status === 'open');
+  const ADMIN_ACTION = {
+    view_dashboard: '개발자 화면 열람', view_reports: '신고 대화 열람', close_report: '신고 처리 완료',
+    unsuspend: '매칭 정지 풀기', cancel_requests: '대기 신청 취소',
+  };
   const shortDay = (s) => `${Number(s.slice(5, 7))}/${Number(s.slice(8))}`;
   const maxHour = Math.max(1, ...a.visits.byHour);
   const funnelHTML = (rows) => {
@@ -1838,12 +1843,49 @@ async function renderAdmin(alive) {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>채팅</h2><span class="hint">${a.chats.length}개 방</span></div>
-      ${a.chats.map((c) => `
-        <details class="admin-chat"><summary class="small"><b>${esc(c.names.join(' ↔ '))}</b> <span class="tiny muted">· ${c.messages.length}개</span></summary>
-          ${c.messages.map((m) => `<div class="admin-msg"><span class="tiny muted">${fmtAt(m.createdAt)} · ${esc(m.name)}</span><div class="small">${esc(m.body)}</div></div>`).join('')}
-        </details>`).join('') || '<p class="small muted">채팅이 없어요.</p>'}
+      <div class="card-head"><h2>신고된 대화</h2><span class="hint">처리 안 한 신고 ${openReports.length}건</span></div>
+      <p class="tiny muted">운영진은 신고된 대화만 볼 수 있고, 이 화면을 열 때마다 열람 기록이 남아요.</p>
+      ${openReports.map((r) => {
+        const chat = a.chats.find((c) => c.matchId === r.matchId);
+        return `
+        <details class="admin-chat"><summary class="small"><b>${esc(r.names.join(' ↔ '))}</b> <span class="tiny muted">· ${esc(r.reason)} · 신고 ${esc(r.reporter)} · ${fmtAt(r.createdAt)}</span></summary>
+          ${r.detail ? `<p class="small mt">${esc(r.detail)}</p>` : ''}
+          ${(chat?.messages ?? []).map((m) => `<div class="admin-msg"><span class="tiny muted">${fmtAt(m.createdAt)} · ${esc(m.name)}</span><div class="small">${esc(m.body)}</div></div>`).join('') || '<p class="tiny muted mt">주고받은 메시지가 없어요.</p>'}
+          <button type="button" class="btn sm mt" data-close-report="${r.id}">처리 완료</button>
+        </details>`;
+      }).join('') || '<p class="small muted">처리할 신고가 없어요.</p>'}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>약속 기록</h2><span class="hint">${a.promise.length}명</span></div>
+      ${a.promise.map((p) => `
+        <div class="admin-item row" style="justify-content:space-between">
+          <span><b>${esc(p.name)}</b> <span class="tiny muted">${p.suspendedUntil ? `매칭 정지 · ${fmtAt(p.suspendedUntil)}까지` : `기록 ${p.count}회`}</span></span>
+          ${p.suspendedUntil ? `<button type="button" class="btn sm" data-unsuspend="${p.id}" data-name="${esc(p.name)}">정지 풀기</button>` : ''}
+        </div>`).join('') || '<p class="small muted">약속 기록이 있는 사람이 없어요.</p>'}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>운영 기록</h2><span class="hint">최근 ${a.adminLogs.length}건</span></div>
+      ${a.adminLogs.map((l) => `<div class="list-item"><span class="small">${esc(l.name)} · ${ADMIN_ACTION[l.action] ?? esc(l.action)}</span><span class="tiny muted">${fmtAt(l.at)}</span></div>`).join('') || '<p class="small muted">기록이 없어요.</p>'}
     </section>`;
+
+  // 신고 처리 완료, 매칭 정지 풀기 (둘 다 운영 기록에 남음)
+  $$('[data-close-report]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await api(`/admin/reports/${b.dataset.closeReport}/close`, { method: 'POST' });
+      toast('신고를 처리 완료로 바꿨어요.');
+      router();
+    } catch (err) { toast(err.message, true); }
+  }));
+  $$('[data-unsuspend]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm(`${b.dataset.name}님의 매칭 정지를 풀까요? 약속 기록도 0회부터 다시 세요.`)) return;
+    try {
+      await api(`/admin/users/${b.dataset.unsuspend}/unsuspend`, { method: 'POST' });
+      toast('매칭 정지를 풀었어요.');
+      router();
+    } catch (err) { toast(err.message, true); }
+  }));
 
   // 전환 단계: 전체 ↔ 오늘만
   $('#funnel-today').addEventListener('click', (e) => {

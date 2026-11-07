@@ -291,7 +291,7 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
   .day-picker button { height: 36px; font-size: 13px; }
   .style-picker button { padding: 9px 4px; }
   .style-picker b { font-size: 13px; }
-  .style-picker small { font-size: 10px; }
+  .style-picker small { font-size: 12px; }
   .toggle-pair button { height: 40px; font-size: 13px; }
   .notice { font-size: 12px; padding: 8px 12px; margin-top: 8px; }
   .avatar { width: 48px; height: 48px; font-size: 28px; }
