@@ -9,6 +9,7 @@ import { emailHash } from './fieldcrypt.js';
 import { LIMITS, limit, assertUnder, countHit, clearHits, ipKey, securityHeaders } from './security.js';
 import { requestContext, log, alertOps, beat, health } from './ops.js';
 import { consentState, recordConsent, deleteAccount, purgeOldData, exportMyData } from './privacy.js';
+import { notifyMatch } from './notify.js';
 import { reportChat, REPORT_REASONS } from './reports.js';
 import { logAdmin, promiseOverview, reportList, recentAdminLogs, unsuspend, closeReport, matchChat } from './admin.js';
 
@@ -185,6 +186,8 @@ export function createApp({
     consent: consentState(req.user, consentRequired),
   }));
   api.post('/me/consent', auth, async (req, res) => res.json({ consent: await recordConsent(db, req.user.id) }));
+  // 이메일 알림 켜기/끄기
+  api.post('/me/notify', auth, async (req, res) => res.json(await S.setNotifyOptOut(db, req.user.id, req.body?.optOut === true)));
   // 회원 탈퇴: 비밀번호 확인, 진행 중인 매칭이 있으면 거절 (server/privacy.js)
   api.post('/me/delete', auth, async (req, res) => {
     await limit(db, `delete:user:${req.user.id}`, LIMITS.deleteAccount);
@@ -206,7 +209,9 @@ export function createApp({
   // 매칭 신청
   api.post('/requests', member, async (req, res) => {
     await limit(db, `request:user:${req.user.id}`, LIMITS.request);
-    res.status(201).json(await S.createRequest(db, req.user.id, req.body ?? {}));
+    const result = await S.createRequest(db, req.user.id, req.body ?? {});
+    if (result.matchId) await notifyMatch(db, mailer, result.matchId); // 바로 매칭되면 두 사람에게 메일
+    res.status(201).json(result);
   });
   api.delete('/requests/:id', member, async (req, res, next) => {
     if (req.params.id === 'current') return next();
@@ -284,8 +289,12 @@ export function createApp({
       return res.status(401).json({ error: 'unauthorized' });
     }
     try {
-      const out = { settled: await S.autoSettle(db), rematched: await S.rematchPending(db), purged: await purgeOldData(db) };
+      const settled = await S.autoSettle(db);
+      const rematchedIds = await S.rematchPending(db);
+      const purged = await purgeOldData(db);
+      const out = { settled, rematched: rematchedIds.length, purged };
       await beat(db, 'daily', true, JSON.stringify(out));
+      for (const id of rematchedIds) await notifyMatch(db, mailer, id); // 매일 작업에서 맺힌 매칭도 메일
       res.json(out);
     } catch (err) {
       await beat(db, 'daily', false, err.message).catch(() => {});
