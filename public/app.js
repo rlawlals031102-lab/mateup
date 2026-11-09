@@ -538,21 +538,21 @@ function showConsent() {
 // 로그인 화면에 들어오면 스터디버디 소개 팝업을 띄운다
 // 스터디버디 소개 (로그인 팝업·홈 진행 안내 카드 공용)
 const introBody = () => `
-      <p class="small">국민대학교 창업동아리 <b>MateUp팀</b>이 운영해요.</p>
-      <p class="small muted">국민대생끼리 1:1 공부 메이트를 이어 주는 서비스입니다.</p>
+      <p class="small">국민대 창업동아리 <b>MateUp팀</b>이 운영해요.</p>
+      <p class="small muted">국민대생끼리 1:1로 공부 메이트를 이어 줘요.</p>
       <ol class="steps mt">
-        <li><b>매칭 신청</b><span class="small muted">날짜, 장소, 공부 스타일을 고르면 조건이 맞는 메이트와 바로 연결돼요.</span></li>
-        <li><b>함께 공부</b><span class="small muted">약속한 날 만나서 각자 공부하고, 서로의 QR을 찍어 출석을 확인해요.</span></li>
-        <li><b>약속 지키기</b><span class="small muted">약속 날 안 나오거나 매칭을 그만두면 1회로 기록돼요. ${rule().strikeLimit}회가 되면 ${rule().suspendDays}일 동안 매칭 신청이 멈춰요.</span></li>
+        <li><b>매칭 신청</b><span class="small muted">원하는 날짜·장소·공부 스타일을 고르면 맞는 메이트와 연결돼요.</span></li>
+        <li><b>함께 공부</b><span class="small muted">약속한 날 만나 각자 공부하고, 서로 QR을 찍어 출석을 확인해요.</span></li>
+        <li><b>약속 지키기</b><span class="small muted">약속 날 안 나오거나 매칭을 중간에 그만두면 1회로 쌓여요. ${rule().strikeLimit}회가 되면 ${rule().suspendDays}일 동안 매칭 신청이 멈춰요.</span></li>
       </ol>
       <p class="small mt"><b>3회차</b> ${periodText()}</p>
-      <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a></p>`;
+      <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a>에 올려요.</p>`;
 
 function showIntro() {
   const modal = $('#modal');
   modal.innerHTML = `
     <div class="sheet intro">
-      <h3>스터디버디는요</h3>
+      <img class="logo" src="logo.svg" alt="스터디버디">
       ${introBody()}
       <button class="btn primary block mt" id="intro-ok">확인했어요</button>
     </div>`;
@@ -1006,7 +1006,7 @@ async function renderApply(alive) {
         toast('메이트가 정해졌어요.');
         location.hash = `#/match/${res.matchId}`;
       } else {
-        toast('신청했어요. 조건이 맞는 메이트가 생기면 바로 연결해 드려요.');
+        toast('신청했어요. 맞는 메이트가 생기면 연결해 드려요.');
         location.hash = '#/home';
       }
     } catch (err) {
