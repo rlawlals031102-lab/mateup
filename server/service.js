@@ -4,7 +4,7 @@ import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
   EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS, PROMISE_RULE,
-  PRIVACY_POLICY,
+  PRIVACY_POLICY, PRIOR_TEAMS,
 } from './options.js';
 import { createSession, sessionUser, endSession, endAllSessions } from './sessions.js';
 // 전화번호는 운영 결정(2026-11-06)으로 암호화하지 않고 그대로 저장한다. 예전에 암호화된 값이 있으면 읽을 때만 풀어 준다.
@@ -985,6 +985,7 @@ export async function homeState(db, userId, opts) {
 // 국민대 전체 통계: 실제 사용자만 (데모 메이트·공용 데모 계정 제외)
 async function communityStats(db) {
   const real = `u.is_bot = 0 AND u.email <> '${DEMO_ACCOUNT.email}'`;
+  const realUser = (col) => `EXISTS (SELECT 1 FROM users u WHERE u.id = m.${col} AND ${real})`;
   const studying = await db.get(
     `SELECT COUNT(DISTINCT u.id) AS n FROM matches m JOIN users u ON u.id IN (m.user_a, m.user_b)
      WHERE m.status = 'active' AND ${real}`,
@@ -992,7 +993,16 @@ async function communityStats(db) {
   const waiting = await db.get(
     `SELECT COUNT(*) AS n FROM match_requests r JOIN users u ON u.id = r.user_id WHERE r.status = 'pending' AND ${real}`,
   );
-  return { studying: Number(studying.n), waiting: Number(waiting.n) };
+  // 지금까지 함께 공부한 팀(누적): 앱에서 성사된 실제 매칭 수 + 앱 이전 오프라인 파일럿(PRIOR_TEAMS).
+  // 데모끼리 맺힌 매칭은 빼고, 실제 사용자 둘이 맺힌 매칭만 센다. 매칭이 생길 때마다 올라간다.
+  const teams = await db.get(
+    `SELECT COUNT(*) AS n FROM matches m WHERE ${realUser('user_a')} AND ${realUser('user_b')}`,
+  );
+  return {
+    studying: Number(studying.n),
+    waiting: Number(waiting.n),
+    studiedTeams: PRIOR_TEAMS + Number(teams.n),
+  };
 }
 
 // 사이트 방문 기록. 사이트를 열 때마다 한 줄씩 남긴다 (사람 수는 visitorId로 따로 센다).
@@ -1054,10 +1064,7 @@ export async function adminDashboard(db) {
   const codes = await db.all('SELECT email, purpose, used, attempts, created_at FROM email_codes ORDER BY id DESC');
   const joined = new Set(users.map((u) => u.email));
   const notJoined = new Set(codes.filter((c) => c.purpose === 'signup' && !joined.has(c.email)).map((c) => c.email));
-  // 첫 화면에는 처리 안 한 신고의 대화만 싣는다 (처리방침 5번). 처리를 마친 신고의 대화는 다시 보이지 않는다.
-  // 다른 매칭의 대화는 운영자가 '대화 보기'를 누를 때만 따로 연다 (server/admin.js matchChat, 열람 기록).
-  const messageCount = new Map((await db.all('SELECT match_id, COUNT(*) AS n FROM messages GROUP BY match_id'))
-    .map((r) => [r.match_id, Number(r.n)]));
+  // 운영진은 신고된 대화만 본다 (처리방침 5번). 처리를 마친 신고의 대화는 다시 보이지 않는다.
   const messages = await db.all(
     `SELECT match_id, user_id, body, created_at FROM messages
      WHERE match_id IN (SELECT match_id FROM reports WHERE status = 'open') ORDER BY id`,
@@ -1100,7 +1107,6 @@ export async function adminDashboard(db) {
       id: m.id, names: [nameOf.get(m.user_a), nameOf.get(m.user_b)], status: m.status,
       weekStart: m.week_start, weekEnd: m.week_end, schedule: m.schedule, location: m.location, styles: m.styles,
       leftBy: m.report?.leftBy ? nameOf.get(m.report.leftBy) : null, createdAt: m.created_at,
-      messageCount: messageCount.get(m.id) ?? 0, // 수만 (내용은 '대화 보기'로)
     })),
     users: users.map((u) => ({
       id: u.id, name: u.name, department: u.department ?? null, phone: decryptField(u.phone),

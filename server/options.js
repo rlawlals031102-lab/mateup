@@ -38,6 +38,10 @@ export const PRIVACY_POLICY = {
   manager: { name: '나윤빈', role: '개인정보 보호담당자', email: 'yunbinna6@kookmin.ac.kr' },
 };
 
+// '지금까지 함께 공부한 팀' 누적의 시작값. 앱을 만들기 전 오프라인으로 매칭했던 팀 수(운영진 집계)를 더해서 보여 준다.
+// 앱에서 성사된 실제 매칭 수가 이 값 위에 쌓인다. 숫자가 틀리면 여기만 고치면 된다.
+export const PRIOR_TEAMS = 14;
+
 // 개발자 화면을 볼 수 있는 계정 (운영자). 메일은 소문자로 적는다.
 export const ADMIN_EMAIL = 'rlawlals031102@kookmin.ac.kr'; // 김지민
 export const ADMIN_EMAILS = [ADMIN_EMAIL, 'yunbinna6@kookmin.ac.kr']; // 김지민, 나윤빈

@@ -498,7 +498,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       const demo = (await S.demoLogin(db)).user.id;
       await S.createRequest(db, demo, baseReq); // 데모끼리 매칭 → 제외
       const home = await S.homeState(db, a);
-      assert.deepEqual(home.community, { studying: 2, waiting: 1 });
+      assert.deepEqual(home.community, { studying: 2, waiting: 1, studiedTeams: 15 }); // 앱 실제 1팀(a·b) + 앱 이전 14팀, 데모끼리는 제외
       assert.deepEqual(home.exam, { name: '기말고사', date: '2026-12-08', dday: 38 }); // 10/31 기준
       setNow(kst(2026, 12, 9, 9, 0));
       assert.equal((await S.homeState(db, a)).exam, null, '시험이 지나면 숨김');

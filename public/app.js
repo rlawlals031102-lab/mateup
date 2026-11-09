@@ -765,14 +765,12 @@ async function renderHome(alive) {
       </div>`;
   }
   const hasAny = matches.length || pendingRequests.length;
-  // 국민대생 '함께 공부 중' 숫자는 4명으로 고정해서 보여 준다
-  const STUDYING_SHOWN = 4;
   // 기말고사 디데이 · 국민대 통계 (매칭 전에는 첫 카드 안에, 매칭 후에는 매칭 카드 아래에)
   const dday = exam ? (exam.dday === 0 ? 'D-DAY' : `D-${exam.dday}`) : '';
   const facts = `
         <ul class="facts">
           ${exam ? `<li><span>${esc(exam.name)}까지</span><b>${dday}</b><small>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</small></li>` : ''}
-          <li><span>이번 주 함께 공부하는 국민대생</span><b>${STUDYING_SHOWN}명</b>${community.waiting ? `<small>대기 ${community.waiting}명</small>` : ''}</li>
+          <li><span>지금까지 함께 공부한 팀</span><b>${community.studiedTeams}팀</b>${community.waiting ? `<small>대기 ${community.waiting}명</small>` : ''}</li>
         </ul>`;
   const heroStats = facts;
   const homeStats = `<section class="section">${facts}</section>`;
@@ -1596,7 +1594,7 @@ async function renderChat(alive, id) {
   });
 }
 
-// 대화 신고 (server/reports.js): 신고된 대화는 개발자 화면에 바로 보인다. 다른 대화는 운영자가 '대화 보기'로 열 때만 (열람 기록)
+// 대화 신고 (server/reports.js): 운영진은 신고된 대화만 확인한다
 function openReport(match) {
   const modal = $('#modal');
   const reasons = Object.entries(OPTIONS.reportReasons ?? {});
@@ -1774,13 +1772,7 @@ async function renderAdmin(alive) {
   const openReports = (a.reports ?? []).filter((r) => r.status === 'open');
   const ADMIN_ACTION = {
     view_dashboard: '개발자 화면 열람', view_reports: '신고 대화 열람', close_report: '신고 처리 완료',
-    unsuspend: '매칭 정지 풀기', cancel_requests: '대기 신청 취소', view_chat: '대화 열람',
-  };
-  // 운영 기록에서 어느 매칭의 대화를 열었는지 이름으로 보여 준다
-  const logTarget = (l) => {
-    const id = Number(/^match:(\d+)$/.exec(l.target ?? '')?.[1]);
-    const m = id && a.matches.find((x) => x.id === id);
-    return m ? ` (${m.names.join(' ↔ ')})` : '';
+    unsuspend: '매칭 정지 풀기', cancel_requests: '대기 신청 취소',
   };
   const shortDay = (s) => `${Number(s.slice(5, 7))}/${Number(s.slice(8))}`;
   const maxHour = Math.max(1, ...a.visits.byHour);
@@ -1840,20 +1832,17 @@ async function renderAdmin(alive) {
 
     <section class="card">
       <div class="card-head"><h2>매칭</h2><span class="hint">전체 ${a.matches.length}건</span></div>
-      <p class="tiny muted">'대화 보기'는 약속 분쟁 처리처럼 꼭 필요할 때만 눌러 주세요. 누를 때마다 운영 기록에 남아요.</p>
       ${a.matches.map((m) => `
         <div class="admin-item">
           <div class="row" style="justify-content:space-between"><b>${esc(m.names.join(' ↔ '))}</b><span class="pill${m.status === 'closed' ? ' gray' : ' lime'}">${STATUS[m.status] ?? m.status}</span></div>
           <div class="tiny muted">${shortDay(m.weekStart)}~${shortDay(m.weekEnd)} · ${esc(scheduleText(m.schedule))} · ${esc(m.location)}</div>
           ${m.leftBy ? `<div class="tiny" style="color:var(--red)">${esc(m.leftBy)}님이 중간에 그만둠</div>` : ''}
-          ${m.messageCount ? `<button type="button" class="btn sm mt" data-view-chat="${m.id}" data-label="대화 보기 (${m.messageCount})">대화 보기 (${m.messageCount})</button>
-          <div id="admin-chat-${m.id}"></div>` : ''}
         </div>`).join('') || '<p class="small muted">매칭이 없어요.</p>'}
     </section>
 
     <section class="card">
       <div class="card-head"><h2>신고된 대화</h2><span class="hint">처리 안 한 신고 ${openReports.length}건</span></div>
-      <p class="tiny muted">신고된 대화는 여기에 바로 보여요. 다른 대화는 위 '매칭'에서 '대화 보기'로 열고, 열람은 모두 운영 기록에 남아요.</p>
+      <p class="tiny muted">운영진은 신고된 대화만 볼 수 있고, 이 화면을 열 때마다 열람 기록이 남아요.</p>
       ${openReports.map((r) => {
         const chat = a.chats.find((c) => c.matchId === r.matchId);
         return `
@@ -1876,25 +1865,8 @@ async function renderAdmin(alive) {
 
     <section class="card">
       <div class="card-head"><h2>운영 기록</h2><span class="hint">최근 ${a.adminLogs.length}건</span></div>
-      ${a.adminLogs.map((l) => `<div class="list-item"><span class="small">${esc(l.name)} · ${ADMIN_ACTION[l.action] ?? esc(l.action)}${esc(logTarget(l))}</span><span class="tiny muted">${fmtAt(l.at)}</span></div>`).join('') || '<p class="small muted">기록이 없어요.</p>'}
+      ${a.adminLogs.map((l) => `<div class="list-item"><span class="small">${esc(l.name)} · ${ADMIN_ACTION[l.action] ?? esc(l.action)}</span><span class="tiny muted">${fmtAt(l.at)}</span></div>`).join('') || '<p class="small muted">기록이 없어요.</p>'}
     </section>`;
-
-  // 매칭 대화 열어 보기 (누를 때마다 운영 기록에 남음, 처리방침 5번). 한 번 더 누르면 닫는다.
-  $$('[data-view-chat]').forEach((b) => b.addEventListener('click', async () => {
-    const box = $(`#admin-chat-${b.dataset.viewChat}`);
-    if (box.childElementCount) {
-      box.innerHTML = '';
-      b.textContent = b.dataset.label;
-      return;
-    }
-    if (!confirm('이 매칭의 대화를 열어 볼까요?\n약속 분쟁 처리처럼 꼭 필요할 때만 열어 주세요. 연 기록이 운영 기록에 남아요.')) return;
-    try {
-      const chat = await api(`/admin/matches/${b.dataset.viewChat}/chat`);
-      box.innerHTML = chat.messages.map((m) => `<div class="admin-msg"><span class="tiny muted">${fmtAt(m.createdAt)} · ${esc(m.name)}</span><div class="small">${esc(m.body)}</div></div>`).join('')
-        || '<p class="tiny muted mt">주고받은 메시지가 없어요.</p>';
-      b.textContent = '대화 닫기';
-    } catch (err) { toast(err.message, true); }
-  }));
 
   // 신고 처리 완료, 매칭 정지 풀기 (둘 다 운영 기록에 남음)
   $$('[data-close-report]').forEach((b) => b.addEventListener('click', async () => {
