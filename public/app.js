@@ -961,10 +961,11 @@ async function renderApply(alive) {
 
     <section class="card">
       <div class="card-head"><h2>공부 스타일 선택</h2><span class="hint">중복 선택 가능</span></div>
-      <div class="style-picker" id="styles">
-        ${Object.entries(OPTIONS.styles).map(([k, s], i) => `
+      <div class="style-list" id="styles">
+        ${Object.entries(OPTIONS.styles).map(([k, s]) => `
           <button type="button" data-style="${k}" aria-pressed="false">
-            <b>${'ABC'[i]}. ${esc(s.label)}</b><small>${esc(s.desc)}</small>
+            <span class="check" aria-hidden="true"></span>
+            <span class="ct"><b>${esc(s.label)}</b><small>${esc(s.desc)}</small></span>
           </button>`).join('')}
       </div>
     </section>
