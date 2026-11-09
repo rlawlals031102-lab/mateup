@@ -433,8 +433,8 @@ function bindSendCode(form, purpose) {
 
 async function renderLogin() {
   authShell(`
-    <h2>같은 시간에<br>함께 시작하는 공부</h2>
-    <p class="lead">${OPTIONS.emailDomain ? '국민대 학생끼리 ' : ''}일주일 동안 같은 시간에 만나, 각자 공부해요.</p>
+    <h2>같은 시간에 만나<br>함께 공부해요</h2>
+    <p class="lead">매주 새로운 ${OPTIONS.emailDomain ? '국민대 ' : ''}메이트와 약속을 잡고, 함께 공부하며 더 넓은 캠퍼스를 만나요.</p>
     <form id="f" class="card">
       <label class="field"><span>${emailLabel()}</span>${emailInput()}</label>
       <label class="field"><span>비밀번호</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
