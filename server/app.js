@@ -9,7 +9,7 @@ import { emailHash } from './fieldcrypt.js';
 import { LIMITS, limit, assertUnder, countHit, clearHits, ipKey, securityHeaders } from './security.js';
 import { requestContext, log, alertOps, beat, health } from './ops.js';
 import { consentState, recordConsent, deleteAccount, purgeOldData, exportMyData } from './privacy.js';
-import { notifyMatch } from './notify.js';
+import { notifyMatch, sendDueReminders } from './notify.js';
 import { reportChat, REPORT_REASONS } from './reports.js';
 import { logAdmin, promiseOverview, reportList, recentAdminLogs, unsuspend, closeReport, matchChat } from './admin.js';
 
@@ -301,6 +301,14 @@ export function createApp({
       await alertOps(db, '매일 작업(정산·정리)이 실패했어요', err.message);
       throw err;
     }
+  });
+
+  // 약속 리마인드 (GitHub Actions가 30분마다 호출). 같은 약속·사람·종류는 한 번만 보낸다.
+  api.get('/cron/reminders', async (req, res) => {
+    if (cronSecret && req.headers.authorization !== `Bearer ${cronSecret}`) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    res.json({ sent: await sendDueReminders(db, mailer) });
   });
 
   api.use((req, res) => res.status(404).json({ error: '존재하지 않는 API입니다.' }));

@@ -3,6 +3,7 @@
 //  - 봇(데모 메이트)·공용 데모 계정·메일 없는 계정·알림을 끈 사용자(notify_opt_out)는 건너뛴다.
 //  - DB 트랜잭션 밖(커밋 뒤)에서 부른다. 메일은 느린 I/O라 매칭 잠금을 잡으면 안 된다.
 import { DEMO_ACCOUNT } from './service.js';
+import * as T from './time.js';
 
 const SITE = process.env.PUBLIC_SITE_URL || 'https://mateup-gamma.vercel.app';
 
@@ -45,4 +46,69 @@ export async function notifyMatch(db, mailer, matchId) {
       });
     }
   } catch { /* 알림 전체 실패는 무시 (본래 흐름 보호) */ }
+}
+
+
+// ───────────────────────── 약속 리마인드 ─────────────────────────
+// 30분마다 호출(GitHub Actions → /api/cron/reminders). 같은 약속·사람·종류는 한 번만 보낸다(sent_reminders).
+const kstHour = (d) => new Date(d.getTime() + 9 * 3600000).getUTCHours();
+
+// 지금 이 약속에 보낼 리마인드 종류: 3시간 이내면 '오늘', 전날 저녁(18~23시)이면 '내일', 아니면 없음.
+function reminderKind(a, now) {
+  const start = T.at(a.date, a.start_time);
+  const diffMin = (start.getTime() - now.getTime()) / 60000;
+  if (diffMin <= 0) return null;        // 이미 시작했거나 지난 약속
+  if (diffMin <= 180) return 'soon';    // 3시간 이내 → 당일 리마인드
+  if (a.date === T.addDays(T.today(), 1) && kstHour(now) >= 18 && kstHour(now) < 23) return 'day_before';
+  return null;
+}
+
+function reminderMail(a, kind, mate) {
+  const mateName = mate?.name ?? '메이트';
+  const where = a.location ? ` · ${a.location}` : '';
+  if (kind === 'soon') {
+    const line = `오늘 ${a.start_time}에 ${mateName}님과 공부 약속이 있어요${where}. 잊지 말고 나와 주세요.`;
+    return { subject: `[스터디버디] 오늘 ${a.start_time} 공부 약속이 있어요`, lead: `오늘 ${a.start_time}, ${mateName}님과 약속`, line };
+  }
+  const [, m, d] = a.date.split('-').map(Number);
+  const line = `내일(${m}월 ${d}일) ${a.start_time}에 ${mateName}님과 공부 약속이 있어요${where}. 미리 챙겨 두세요.`;
+  return { subject: `[스터디버디] 내일 ${a.start_time} 공부 약속이 있어요`, lead: `내일 ${a.start_time}, ${mateName}님과 약속`, line };
+}
+
+// 지금 보낼 리마인드를 모두 보낸다. 보낸 개수를 돌려준다. (본래 흐름 보호: 여기서도 throw 안 함)
+export async function sendDueReminders(db, mailer, now) {
+  if (!mailer) return 0;
+  now = now || T.now();
+  let sent = 0;
+  try {
+    const appts = await db.all(
+      `SELECT a.id AS appt_id, a.date, a.start_time, m.user_a, m.user_b, m.location
+       FROM appointments a JOIN matches m ON m.id = a.match_id WHERE m.status = 'active'`,
+    );
+    for (const a of appts) {
+      const kind = reminderKind(a, now);
+      if (!kind) continue;
+      const users = await db.all(
+        'SELECT id, name, email, is_bot, notify_opt_out FROM users WHERE id IN (?, ?)', a.user_a, a.user_b,
+      );
+      const byId = new Map(users.map((u) => [u.id, u]));
+      for (const u of users) {
+        if (!sendable(u)) continue;
+        const ins = await db.run(
+          'INSERT INTO sent_reminders (appointment_id, user_id, kind, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (appointment_id, user_id, kind) DO NOTHING',
+          a.appt_id, u.id, kind, now.toISOString(),
+        );
+        if (!ins.changes) continue; // 이미 보냈으면 건너뜀
+        const mate = byId.get(u.id === a.user_a ? a.user_b : a.user_a);
+        const mail = reminderMail(a, kind, mate);
+        await sendSafe(mailer, {
+          to: u.email, subject: mail.subject,
+          text: `${mail.line}\n\n${SITE}\n\n알림을 받고 싶지 않다면 앱 마이페이지 > 알림에서 끌 수 있어요.`,
+          html: shell(mail.lead, `<p style="font-size:14px;color:#3a4636;margin:0">${mail.line}</p>`),
+        });
+        sent++;
+      }
+    }
+  } catch { /* 리마인드 전체 실패는 무시 */ }
+  return sent;
 }

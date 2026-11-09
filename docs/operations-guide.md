@@ -7,6 +7,7 @@
 | 언제 | 할 일 |
 | --- | --- |
 | 매일 (자동) | 00:00 KST에 Vercel Cron이 `/api/cron/settle` 실행: 주간 정산 → 대기 신청끼리 다시 맞추기 → 보관 기간 지난 기록 정리. 결과는 `/api/health`의 `daily` |
+| 30분마다 (자동) | GitHub Actions(`reminders.yml`)가 `/api/cron/reminders` 호출: 곧 있을 약속(전날 저녁·당일 3시간 전)을 메일로 알림. 저장소 시크릿 `CRON_SECRET`(Vercel 값과 동일)과 Vercel의 `GMAIL_*`가 있어야 실제 발송 |
 | 매주 월요일 | GitHub의 Dependabot PR(라이브러리 새 버전. 작은 업데이트는 PR 하나로 묶여 옴, Actions는 매달) 확인 → CI가 모두 통과하면 합치기, 실패하면 그대로 두고 상의 |
 | 회차 시작 전 | `npm run backup`으로 백업 → `npm run restore:check -- <파일>`로 복구 연습 |
 | 신고가 들어오면 | 개발자 화면에서 신고 내용 확인 → 처리 후 '처리 완료' (열람 기록이 남음) |
