@@ -120,6 +120,15 @@ CREATE TABLE IF NOT EXISTS attendance_codes (
   PRIMARY KEY (appointment_id, user_id)
 );
 
+-- 보낸 약속 리마인드 (같은 약속·사람·종류는 한 번만 보낸다). server/notify.js sendDueReminders
+CREATE TABLE IF NOT EXISTS sent_reminders (
+  appointment_id INTEGER NOT NULL REFERENCES appointments(id),
+  user_id        INTEGER NOT NULL REFERENCES users(id),
+  kind           TEXT NOT NULL, -- soon | day_before
+  created_at     TEXT NOT NULL,
+  PRIMARY KEY (appointment_id, user_id, kind)
+);
+
 CREATE TABLE IF NOT EXISTS messages (
   id         ${ID},
   match_id   INTEGER NOT NULL REFERENCES matches(id),
@@ -247,7 +256,7 @@ ${dialect === 'pg' ? RLS : ''}`;
 
 // PostgreSQL(Supabase)에서는 모든 테이블에 RLS를 켜 둔다. 정책이 없으므로 Supabase 공개 API(anon 키)로는
 // 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
-const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'email_codes', 'attendance_codes', 'visits', 'chat_reads', 'strikes',
+const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'email_codes', 'attendance_codes', 'visits', 'chat_reads', 'strikes', 'sent_reminders',
   'sessions', 'rate_limits', 'reports', 'admin_logs', 'blocked_emails', 'ops_heartbeats', 'schema_migrations']
   .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
   .join('\n');

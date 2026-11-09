@@ -79,7 +79,7 @@ GitHub `main` 브랜치에 push하면 Vercel이 `npm run build:vercel`을 실행
 | 보안 헤더 | CSP(같은 주소의 스크립트만), 화면 끼워 넣기 금지, HSTS 등. `vercel.json`과 같은 값인지 테스트가 확인 | `server/security.js` |
 | 개인정보 | 처리방침(`public/privacy.html`)과 가입 동의, 기존 회원 동의 창, 내 정보 내려받기(JSON, 상대방 정보 제외), 회원 탈퇴(정보 삭제·'탈퇴한 사용자'), 보관 기간 지나면 자동 삭제. 전화번호는 운영 연락용으로 그대로 저장(2026-11-06 결정: 메이트에게는 안 보이고 운영자 2명만 열람) | `server/privacy.js` |
 | 신고·운영자 | 채팅 신고, 매칭 대화 보기(누를 때마다 열람 기록), 운영자 열람 기록, 정지 풀기 | `server/reports.js`, `server/admin.js` |
-| 운영 | 요청 번호·오류 로그, 디스코드/슬랙 알림, `/api/health`, 매일 작업 기록, GitHub 30분 상태 확인(실패하면 메일), 백업·복구 연습·운영 스크립트 | `server/ops.js`, `scripts/`, `.github/workflows/uptime.yml` |
+| 운영 | 요청 번호·오류 로그, 디스코드/슬랙 알림, `/api/health`, 매일 작업 기록, GitHub 30분 상태 확인(실패하면 메일), 약속 리마인드 메일(30분마다), 백업·복구 연습·운영 스크립트 | `server/ops.js`, `server/notify.js`, `scripts/`, `.github/workflows/uptime.yml`, `.github/workflows/reminders.yml` |
 | DB 구조 | 구조가 바뀐 경우에만 한 번 적용(지문 비교) + 번호 붙은 변경, 서버 여러 대가 동시에 켜져도 한 번만 | `server/migrate.js` |
 | 매칭 | 매칭은 한 번에 하나씩(PostgreSQL 잠금) → 거의 동시에 들어온 신청끼리도 바로 매칭, 매일 작업에서 대기 신청끼리 다시 맞추기 | `server/service.js` |
 | 미리보기 배포 | PR·브랜치 미리보기는 실서비스 DB를 쓰지 않음(`PREVIEW_DATABASE_URL`, 없으면 API 503) | `api/index.js` |

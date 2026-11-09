@@ -1,0 +1,43 @@
+# 약속 리마인드: 30분마다 https://mateup-gamma.vercel.app/api/cron/reminders 를 불러, 곧 있을 약속을 메일로 알린다.
+#  - 보낼 때마다 '같은 약속·사람·종류는 한 번만' 보낸다(서버가 중복을 막는다). 전날 저녁·당일 약속 3시간 전에 한 통씩.
+#  - 이 호출은 CRON_SECRET 으로 보호된다. 저장소 Settings → Secrets and variables → Actions 에
+#    'CRON_SECRET' 시크릿을 Vercel 환경 변수 CRON_SECRET 과 '같은 값'으로 넣어야 메일이 나간다.
+#    (시크릿이 없으면 이 작업은 그냥 건너뛴다 → 메일만 안 나가고 앱은 정상)
+#  - 실제로 메일이 나가려면 Vercel 에 GMAIL_USER·GMAIL_APP_PASSWORD 도 있어야 한다(인증번호 메일과 같은 설정).
+name: reminders
+
+on:
+  schedule:
+    - cron: '17,47 * * * *' # 30분마다 (uptime 과 겹치지 않게 17·47분)
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: reminders
+  cancel-in-progress: false
+
+jobs:
+  send:
+    name: send
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 약속 리마인드 메일 보내기
+        env:
+          SITE: https://mateup-gamma.vercel.app
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET 시크릿이 없어 건너뜁니다. (저장소 Settings → Secrets → Actions 에 Vercel 과 같은 값으로 추가하세요)"
+            exit 0
+          fi
+          code=$(curl -sS --max-time 25 -o out.json -w '%{http_code}' \
+            -H "Authorization: Bearer $CRON_SECRET" "$SITE/api/cron/reminders" || echo 000)
+          cat out.json 2>/dev/null || true
+          echo
+          if [ "$code" != 200 ]; then
+            echo "::error::리마인드 호출 실패 (HTTP $code)"
+            exit 1
+          fi
+          echo "보낸 메일: $(jq -r '.sent // 0' out.json 2>/dev/null)통"
