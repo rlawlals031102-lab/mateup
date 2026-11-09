@@ -1,6 +1,6 @@
 // 운영자 기능 (개발자 화면 서버 쪽). 화면은 김지민님 담당이라, 여기서는 데이터와 동작만 제공한다.
-//  - 운영자 행동 기록(admin_logs): 개발자 화면 열람, 신고 대화 열람, 정지 해제. 1년 보관.
-//  - 약속 지키기 현황과 정지 해제, 신고 목록.
+//  - 운영자 행동 기록(admin_logs): 개발자 화면 열람, 신고 대화 열람, 매칭 대화 열람, 정지 해제. 1년 보관.
+//  - 약속 지키기 현황과 정지 해제, 신고 목록, 매칭 하나의 대화.
 import * as T from './time.js';
 import { DEMO_ACCOUNT } from './service.js';
 import { REPORT_REASONS } from './reports.js';
@@ -67,6 +67,22 @@ export async function reportList(db, { withMessages = true } = {}) {
     out.push(item);
   }
   return out;
+}
+
+// 매칭 하나의 대화. 운영자가 개발자 화면에서 '대화 보기'를 누를 때만 열고, 열 때마다 기록이 남는다.
+// 처리방침 5번: 신고된 대화와 약속 분쟁 처리에 꼭 필요한 경우에만 확인, 누가 언제 열람했는지 기록.
+export async function matchChat(db, adminId, matchId) {
+  const m = await db.get(
+    `SELECT m.id, ua.name AS name_a, ub.name AS name_b FROM matches m
+     JOIN users ua ON ua.id = m.user_a JOIN users ub ON ub.id = m.user_b WHERE m.id = ?`, matchId,
+  );
+  if (!m) return null;
+  const messages = (await db.all(
+    `SELECT msg.body, msg.created_at, u.name FROM messages msg JOIN users u ON u.id = msg.user_id
+     WHERE msg.match_id = ? ORDER BY msg.id`, matchId,
+  )).map((x) => ({ name: x.name, body: x.body, createdAt: x.created_at }));
+  await logAdmin(db, adminId, 'view_chat', `match:${matchId}`);
+  return { matchId: m.id, names: [m.name_a, m.name_b], messages };
 }
 
 export async function closeReport(db, adminId, reportId) {

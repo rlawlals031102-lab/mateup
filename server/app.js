@@ -10,7 +10,7 @@ import { LIMITS, limit, assertUnder, countHit, clearHits, ipKey, securityHeaders
 import { requestContext, log, alertOps, beat, health } from './ops.js';
 import { consentState, recordConsent, deleteAccount, purgeOldData, exportMyData } from './privacy.js';
 import { reportChat, REPORT_REASONS } from './reports.js';
-import { logAdmin, promiseOverview, reportList, recentAdminLogs, unsuspend, closeReport } from './admin.js';
+import { logAdmin, promiseOverview, reportList, recentAdminLogs, unsuspend, closeReport, matchChat } from './admin.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const COOKIE = 'sb_token';
@@ -105,6 +105,13 @@ export function createApp({
     const reports = await reportList(db);
     await logAdmin(db, req.user.id, 'view_reports', `reports:${reports.length}`);
     res.json({ reports });
+  });
+  // 매칭 하나의 대화 (개발자 화면 '대화 보기'. 누를 때마다 열람 기록이 남는다)
+  api.get('/admin/matches/:id/chat', member, async (req, res) => {
+    await S.assertAdmin(db, req.user.id);
+    const chat = await matchChat(db, req.user.id, Number(req.params.id));
+    if (!chat) return res.status(404).json({ error: '매칭을 찾을 수 없어요.' });
+    res.set('Cache-Control', 'no-store').json(chat);
   });
   api.post('/admin/reports/:id/close', member, async (req, res) => {
     await S.assertAdmin(db, req.user.id);
@@ -247,7 +254,7 @@ export function createApp({
     await S.sendMessage(db, req.user.id, Number(req.params.id), req.body?.body);
     res.status(201).json({ ok: true });
   });
-  // 대화 신고 (운영진은 신고된 대화만 확인)
+  // 대화 신고 (신고된 대화는 개발자 화면에 바로 보인다. 다른 대화는 운영자가 '대화 보기'로 열 때만)
   api.post('/matches/:id/report', member, async (req, res) => {
     await limit(db, `report:user:${req.user.id}`, LIMITS.report);
     res.status(201).json(await reportChat(db, req.user.id, Number(req.params.id), req.body ?? {}));
