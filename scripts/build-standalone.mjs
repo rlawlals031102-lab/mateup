@@ -32,14 +32,19 @@ const result = await build({
 });
 
 const read = (p) => readFile(path.join(ROOT, p), 'utf8');
-const [html, css, app, favicon, logo, logoStack] = await Promise.all([
+const [html, css, app, ics, favicon, logo, logoStack] = await Promise.all([
   read('public/index.html'),
   read('public/styles.css'),
   read('public/app.js'),
+  read('public/ics.js'), // app.js가 import 하는 모듈 → 단일 파일에서는 합쳐 넣는다
   readFile(path.join(ROOT, 'public', 'favicon.svg')), // 탭 아이콘
   readFile(path.join(ROOT, 'public', 'logo.svg')), // 한 줄 로고 → 위쪽 띠
   readFile(path.join(ROOT, 'public', 'logo-stack.svg')), // 두 줄 로고 → 로그인·가입 화면
 ]);
+
+// 단일 파일에서는 import/export를 못 쓰니, ics.js의 export를 떼고 app.js의 import 줄을 지워 한 모듈로 합친다.
+const inlinedApp = `${ics.replace(/^export\s+/gm, '')}\n${app.replace(/^\s*import[^\n]*from\s*['"]\.\/ics\.js['"];?\s*$/m, '')}`;
+if (inlinedApp.includes("from './ics.js'")) throw new Error("app.js의 ics import 제거 실패 — build-standalone 확인 필요");
 
 const svgUri = (buf) => `data:image/svg+xml;base64,${buf.toString('base64')}`;
 const safeScript = (js) => js.replace(/<\/script/gi, '<\\/script');
@@ -49,7 +54,7 @@ const out = html
   .replace('<link rel="stylesheet" href="styles.css">', () => `<style>\n${css}\n</style>`)
   .replace(
     '<script type="module" src="app.js"></script>',
-    () => `<script>\n${safeScript(result.outputFiles[0].text)}\n</script>\n<script type="module">\n${safeScript(app)}\n</script>`,
+    () => `<script>\n${safeScript(result.outputFiles[0].text)}\n</script>\n<script type="module">\n${safeScript(inlinedApp)}\n</script>`,
   )
   .replaceAll('favicon.svg', () => svgUri(favicon))
   .replaceAll('logo-stack.svg', () => svgUri(logoStack))

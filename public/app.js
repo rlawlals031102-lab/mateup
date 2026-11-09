@@ -1,5 +1,7 @@
 // 스터디버디 프론트엔드 — 빌드 도구 없는 단일 페이지 앱 (hash 라우팅)
 
+import { buildCalendar } from './ics.js';
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const view = $('#view');
@@ -1081,6 +1083,8 @@ function drawMatch(m, alive) {
   const target = m.appointments.find((a) => a.me.status === 'studying' || a.mate.status === 'studying')
     ?? m.appointments.find((a) => a.me.status === 'open' || a.mate.status === 'open');
   const next = m.appointments.find((a) => a.me.status === 'scheduled');
+  // 아직 안 끝난 약속만 캘린더에 담는다 (끝난 날·취소된 날 제외)
+  const upcoming = m.appointments.filter((a) => ['scheduled', 'open', 'studying'].includes(a.me.status));
 
   // 현장 출석 확인: 내 코드는 메이트가 입력해서 내 출석을 확인해 주고, 나는 메이트의 코드를 입력해서 메이트 출석을 확인한다.
   let checkinCard = '';
@@ -1150,6 +1154,7 @@ function drawMatch(m, alive) {
       <p class="meta-line">내 출석 <b>${m.stats.me.attended}/${m.stats.me.total}</b> · 공부 <b>${fmtMinutes(m.stats.me.minutes)}</b> · 메이트 출석 <b>${m.stats.mate.attended}/${m.stats.mate.total}</b></p>
       ${apptTable(m, { highlight: target?.id })}
       ${nextLine}
+      ${upcoming.length ? '<button type="button" class="btn ghost block mt" id="add-cal">캘린더에 추가</button>' : ''}
     </section>
 
     ${OPTIONS.demo ? `
@@ -1216,6 +1221,13 @@ function drawMatch(m, alive) {
       toast(`${fmtMinutes(res.minutes)} 공부를 기록했어요.`);
       refresh(res.match);
     } catch (err) { toast(err.message, true); }
+  });
+  // 남은 약속을 캘린더(.ics)로 내려받기 → 구글·애플·아웃룩 캘린더에서 열어 추가
+  $('#add-cal')?.addEventListener('click', () => {
+    const ics = buildCalendar(upcoming, { mateName: m.mate.name });
+    if (!ics) { toast('추가할 약속이 없어요.'); return; }
+    downloadFile('studybuddy.ics', ics, 'text/calendar;charset=utf-8');
+    toast('캘린더 파일을 받았어요. 파일을 열면 캘린더에 추가돼요.');
   });
   $('#leave')?.addEventListener('click', async () => {
     if (!confirm(leaveConfirm(m))) return;
@@ -1723,15 +1735,20 @@ async function renderMe(alive) {
 }
 
 // 내 정보 내려받기 (server/privacy.js exportMyData): 내가 낸 정보와 내 기록을 JSON 파일 하나로
+// 텍스트를 파일로 내려받기 (Blob → 임시 링크 클릭)
+function downloadFile(filename, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
 async function downloadMyData() {
   try {
     const data = await api('/me/export');
-    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-    const a = Object.assign(document.createElement('a'), { href: url, download: `studybuddy-my-data-${String(data.exportedAt).slice(0, 10)}.json` });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    downloadFile(`studybuddy-my-data-${String(data.exportedAt).slice(0, 10)}.json`, JSON.stringify(data, null, 2), 'application/json');
     toast('내 정보를 파일로 내려받았어요.');
   } catch (err) { toast(err.message, true); }
 }
