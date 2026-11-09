@@ -358,6 +358,41 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(recent.target, `match:${matchId}`);
     });
 
+    test('알림: 매칭되면 두 사람에게 메일, 알림 끈 사람·봇·데모는 제외, 실패해도 흐름 안 막음', async () => {
+      const sent = [];
+      await start({ mailer: { send: async (m) => { sent.push(m); } } });
+      const [a, b, c, d] = [browser(), browser(), browser(), browser()];
+      await join(a, 'na@test.dev'); await join(b, 'nb@test.dev');
+      await a('POST', '/requests', REQ);
+      const r = await b('POST', '/requests', REQ);
+      assert.ok(r.data.matchId, '바로 매칭됨');
+      assert.equal(sent.length, 2, '두 사람에게 한 통씩');
+      assert.ok(sent.every((m) => /매칭/.test(m.subject)), '매칭 알림 제목');
+      assert.deepEqual(new Set(sent.map((m) => m.to)), new Set(['na@test.dev', 'nb@test.dev']));
+
+      // 알림 끈 사람은 제외
+      sent.length = 0;
+      await join(c, 'nc@test.dev'); await join(d, 'nd@test.dev');
+      assert.deepEqual((await c('POST', '/me/notify', { optOut: true })).data, { notifyOptOut: true });
+      await c('POST', '/requests', REQ);
+      await d('POST', '/requests', REQ);
+      assert.deepEqual(sent.map((m) => m.to), ['nd@test.dev'], '알림 끈 c는 제외');
+
+      // 알림 설정이 마이페이지(/me)에 반영됨
+      assert.equal((await c('GET', '/me')).data.user.notifyOptOut, true);
+      assert.equal((await d('GET', '/me')).data.user.notifyOptOut, false);
+    });
+
+    test('알림: 메일 발송이 실패해도 매칭은 정상 (알림은 흐름을 막지 않음)', async () => {
+      await start({ mailer: { send: async () => { throw new Error('mail down'); } } });
+      const [a, b] = [browser(), browser()];
+      await join(a, 'fa@test.dev'); await join(b, 'fb@test.dev');
+      await a('POST', '/requests', REQ);
+      const r = await b('POST', '/requests', REQ);
+      assert.equal(r.status, 201, '메일이 죽어도 매칭 신청은 성공');
+      assert.ok(r.data.matchId);
+    });
+
     test('매일 작업: 대기 신청끼리 다시 맞추기, 오래된 기록 정리, 상태 기록 → /api/health', async () => {
       const h0 = await browser()('GET', '/health');
       assert.equal(h0.status, 200);

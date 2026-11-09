@@ -111,8 +111,14 @@ export const publicUser = (u) => u && {
 
 export const privateUser = (u) => u && {
   ...publicUser(u), email: u.email, department: u.department ?? null, phone: decryptField(u.phone),
-  isAdmin: ADMIN_EMAILS.includes(u.email),
+  isAdmin: ADMIN_EMAILS.includes(u.email), notifyOptOut: !!u.notify_opt_out,
 };
+
+// 이메일 알림 켜기/끄기 (마이페이지). 돌려주는 값으로 화면 상태를 맞춘다.
+export async function setNotifyOptOut(db, userId, optOut) {
+  await db.run('UPDATE users SET notify_opt_out = ? WHERE id = ?', optOut ? 1 : 0, userId);
+  return { notifyOptOut: !!optOut };
+}
 
 const getUser = (db, id) => db.get('SELECT * FROM users WHERE id = ?', id);
 
@@ -650,7 +656,7 @@ export async function rematchPending(db) {
     `SELECT r.id FROM match_requests r JOIN users u ON u.id = r.user_id
      WHERE r.status = 'pending' AND u.is_bot = 0 AND u.email <> ? ORDER BY r.id`, DEMO_ACCOUNT.email,
   )).map((r) => r.id);
-  let made = 0;
+  const made = []; // 새로 맺힌 매치 id (커밋 뒤 알림을 보내려고 모은다)
   for (const id of ids) {
     try {
       const match = await db.tx(async (t) => {
@@ -658,7 +664,7 @@ export async function rematchPending(db) {
         const row = await t.get('SELECT status FROM match_requests WHERE id = ?', id);
         return row?.status === 'pending' ? tryMatch(t, id) : null;
       });
-      if (match) made++;
+      if (match) made.push(match.id);
     } catch (err) {
       if (!(err instanceof AppError)) throw err; // 스터디 기간이 끝난 신청 등은 건너뛴다
     }

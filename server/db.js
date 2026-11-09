@@ -22,6 +22,7 @@ const ADDED_COLUMNS = [
   ['users', 'agreed_at', 'TEXT'], // 개인정보 처리방침 동의 시각
   ['users', 'privacy_version', 'TEXT'], // 동의한 처리방침 버전 (server/options.js PRIVACY_POLICY)
   ['users', 'deleted_at', 'TEXT'], // 탈퇴 시각 (계정 정보는 지우고 '탈퇴한 사용자'로 남김)
+  ['users', 'notify_opt_out', 'INTEGER NOT NULL DEFAULT 0'], // 이메일 알림 끄기 (0=받음, 1=안 받음)
 ];
 
 export function migrations(dialect) {

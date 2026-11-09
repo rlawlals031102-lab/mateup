@@ -1681,6 +1681,14 @@ async function renderMe(alive) {
         </a>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
     </section>
 
+    <section class="section">
+      <h2 class="section-title">알림</h2>
+      <button type="button" class="list-item" id="notify-toggle" aria-pressed="${!user.notifyOptOut}" style="width:100%;background:none;border:0;border-bottom:1px solid var(--soft);cursor:pointer">
+        <span class="small">매칭·약속 이메일 알림</span><span class="switch"></span>
+      </button>
+      <p class="tiny muted mt">매칭이 되거나 약속·리포트가 생기면 ${esc(user.email)}로 알려 드려요.</p>
+    </section>
+
     ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">개발자 화면</a>' : ''}
     <nav class="me-links" aria-label="계정">
       <a class="text-btn" href="privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a>
@@ -1703,6 +1711,15 @@ async function renderMe(alive) {
   });
   $('#delete-account').addEventListener('click', openDeleteAccount);
   $('#export-data').addEventListener('click', downloadMyData);
+  $('#notify-toggle').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const on = btn.getAttribute('aria-pressed') === 'true'; // 지금 켜져 있나
+    btn.setAttribute('aria-pressed', String(!on));
+    try {
+      await api('/me/notify', { method: 'POST', body: { optOut: on } }); // 켜져 있으면 끄기(optOut true)
+      toast(on ? '이메일 알림을 껐어요.' : '이메일 알림을 켰어요.');
+    } catch (err) { btn.setAttribute('aria-pressed', String(on)); toast(err.message, true); }
+  });
 }
 
 // 내 정보 내려받기 (server/privacy.js exportMyData): 내가 낸 정보와 내 기록을 JSON 파일 하나로
