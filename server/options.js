@@ -12,9 +12,9 @@ export const STUDY_PERIOD = {
 };
 
 export const STYLES = {
-  check: { label: '체크형', desc: '쿨한 출석체크, 무소음 초집중' },
-  talk: { label: '대화형', desc: '가벼운 티타임, 긍정 에너지 공유' },
-  social: { label: '사교형', desc: '공부 후 식사, 네트워크' },
+  check: { label: '체크형', desc: '조용히 공부하기' },
+  talk: { label: '대화형', desc: '공부와 가벼운 대화' },
+  social: { label: '사교형', desc: '공부 후 네트워킹' },
 };
 
 // 약속 시작 몇 분 전부터 출석할 수 있는지
