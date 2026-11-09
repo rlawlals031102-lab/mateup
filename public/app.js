@@ -950,10 +950,13 @@ async function renderApply(alive) {
         </div>
       </div>
       <div class="field"><span>장소 설정 (중복 선택 가능)</span>
-        <div class="style-picker" id="loc" style="grid-template-columns:repeat(2, 1fr)">
+        <div class="pick-list" id="loc">
           ${OPTIONS.locations.map((l) => {
             const [, name, sub] = l.match(/^(.*?)\s*\((.*)\)$/) ?? [null, l, ''];
-            return `<button type="button" data-loc="${esc(l)}" aria-pressed="false"><b>${esc(name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</button>`;
+            return `<button type="button" data-loc="${esc(l)}" aria-pressed="false">
+              <span class="check" aria-hidden="true"></span>
+              <span class="ct"><b>${esc(name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>
+            </button>`;
           }).join('')}
         </div>
       </div>
@@ -961,7 +964,7 @@ async function renderApply(alive) {
 
     <section class="card">
       <div class="card-head"><h2>공부 스타일 선택</h2><span class="hint">중복 선택 가능</span></div>
-      <div class="style-list" id="styles">
+      <div class="pick-list" id="styles">
         ${Object.entries(OPTIONS.styles).map(([k, s]) => `
           <button type="button" data-style="${k}" aria-pressed="false">
             <span class="check" aria-hidden="true"></span>
