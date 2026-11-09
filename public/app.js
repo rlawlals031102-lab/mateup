@@ -1842,7 +1842,7 @@ async function renderAdmin(alive) {
       ${a.matches.map((m) => `
         <div class="admin-item">
           <div class="row" style="justify-content:space-between"><b>${esc(m.names.join(' ↔ '))}</b><span class="pill${m.status === 'closed' ? ' gray' : ' lime'}">${STATUS[m.status] ?? m.status}</span></div>
-          <div class="tiny muted">${shortDay(m.weekStart)}~${shortDay(m.weekEnd)} · ${esc(scheduleText(m.schedule))} · ${esc(m.location)}</div>
+          <div class="tiny muted">${shortDay(m.weekStart)}~${shortDay(m.weekEnd)} · ${esc(scheduleText(m.schedule))} · ${esc(m.location)} · ${styleLabels(m.styles)}</div>
           ${m.leftBy ? `<div class="tiny" style="color:var(--red)">${esc(m.leftBy)}님이 중간에 그만둠</div>` : ''}
           ${m.messageCount ? `<button type="button" class="btn sm mt" data-view-chat="${m.id}" data-label="대화 보기 (${m.messageCount})">대화 보기 (${m.messageCount})</button>
           <div id="admin-chat-${m.id}"></div>` : ''}

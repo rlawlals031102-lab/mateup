@@ -516,8 +516,10 @@ export function compatibility(a, b) {
   const common = cellsA.filter((c) => cellsB.has(c));
   const schedule = scheduleFromCells(common);
   if (!schedule.length) return null;
-  const styles = a.styles.filter((s) => b.styles.includes(s));
-  if (!styles.length) return null;
+  // 겹치는 교류 수준이 여럿이면 가장 사교적인 하나로 잡는다 (체크형 < 대화형 < 사교형, STYLES 순서)
+  const commonStyles = Object.keys(STYLES).filter((s) => a.styles.includes(s) && b.styles.includes(s));
+  if (!commonStyles.length) return null;
+  const styles = [commonStyles.at(-1)];
   return {
     days: schedule.map((r) => r.day),
     schedule: schedule.map(({ day, start, end }) => ({ day, start, end })),
@@ -1028,7 +1030,7 @@ const maskEmail = (e) => e.replace(/^(.{3}).*@/, '$1***@');
 export async function adminDashboard(db) {
   const real = (col) => `${col} IN (SELECT id FROM users WHERE is_bot = 0 AND email <> '${DEMO_ACCOUNT.email}')`;
   const n = async (sql) => Number((await db.get(sql)).n);
-  const users = await db.all(`SELECT * FROM users WHERE is_bot = 0 AND email <> ? ORDER BY id`, DEMO_ACCOUNT.email);
+  const users = await db.all(`SELECT * FROM users WHERE is_bot = 0 AND email <> ? ORDER BY id DESC`, DEMO_ACCOUNT.email); // 최신 가입자가 위
   const nameOf = new Map((await db.all('SELECT id, name, is_bot FROM users')).map((u) => [u.id, u.is_bot ? `${u.name}(데모)` : u.name]));
 
   // 방문: 사이트를 열 때마다 한 줄. 사람 수는 브라우저 id로 센다.

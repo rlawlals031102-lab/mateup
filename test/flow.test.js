@@ -26,6 +26,10 @@ test('compatibility: 장소·요일·시간·스타일 조건', () => {
   assert.equal(c.startTime, '19:00');
   assert.equal(c.endTime, '21:00');
   assert.deepEqual(c.styles, ['check']);
+  // 겹치는 교류 수준이 여럿이면 가장 사교적인 하나 (체크형 < 대화형 < 사교형)
+  const all3 = ['check', 'talk', 'social'];
+  assert.deepEqual(S.compatibility({ ...a, styles: ['check', 'talk'] }, { ...b, styles: all3 }).styles, ['talk']);
+  assert.deepEqual(S.compatibility({ ...a, styles: all3 }, { ...b, styles: ['social', 'check'] }).styles, ['social']);
 
   assert.equal(S.compatibility(a, { ...b, location: '채팅으로 정하기' }), null);
   assert.equal(S.compatibility(a, { ...b, days: [2] }), null);
