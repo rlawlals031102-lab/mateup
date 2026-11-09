@@ -326,6 +326,38 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.deepEqual(await S.strikeStatus(db, aId), { count: 0, limit: 2, suspendDays: 30, suspendedUntil: null });
     });
 
+    test('대화 보기: 운영자만, 매칭 하나씩 열고 열 때마다 기록됨. 첫 화면에는 수만 있고 내용은 없음', async () => {
+      const [a, b, c, admin] = [browser(), browser(), browser(), browser()];
+      await join(a, 'va@test.dev');
+      await join(b, 'vb@test.dev');
+      await join(c, 'vc@test.dev');
+      await join(admin, ADMIN);
+      await a('POST', '/requests', REQ);
+      const { data: { matchId } } = await b('POST', '/requests', REQ);
+      await a('POST', `/matches/${matchId}/messages`, { body: '내일 7시에 봬요' });
+      await b('POST', `/matches/${matchId}/messages`, { body: '네 좋아요' });
+
+      const dash = await admin('GET', '/admin');
+      assert.deepEqual(dash.data.chats, [], '신고 안 된 대화는 첫 화면에 싣지 않음');
+      assert.equal(dash.data.matches.find((m) => m.id === matchId).messageCount, 2);
+      assert.equal(JSON.stringify(dash.data).includes('내일 7시에 봬요'), false, '첫 화면에는 내용이 없음');
+
+      assert.equal((await c('GET', `/admin/matches/${matchId}/chat`)).status, 403, '운영자만');
+      assert.equal((await browser()('GET', `/admin/matches/${matchId}/chat`)).status, 401);
+      assert.equal((await admin('GET', '/admin/matches/99999/chat')).status, 404);
+
+      const chat = await admin('GET', `/admin/matches/${matchId}/chat`);
+      assert.equal(chat.status, 200);
+      assert.equal(chat.headers.get('cache-control'), 'no-store');
+      assert.deepEqual(chat.data.names, ['va', 'vb']);
+      assert.deepEqual(chat.data.messages.map((m) => [m.name, m.body]), [['va', '내일 7시에 봬요'], ['vb', '네 좋아요']]);
+      await admin('GET', `/admin/matches/${matchId}/chat`);
+      const logs = await db.all("SELECT target FROM admin_logs WHERE action = 'view_chat' ORDER BY id");
+      assert.deepEqual(logs.map((r) => r.target), [`match:${matchId}`, `match:${matchId}`], '열 때마다 남음 (못 찾은 매칭은 안 남음)');
+      const recent = (await admin('GET', '/admin')).data.adminLogs.find((l) => l.action === 'view_chat');
+      assert.equal(recent.target, `match:${matchId}`);
+    });
+
     test('매일 작업: 대기 신청끼리 다시 맞추기, 오래된 기록 정리, 상태 기록 → /api/health', async () => {
       const h0 = await browser()('GET', '/health');
       assert.equal(h0.status, 200);

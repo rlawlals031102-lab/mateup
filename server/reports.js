@@ -1,5 +1,5 @@
 // 채팅 신고: 매칭된 두 사람만 그 대화를 신고할 수 있다. 같은 사람이 같은 대화를 다시 신고하면 내용을 바꾼다.
-// 운영진은 신고된 대화만 확인한다 (개발자 화면, server/admin.js reportList).
+// 신고된 대화는 개발자 화면에 바로 보인다 (server/admin.js reportList). 다른 대화는 운영자가 '대화 보기'로 열 때만 (matchChat, 열람 기록).
 import { AppError } from './service.js';
 import * as T from './time.js';
 

@@ -1054,7 +1054,10 @@ export async function adminDashboard(db) {
   const codes = await db.all('SELECT email, purpose, used, attempts, created_at FROM email_codes ORDER BY id DESC');
   const joined = new Set(users.map((u) => u.email));
   const notJoined = new Set(codes.filter((c) => c.purpose === 'signup' && !joined.has(c.email)).map((c) => c.email));
-  // 운영진은 신고된 대화만 본다 (처리방침 5번). 처리를 마친 신고의 대화는 다시 보이지 않는다.
+  // 첫 화면에는 처리 안 한 신고의 대화만 싣는다 (처리방침 5번). 처리를 마친 신고의 대화는 다시 보이지 않는다.
+  // 다른 매칭의 대화는 운영자가 '대화 보기'를 누를 때만 따로 연다 (server/admin.js matchChat, 열람 기록).
+  const messageCount = new Map((await db.all('SELECT match_id, COUNT(*) AS n FROM messages GROUP BY match_id'))
+    .map((r) => [r.match_id, Number(r.n)]));
   const messages = await db.all(
     `SELECT match_id, user_id, body, created_at FROM messages
      WHERE match_id IN (SELECT match_id FROM reports WHERE status = 'open') ORDER BY id`,
@@ -1097,6 +1100,7 @@ export async function adminDashboard(db) {
       id: m.id, names: [nameOf.get(m.user_a), nameOf.get(m.user_b)], status: m.status,
       weekStart: m.week_start, weekEnd: m.week_end, schedule: m.schedule, location: m.location, styles: m.styles,
       leftBy: m.report?.leftBy ? nameOf.get(m.report.leftBy) : null, createdAt: m.created_at,
+      messageCount: messageCount.get(m.id) ?? 0, // 수만 (내용은 '대화 보기'로)
     })),
     users: users.map((u) => ({
       id: u.id, name: u.name, department: u.department ?? null, phone: decryptField(u.phone),
