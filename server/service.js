@@ -510,12 +510,12 @@ export function validateRequest(input) {
 
 // 두 신청이 매칭 가능한지 판단하고, 가능하면 합의 조건과 점수를 돌려준다.
 // 조건: 겹치는 장소 1개 이상, 겹치는 요일 1개 이상, 겹치는 시간 1시간 이상, 공통 스타일 1개 이상.
-// 겹치는 장소가 여럿이면 정해진 장소(강의실 등)를 '채팅으로 정하기'보다 먼저 고른다.
+// 겹치는 장소가 여럿이면 잡힌 교류 수준으로 고른다: 체크형이면 정해진 장소(강의실 등),
+// 대화형·사교형이면 '채팅으로 정하기'를 먼저.
 export function compatibility(a, b) {
   const locsB = locationsOf(b);
   const commonLocs = LOCATIONS.filter((l) => locationsOf(a).includes(l) && locsB.includes(l));
   if (!commonLocs.length) return null;
-  const location = commonLocs.find((l) => l !== '채팅으로 정하기') ?? commonLocs[0];
   // 시간표에서 둘 다 고른 칸 → 요일마다 가장 길게 이어진 시간이 그날 약속 (1시간 이상)
   const cellsA = a.cells ?? cellsFromRange(a.days, a.start_time ?? a.startTime, a.end_time ?? a.endTime);
   const cellsB = new Set(b.cells ?? cellsFromRange(b.days, b.start_time ?? b.startTime, b.end_time ?? b.endTime));
@@ -526,6 +526,10 @@ export function compatibility(a, b) {
   const commonStyles = Object.keys(STYLES).filter((s) => a.styles.includes(s) && b.styles.includes(s));
   if (!commonStyles.length) return null;
   const styles = [commonStyles.at(-1)];
+  const CHAT = '채팅으로 정하기';
+  const location = styles[0] === 'check'
+    ? commonLocs.find((l) => l !== CHAT) ?? commonLocs[0]
+    : commonLocs.find((l) => l === CHAT) ?? commonLocs[0];
   return {
     days: schedule.map((r) => r.day),
     schedule: schedule.map(({ day, start, end }) => ({ day, start, end })),

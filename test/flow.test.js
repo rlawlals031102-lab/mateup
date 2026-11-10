@@ -41,6 +41,12 @@ test('compatibility: 장소·요일·시간·스타일 조건', () => {
   assert.equal(S.compatibility({ ...a, ...both }, b).location, ROOM);
   assert.equal(S.compatibility({ ...a, ...both }, { ...b, location: '채팅으로 정하기' }).location, '채팅으로 정하기');
   assert.equal(S.compatibility({ ...a, ...both }, { ...b, ...both }).location, ROOM);
+  // 둘 다 고른 경우: 체크형이면 강의실, 대화형·사교형이면 채팅으로 정하기
+  const talk = { styles: ['talk'] };
+  const social = { styles: ['social'] };
+  assert.equal(S.compatibility({ ...a, ...both, ...talk }, { ...b, ...both, ...talk }).location, '채팅으로 정하기');
+  assert.equal(S.compatibility({ ...a, ...both, ...social }, { ...b, ...both, ...social }).location, '채팅으로 정하기');
+  assert.equal(S.compatibility({ ...a, ...both, ...talk }, { ...b, location: ROOM, ...talk }).location, ROOM, '겹치는 곳이 강의실뿐이면 강의실');
 });
 
 test('신청 검증: 장소는 여러 개 고를 수 있음', () => {
