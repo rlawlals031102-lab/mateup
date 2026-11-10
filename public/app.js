@@ -266,9 +266,7 @@ async function router() {
   scroller().scrollTo(0, 0);
   const pastId = name.match(/^history\/(\d+)$/)?.[1];
   const [, sub, subId] = name.match(/^(match|chat)\/(\d+)$/) ?? [];
-  const [, adminMatchId, adminSide] = name.match(/^admin\/match\/(\d+)(?:\/(a|b))?$/) ?? [];
-  const render = adminMatchId ? (alive) => renderAdminMatch(alive, Number(adminMatchId), adminSide ?? 'a')
-    : pastId ? (alive) => renderPast(alive, Number(pastId))
+  const render = pastId ? (alive) => renderPast(alive, Number(pastId))
     : sub === 'match' ? (alive) => renderMatch(alive, Number(subId))
       : sub === 'chat' ? (alive) => renderChat(alive, Number(subId))
         : routes[name] ?? renderHome;
@@ -1078,23 +1076,8 @@ async function renderMatch(alive, id) {
   drawMatch(match, alive);
 }
 
-// 개발자 화면 '매칭 화면 보기': 당사자 한 명이 보는 매칭중 화면 그대로 (버튼은 눌리지 않음, 열람은 운영 기록에 남음)
-async function renderAdminMatch(alive, id, side) {
-  setTop({ title: '매칭 화면 보기', back: '#/admin' });
-  setTabs(null);
-  loading();
-  const { match } = await api(`/admin/matches/${id}/view?as=${side}`);
-  if (!alive()) return;
-  myStrikes = match.viewer.strikes; // '매칭 그만두기' 안내에 그 사람의 약속 기록이 나오게
-  drawMatch(match, alive, { admin: true });
-}
-
-function drawMatch(m, alive, { admin = false } = {}) {
-  const tabs = admin ? `
-  <div class="mate-tabs">${m.viewer.names.map((n, i) => `
-    <a href="#/admin/match/${m.id}/${'ab'[i]}" class="${m.viewer.side === 'ab'[i] ? 'on' : ''}">${esc(n)}<small>님이 보는 화면</small></a>`).join('')}
-  </div>
-  <p class="tiny muted">개발자 화면 · 보기 전용이라 버튼은 눌리지 않아요. 연 기록이 운영 기록에 남아요.</p>` : mateTabs;
+function drawMatch(m, alive) {
+  const tabs = mateTabs;
   const target = m.appointments.find((a) => a.me.status === 'studying' || a.mate.status === 'studying')
     ?? m.appointments.find((a) => a.me.status === 'open' || a.mate.status === 'open');
   const next = m.appointments.find((a) => a.me.status === 'scheduled');
@@ -1169,7 +1152,7 @@ function drawMatch(m, alive, { admin = false } = {}) {
       ${nextLine}
     </section>
 
-    ${OPTIONS.demo && !admin ? `
+    ${OPTIONS.demo ? `
       <div class="demo-bar">
         <b>데모 모드</b> · 시간과 상관없이 출석할 수 있고, 주간을 바로 마감해 리포트를 볼 수 있어요.
         <button class="btn sm block mt" id="settle">이번 주 마감하고 리포트 받기</button>
@@ -1182,9 +1165,7 @@ function drawMatch(m, alive, { admin = false } = {}) {
 
   $$('img[data-qr]').forEach(async (img) => {
     const id = img.dataset.qr;
-    const qrSvg = admin && m.appointments.find((a) => String(a.id) === id)?.qrSvg;
-    img.src = admin ? (qrSvg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qrSvg)}` : '')
-      : window.__mockQr ? await window.__mockQr(Number(id)).catch(() => '') : `/api/appointments/${id}/qr`;
+    img.src = window.__mockQr ? await window.__mockQr(Number(id)).catch(() => '') : `/api/appointments/${id}/qr`;
     // 누르면 메이트가 찍기 쉽게 크게 보여 준다 (아무 데나 누르면 닫힘)
     img.addEventListener('click', () => {
       const modal = $('#modal');
@@ -1208,12 +1189,6 @@ function drawMatch(m, alive, { admin = false } = {}) {
     };
     tick();
     every(1000, tick);
-  }
-
-  // 개발자 화면에서는 보기만: 버튼·입력칸을 막고, 아래 동작은 연결하지 않는다
-  if (admin) {
-    $$('button, input', view).forEach((el) => { el.disabled = true; });
-    return;
   }
 
   const refresh = (match) => {
@@ -1669,7 +1644,7 @@ async function renderMe(alive) {
   setTop({ title: '마이페이지' });
   setTabs('me');
   loading();
-  const [{ user, strikes }, { matches }] = await Promise.all([api('/me'), api('/me/history')]);
+  const [{ user, strikes }, { matches, record }] = await Promise.all([api('/me'), api('/me/history')]);
   if (!alive()) return;
   const st = strikes ?? { count: 0, limit: rule().strikeLimit };
 
@@ -1687,6 +1662,22 @@ async function renderMe(alive) {
         </div>
       </div>
     </section>
+
+    ${record && record.weeks ? `
+    <section class="section">
+      <h2 class="section-title">내 공부 기록</h2>
+      <div class="record-grid">
+        <div class="record"><b>${record.streak}</b><span>주 연속</span></div>
+        <div class="record"><b>${record.weeks}</b><span>함께한 주</span></div>
+        <div class="record"><b>${fmtMinutes(record.minutes)}</b><span>총 공부</span></div>
+        <div class="record"><b>${record.rate}%</b><span>출석률</span></div>
+      </div>
+      ${record.streak >= 2
+        ? `<p class="small muted mt">약속을 <b>${record.streak}주 연속</b> 다 지키고 있어요. 이대로 쭉 가요!</p>`
+        : record.best >= 2
+          ? `<p class="small muted mt">최고 <b>${record.best}주 연속</b> 기록이 있어요. 다시 이어가 봐요.</p>`
+          : ''}
+    </section>` : ''}
 
     <section class="section">
       <div class="section-head"><h2 class="section-title">약속 기록</h2>
@@ -1818,7 +1809,7 @@ async function renderAdmin(alive) {
   const openReports = (a.reports ?? []).filter((r) => r.status === 'open');
   const ADMIN_ACTION = {
     view_dashboard: '개발자 화면 열람', view_reports: '신고 대화 열람', close_report: '신고 처리 완료',
-    unsuspend: '매칭 정지 풀기', cancel_requests: '대기 신청 취소', view_chat: '대화 열람', view_match: '매칭 화면 열람',
+    unsuspend: '매칭 정지 풀기', cancel_requests: '대기 신청 취소', view_chat: '대화 열람',
   };
   // 운영 기록에서 어느 매칭의 대화를 열었는지 이름으로 보여 준다
   const logTarget = (l) => {
@@ -1890,7 +1881,6 @@ async function renderAdmin(alive) {
           <div class="row" style="justify-content:space-between"><b>${esc(m.names.join(' ↔ '))}</b><span class="pill${m.status === 'closed' ? ' gray' : ' lime'}">${STATUS[m.status] ?? m.status}</span></div>
           <div class="tiny muted">${shortDay(m.weekStart)}~${shortDay(m.weekEnd)} · ${esc(scheduleText(m.schedule))} · ${esc(m.location)} · ${styleLabels(m.styles)}</div>
           ${m.leftBy ? `<div class="tiny" style="color:var(--red)">${esc(m.leftBy)}님이 중간에 그만둠</div>` : ''}
-          <a class="btn sm mt" href="#/admin/match/${m.id}">매칭 화면 보기</a>
           ${m.messageCount ? `<button type="button" class="btn sm mt" data-view-chat="${m.id}" data-label="대화 보기 (${m.messageCount})">대화 보기 (${m.messageCount})</button>
           <div id="admin-chat-${m.id}"></div>` : ''}
         </div>`).join('') || '<p class="small muted">매칭이 없어요.</p>'}

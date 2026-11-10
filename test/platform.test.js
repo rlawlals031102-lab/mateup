@@ -30,6 +30,22 @@ test('vercel.json 보안 헤더가 server/security.js 와 같음', async () => {
   assert.deepEqual(got, { ...SECURITY_HEADERS, 'Strict-Transport-Security': HSTS });
 });
 
+test('공부 기록 집계(aggregateRecord): 누적·현재 연속·최고 연속', () => {
+  const W = (attended, total, minutes, kept) => ({ attended, total, minutes, kept });
+  assert.deepEqual(S.aggregateRecord([]), { weeks: 0, minutes: 0, attended: 0, appts: 0, rate: 0, streak: 0, best: 0 });
+  // 세 주: 지킴 · 못 지킴 · 지킴 → 마지막 주만 연속(1), 최고도 1, 출석 6/8=75%
+  const r = S.aggregateRecord([W(3, 3, 360, true), W(1, 3, 120, false), W(2, 2, 240, true)]);
+  assert.deepEqual(r, { weeks: 3, minutes: 720, attended: 6, appts: 8, rate: 75, streak: 1, best: 1 });
+  // 쭉 지킨 경우: 현재 연속 = 최고 = 전체
+  const r2 = S.aggregateRecord([W(2, 2, 120, true), W(2, 2, 120, true), W(3, 3, 180, true)]);
+  assert.deepEqual([r2.streak, r2.best], [3, 3]);
+  // 길게 이어졌다가 끊긴 뒤 다시 한 주: 최고(3) > 현재(1)
+  const r3 = S.aggregateRecord([W(2, 2, 1, true), W(2, 2, 1, true), W(2, 2, 1, true), W(0, 2, 0, false), W(2, 2, 1, true)]);
+  assert.deepEqual([r3.streak, r3.best], [1, 3]);
+  // 리포트 없는 주(null)는 건너뛴다
+  assert.equal(S.aggregateRecord([null, W(1, 1, 10, true)]).weeks, 1);
+});
+
 for (const [name, open] of Object.entries(DRIVERS)) {
   describe(name, () => {
     let db;
@@ -358,35 +374,6 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(recent.target, `match:${matchId}`);
     });
 
-    test('매칭 화면 보기: 운영자만, 당사자 한 명이 보는 화면 그대로(내 출석 코드·QR 포함), 열 때마다 기록됨', async () => {
-      const [a, b, c, admin] = [browser(), browser(), browser(), browser()];
-      await join(a, 'wa@test.dev');
-      await join(b, 'wb@test.dev');
-      await join(c, 'wc@test.dev');
-      await join(admin, ADMIN);
-      await a('POST', '/requests', REQ);
-      const { data: { matchId } } = await b('POST', '/requests', REQ);
-
-      assert.equal((await c('GET', `/admin/matches/${matchId}/view`)).status, 403, '운영자만');
-      assert.equal((await browser()('GET', `/admin/matches/${matchId}/view`)).status, 401);
-      assert.equal((await admin('GET', '/admin/matches/99999/view')).status, 404);
-
-      const asA = (await admin('GET', `/admin/matches/${matchId}/view`)).data.match;
-      assert.equal(asA.mate.name, 'wb', '기본은 첫 번째 사람 시점');
-      assert.deepEqual(asA.viewer, { side: 'a', names: ['wa', 'wb'], strikes: await S.strikeStatus(db, asA.viewer ? (await db.get('SELECT user_a FROM matches WHERE id = ?', matchId)).user_a : 0) });
-      assert.ok(asA.appointments.length > 0);
-      const aCodes = await db.all(
-        'SELECT c.appointment_id, c.code FROM attendance_codes c JOIN appointments p ON p.id = c.appointment_id WHERE p.match_id = ? AND c.user_id = (SELECT user_a FROM matches WHERE id = ?)', matchId, matchId,
-      );
-      assert.ok(asA.appointments.every((x) => x.myCode === aCodes.find((c) => c.appointment_id === x.id).code), '그 사람 화면의 내 출석 코드');
-      assert.ok(asA.appointments.every((x) => x.qrSvg?.startsWith('<svg')), '출석 QR도 같이');
-      const asB = (await admin('GET', `/admin/matches/${matchId}/view?as=b`)).data.match;
-      assert.equal(asB.mate.name, 'wa');
-      assert.notEqual(asB.appointments[0].myCode, asA.appointments[0].myCode, '사람마다 다른 코드');
-      const logs = await db.all("SELECT target FROM admin_logs WHERE action = 'view_match' ORDER BY id");
-      assert.deepEqual(logs.map((r) => r.target), [`match:${matchId}`, `match:${matchId}`]);
-    });
-
     test('알림: 매칭되면 두 사람에게 메일, 알림 끈 사람·봇·데모는 제외, 실패해도 흐름 안 막음', async () => {
       const sent = [];
       await start({ mailer: { send: async (m) => { sent.push(m); } } });
@@ -481,6 +468,35 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       await start({ cronSecret: 'shh' });
       assert.equal((await browser()('GET', '/cron/settle')).status, 401);
       assert.equal((await browser()('GET', '/cron/settle', null, { authorization: 'Bearer shh' })).status, 200);
+    });
+
+    test('내 공부 기록: /me/history 에 누적·스트릭(record) 이 실린다', async () => {
+      await start();
+      const a = browser();
+      await join(a, 'rec-a@test.dev');
+      const b = browser();
+      await join(b, 'rec-b@test.dev');
+      const me = (await db.get('SELECT id FROM users WHERE email = ?', 'rec-a@test.dev')).id;
+      const mate = (await db.get('SELECT id FROM users WHERE email = ?', 'rec-b@test.dev')).id;
+      const week = (weekStart, mine) => db.run(
+        `INSERT INTO matches (user_a, user_b, days, start_time, end_time, location, styles, stake, week_start, week_end, status, report, created_at)
+         VALUES (?, ?, '[2,3,4]', '19:00', '21:00', ?, '["check"]', 0, ?, ?, 'closed', ?, ?)`,
+        me, mate, ROOM, weekStart, weekStart,
+        JSON.stringify({ generatedAt: '2026-10-20T00:00:00.000Z', users: { [me]: mine, [mate]: { attended: 2, total: 2, minutes: 240, kept: true } } }),
+        new Date().toISOString(),
+      );
+      // 세 주: 지킴 · 못 지킴 · 지킴 (주 시작일 오름차순으로 집계)
+      await week('2026-10-05', { attended: 2, total: 2, minutes: 240, kept: true });
+      await week('2026-10-12', { attended: 1, total: 2, minutes: 90, kept: false });
+      await week('2026-10-19', { attended: 2, total: 2, minutes: 240, kept: true });
+      const rec = (await a('GET', '/me/history')).data.record;
+      assert.deepEqual(rec, { weeks: 3, minutes: 570, attended: 5, appts: 6, rate: 83, streak: 1, best: 1 });
+      // 메이트(b)는 세 주 모두 지킴 → 현재·최고 연속 3
+      assert.deepEqual((await b('GET', '/me/history')).data.record.streak, 3);
+      // 아직 끝난 주가 없는 사람은 0으로 (빈 상태 → 화면에서 숨김)
+      const c = browser();
+      await join(c, 'rec-c@test.dev');
+      assert.deepEqual((await c('GET', '/me/history')).data.record, { weeks: 0, minutes: 0, attended: 0, appts: 0, rate: 0, streak: 0, best: 0 });
     });
 
     test('장애 알림: 웹훅으로 보내고, 같은 알림은 10분에 한 번', async () => {

@@ -114,18 +114,6 @@ export function createApp({
     if (!chat) return res.status(404).json({ error: '매칭을 찾을 수 없어요.' });
     res.set('Cache-Control', 'no-store').json(chat);
   });
-  // 매칭 하나의 매칭중 화면 (개발자 화면 '매칭 화면 보기'. 당사자 한 명이 보는 화면 그대로, 열람 기록이 남는다)
-  api.get('/admin/matches/:id/view', member, async (req, res) => {
-    await S.assertAdmin(db, req.user.id);
-    const match = await S.adminMatchView(db, Number(req.params.id), req.query.as);
-    if (!match) return res.status(404).json({ error: '매칭을 찾을 수 없어요.' });
-    // 그 사람 화면에 뜨는 출석 QR도 같이 보낸다 (QR 주소는 본인만 열 수 있어서)
-    for (const a of match.appointments) {
-      if (a.myCode) a.qrSvg = await QRCode.toString(`SB:${a.id}:${a.myCode}`, { type: 'svg', margin: 1, color: { dark: '#203829', light: '#ffffff' } });
-    }
-    await logAdmin(db, req.user.id, 'view_match', `match:${match.id}`);
-    res.set('Cache-Control', 'no-store').json({ match });
-  });
   api.post('/admin/reports/:id/close', member, async (req, res) => {
     await S.assertAdmin(db, req.user.id);
     res.json({ ok: await closeReport(db, req.user.id, Number(req.params.id)) });
@@ -216,7 +204,10 @@ export function createApp({
   api.put('/me/personal', member, async (req, res) => {
     res.json({ personal: await S.setPersonalSchedule(db, req.user.id, req.body?.entries) });
   });
-  api.get('/me/history', member, async (req, res) => res.json({ matches: await S.matchHistory(db, req.user.id) }));
+  api.get('/me/history', member, async (req, res) => res.json({
+    matches: await S.matchHistory(db, req.user.id),
+    record: await S.studyRecord(db, req.user.id), // 내 공부 기록 (누적·스트릭)
+  }));
 
   // 매칭 신청
   api.post('/requests', member, async (req, res) => {
