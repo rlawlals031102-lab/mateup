@@ -358,6 +358,35 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(recent.target, `match:${matchId}`);
     });
 
+    test('매칭 화면 보기: 운영자만, 당사자 한 명이 보는 화면 그대로(내 출석 코드·QR 포함), 열 때마다 기록됨', async () => {
+      const [a, b, c, admin] = [browser(), browser(), browser(), browser()];
+      await join(a, 'wa@test.dev');
+      await join(b, 'wb@test.dev');
+      await join(c, 'wc@test.dev');
+      await join(admin, ADMIN);
+      await a('POST', '/requests', REQ);
+      const { data: { matchId } } = await b('POST', '/requests', REQ);
+
+      assert.equal((await c('GET', `/admin/matches/${matchId}/view`)).status, 403, '운영자만');
+      assert.equal((await browser()('GET', `/admin/matches/${matchId}/view`)).status, 401);
+      assert.equal((await admin('GET', '/admin/matches/99999/view')).status, 404);
+
+      const asA = (await admin('GET', `/admin/matches/${matchId}/view`)).data.match;
+      assert.equal(asA.mate.name, 'wb', '기본은 첫 번째 사람 시점');
+      assert.deepEqual(asA.viewer, { side: 'a', names: ['wa', 'wb'], strikes: await S.strikeStatus(db, asA.viewer ? (await db.get('SELECT user_a FROM matches WHERE id = ?', matchId)).user_a : 0) });
+      assert.ok(asA.appointments.length > 0);
+      const aCodes = await db.all(
+        'SELECT c.appointment_id, c.code FROM attendance_codes c JOIN appointments p ON p.id = c.appointment_id WHERE p.match_id = ? AND c.user_id = (SELECT user_a FROM matches WHERE id = ?)', matchId, matchId,
+      );
+      assert.ok(asA.appointments.every((x) => x.myCode === aCodes.find((c) => c.appointment_id === x.id).code), '그 사람 화면의 내 출석 코드');
+      assert.ok(asA.appointments.every((x) => x.qrSvg?.startsWith('<svg')), '출석 QR도 같이');
+      const asB = (await admin('GET', `/admin/matches/${matchId}/view?as=b`)).data.match;
+      assert.equal(asB.mate.name, 'wa');
+      assert.notEqual(asB.appointments[0].myCode, asA.appointments[0].myCode, '사람마다 다른 코드');
+      const logs = await db.all("SELECT target FROM admin_logs WHERE action = 'view_match' ORDER BY id");
+      assert.deepEqual(logs.map((r) => r.target), [`match:${matchId}`, `match:${matchId}`]);
+    });
+
     test('알림: 매칭되면 두 사람에게 메일, 알림 끈 사람·봇·데모는 제외, 실패해도 흐름 안 막음', async () => {
       const sent = [];
       await start({ mailer: { send: async (m) => { sent.push(m); } } });

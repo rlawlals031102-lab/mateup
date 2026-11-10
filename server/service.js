@@ -947,6 +947,16 @@ export async function matchById(db, userId, matchId, opts) {
   return matchDetail(db, userId, m, opts);
 }
 
+// 개발자 화면 '매칭 화면 보기': 매칭 당사자 한 명(side a|b)이 보는 매칭중 화면 그대로
+export async function adminMatchView(db, matchId, side) {
+  const m = await getMatchRow(db, matchId);
+  if (!m) return null;
+  const viewer = side === 'b' ? m.user_b : m.user_a;
+  const detail = await matchDetail(db, viewer, m);
+  const names = [(await getUser(db, m.user_a)).name, (await getUser(db, m.user_b)).name];
+  return { ...detail, viewer: { side: side === 'b' ? 'b' : 'a', names, strikes: await strikeStatus(db, viewer) } };
+}
+
 export async function currentMatch(db, userId, opts) {
   await autoSettle(db);
   const m = await currentMatchRow(db, userId);
