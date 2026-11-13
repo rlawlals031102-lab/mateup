@@ -19,8 +19,8 @@ const studyTemplate = (location) => ({
 
 export const BOTS = [
   { email: 'bot-evening@studybuddy.local', name: '김저녁', age: null, avatar: '🌙',
-    tags: ['#저녁공부', '#경상관102A'], bio: '수업 끝나고 저녁에 같이 공부해요',
-    template: studyTemplate('지정 강의실 (경상관 102A)') },
+    tags: ['#저녁공부', '#미래관320호'], bio: '수업 끝나고 저녁에 같이 공부해요',
+    template: studyTemplate('지정 강의실 (미래관 320호)') },
   { email: 'bot-chat@studybuddy.local', name: '김대화', age: null, avatar: '💬',
     tags: ['#저녁공부', '#장소는채팅으로'], bio: '장소는 채팅으로 같이 정해요',
     template: studyTemplate('채팅으로 정하기') },

@@ -18,7 +18,7 @@ import { alertOps } from '../server/ops.js';
 import { hashToken } from '../server/sessions.js';
 
 const DRIVERS = { sqlite: () => openSqlite(':memory:'), postgres: () => openPglite() };
-const ROOM = '지정 강의실 (경상관 102A)';
+const ROOM = '지정 강의실 (미래관 320호)';
 const REQ = { days: [2, 3, 4], location: ROOM, styles: ['check'] };
 const ADMIN = 'rlawlals031102@kookmin.ac.kr';
 const MIN = 60 * 1000;
@@ -428,27 +428,27 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       const [a, b] = [browser(), browser()];
       await join(a, 'ra@test.dev'); await join(b, 'rb@test.dev');
       await a('POST', '/requests', REQ);
-      const { data: { matchId } } = await b('POST', '/requests', REQ); // 11/10·11·12 19:00 약속
+      const { data: { matchId } } = await b('POST', '/requests', REQ); // 11/17·18·19 19:00 약속
       assert.ok(matchId);
       sent.length = 0; // 매칭 성사 메일은 비워 두고 리마인드만 본다
 
-      // 11/10 16:00 = 당일 19:00 약속 3시간 전 → '오늘' 리마인드 두 사람
-      setNow(kst(2026, 11, 10, 16, 0));
+      // 11/17 16:00 = 당일 19:00 약속 3시간 전 → '오늘' 리마인드 두 사람
+      setNow(kst(2026, 11, 17, 16, 0));
       assert.equal((await a('GET', '/cron/reminders')).data.sent, 2);
       assert.ok(sent.every((m) => /오늘/.test(m.subject)), '당일 리마인드');
       // 다시 돌려도 중복 발송 없음
       assert.equal((await a('GET', '/cron/reminders')).data.sent, 0);
 
-      // 11/10 20:00 = 내일(11/11) 약속 전날 저녁 → '내일' 리마인드 두 사람
+      // 11/17 20:00 = 내일(11/18) 약속 전날 저녁 → '내일' 리마인드 두 사람
       sent.length = 0;
-      setNow(kst(2026, 11, 10, 20, 0));
+      setNow(kst(2026, 11, 17, 20, 0));
       assert.equal((await a('GET', '/cron/reminders')).data.sent, 2);
       assert.ok(sent.every((m) => /내일/.test(m.subject)), '전날 저녁 리마인드');
 
       // 알림 끈 사람은 제외
       sent.length = 0;
       await b('POST', '/me/notify', { optOut: true });
-      setNow(kst(2026, 11, 11, 16, 0)); // 11/11 19:00 약속 3시간 전
+      setNow(kst(2026, 11, 18, 16, 0)); // 11/18 19:00 약속 3시간 전
       await a('GET', '/cron/reminders');
       assert.deepEqual(sent.map((m) => m.to), ['ra@test.dev'], '알림 끈 b는 제외');
     });

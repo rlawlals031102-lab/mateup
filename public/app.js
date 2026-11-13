@@ -55,7 +55,7 @@ function fmtTime(t) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 const fmtRange = (a, b) => `${fmtTime(a)}–${fmtTime(b)}`;
-// 이번 회차 날짜·시간 한 줄: "11월 10일(화)·11일(수)·12일(목) 19:00–21:00"
+// 이번 회차 날짜·시간 한 줄: "11월 17일(화)·18일(수)·19일(목) 19:00–21:00"
 function periodText() {
   const p = OPTIONS.studyPeriod;
   const days = p.dates.map((d, i) => {
@@ -547,7 +547,7 @@ const introBody = () => `
         <li><b>함께 공부</b><span class="small muted">약속한 날 만나 각자 공부하고, 서로 QR을 찍어 출석을 확인해요.</span></li>
         <li><b>약속 지키기</b><span class="small muted">약속 날 안 나오거나 매칭을 중간에 그만두면 1회로 쌓여요. ${rule().strikeLimit}회가 되면 ${rule().suspendDays}일 동안 매칭 신청이 멈춰요.</span></li>
       </ol>
-      <p class="small mt"><b>3회차</b> ${periodText()}</p>
+      <p class="small mt"><b>4회차</b> ${periodText()}</p>
       <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a>에 올려요.</p>`;
 
 function showIntro() {

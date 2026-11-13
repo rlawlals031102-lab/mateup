@@ -12,11 +12,11 @@ const DRIVERS = {
   postgres: () => openPglite(),
 };
 
-// 스터디 기간: 2026-11-10(화) ~ 11-12(목) 19:00~21:00 고정. 이 중 원하는 날짜(요일 2·3·4)를 고른다.
-// 장소는 '채팅으로 정하기' / '지정 강의실 (경상관 102A)'.
-const ROOM = '지정 강의실 (경상관 102A)';
+// 스터디 기간: 2026-11-17(화) ~ 11-19(목) 19:00~21:00 고정. 이 중 원하는 날짜(요일 2·3·4)를 고른다.
+// 장소는 '채팅으로 정하기' / '지정 강의실 (미래관 320호)'.
+const ROOM = '지정 강의실 (미래관 320호)';
 const baseReq = { days: [2, 3, 4], location: ROOM, styles: ['check'] };
-const STUDY_DATES = ['2026-11-10', '2026-11-11', '2026-11-12'];
+const STUDY_DATES = ['2026-11-17', '2026-11-18', '2026-11-19'];
 
 test('compatibility: 장소·요일·시간·스타일 조건', () => {
   const a = { ...baseReq, days: [1, 3], start_time: '18:00', end_time: '21:00' };
@@ -73,10 +73,10 @@ test('신청 검증: 화·수·목 중 원하는 날짜, 시간은 19~21시 고�
   assert.deepEqual([one.days, one.cells, one.startTime, one.endTime], [[2, 4], ['2-8', '4-7'], '19:00', '21:00']);
   assert.throws(() => S.validateRequest({ ...baseReq, days: [2], cells: ['1-0'] }), /시간을/);
   // 이미 지난 날짜는 못 고름, 마지막 약속이 끝나면 신청 마감
-  setNow(kst(2026, 11, 10, 21, 0));
+  setNow(kst(2026, 11, 17, 21, 0));
   assert.throws(() => S.validateRequest(baseReq), /지난 날짜/);
   assert.doesNotThrow(() => S.validateRequest({ ...baseReq, days: [3, 4] }));
-  setNow(kst(2026, 11, 12, 21, 0));
+  setNow(kst(2026, 11, 19, 21, 0));
   assert.throws(() => S.validateRequest(baseReq), /끝나서/);
   setNow(null);
 });
@@ -88,15 +88,15 @@ test('11/1(일)은 스터디 날짜가 아님', () => {
 });
 
 test('약속 날짜: 한국 시간 기준으로 끝나지 않은 스터디 날짜만', () => {
-  setNow(kst(2026, 11, 10, 0, 30)); // 한국 화요일 00:30 = UTC 월요일 15:30
+  setNow(kst(2026, 11, 17, 0, 30)); // 한국 화요일 00:30 = UTC 월요일 15:30
   assert.deepEqual(S.planStudy().dates.map((d) => d.date), STUDY_DATES);
-  setNow(kst(2026, 11, 10, 21, 0)); // 첫날 약속이 끝남
+  setNow(kst(2026, 11, 17, 21, 0)); // 첫날 약속이 끝남
   const p = S.planStudy();
-  assert.deepEqual(p.dates.map((d) => d.date), ['2026-11-11', '2026-11-12']);
-  assert.deepEqual([p.weekStart, p.weekEnd], ['2026-11-10', '2026-11-12']);
+  assert.deepEqual(p.dates.map((d) => d.date), ['2026-11-18', '2026-11-19']);
+  assert.deepEqual([p.weekStart, p.weekEnd], ['2026-11-17', '2026-11-19']);
   // 두 사람이 함께 고른 요일만
-  assert.deepEqual(S.planStudy([{ day: 3 }]).dates.map((d) => d.date), ['2026-11-11']);
-  setNow(kst(2026, 11, 12, 21, 0));
+  assert.deepEqual(S.planStudy([{ day: 3 }]).dates.map((d) => d.date), ['2026-11-18']);
+  setNow(kst(2026, 11, 19, 21, 0));
   assert.throws(() => S.planStudy(), /끝났어요/);
   setNow(null);
 });
@@ -146,17 +146,17 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       // A는 세 번 모두 출석(B가 A의 QR·코드로 확인), B는 첫 날만 출석(A가 B의 코드로 확인)
       const bView = await S.currentMatch(db, b);
       for (const [i, appt] of m.appointments.entries()) {
-        setNow(kst(2026, 11, 10 + i, 19, 0));
+        setNow(kst(2026, 11, 17 + i, 19, 0));
         await assert.rejects(S.confirmMate(db, b, appt.id, 'WRONG1'), /맞지 않아요/);
         await S.confirmMate(db, b, appt.id, appt.myCode);
         await assert.rejects(S.confirmMate(db, b, appt.id, appt.myCode), /이미 확인/);
         if (i === 0) await S.confirmMate(db, a, appt.id, bView.appointments[0].myCode);
-        setNow(kst(2026, 11, 10 + i, 21, 30));
+        setNow(kst(2026, 11, 17 + i, 21, 30));
         assert.equal((await S.checkOut(db, a, appt.id)).minutes, 120);
       }
 
       // 마지막 날 다음 날 자동 정산
-      setNow(kst(2026, 11, 13, 9, 0));
+      setNow(kst(2026, 11, 20, 9, 0));
       const reported = await S.currentMatch(db, a);
       assert.equal(reported.status, 'reported');
       assert.equal(reported.report.me.rate, 100);
@@ -199,7 +199,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       const { matchId } = await S.createRequest(db, c, { ...baseReq, days: [3, 4] }); // 수·목 → a와 수요일
       const m = await S.matchById(db, c, matchId);
       assert.equal(m.mate.name, 'a');
-      assert.deepEqual(m.appointments.map((x) => x.date), ['2026-11-11']);
+      assert.deepEqual(m.appointments.map((x) => x.date), ['2026-11-18']);
       assert.deepEqual(m.schedule, [{ day: 3, start: '19:00', end: '21:00' }]);
 
       // a는 수요일이 매칭됐으니 수요일은 다시 못 고르고, 목요일은 추가로 신청 가능 → 기다리던 b와 매칭
@@ -262,7 +262,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       // 마지막 약속이 끝난 뒤 → 그만두는 대신 정산 (리포트)
       await S.createRequest(db, a, baseReq);
       ({ matchId } = await S.createRequest(db, b, baseReq));
-      setNow(kst(2026, 11, 12, 21, 30));
+      setNow(kst(2026, 11, 19, 21, 30));
       assert.equal((await S.leaveMatch(db, a, matchId)).result, 'settled');
       assert.equal((await S.currentMatch(db, a)).status, 'reported');
     });
@@ -297,23 +297,23 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       await assert.rejects(S.createRequest(db, a, baseReq), /끝나서/);
     }));
 
-    test('약속 지키기: 약속 날 미참석은 정산 때 한 번씩 셈, 규칙 시작일 전 약속은 제외', () => withRuleFrom('2026-11-11', async () => {
+    test('약속 지키기: 약속 날 미참석은 정산 때 한 번씩 셈, 규칙 시작일 전 약속은 제외', () => withRuleFrom('2026-11-18', async () => {
       const [a, b] = [await signup('a'), await signup('b')];
       await S.createRequest(db, a, baseReq);
       const { matchId } = await S.createRequest(db, b, baseReq);
       const m = await S.currentMatch(db, a);
       // a는 세 번 모두 출석(b가 a의 코드로 확인), b는 한 번도 안 나옴
       for (const [i, appt] of m.appointments.entries()) {
-        setNow(kst(2026, 11, 10 + i, 19, 0));
+        setNow(kst(2026, 11, 17 + i, 19, 0));
         await S.confirmMate(db, b, appt.id, appt.myCode);
       }
-      setNow(kst(2026, 11, 13, 9, 0));
+      setNow(kst(2026, 11, 20, 9, 0));
       await S.autoSettle(db);
       await S.settleMatch(db, matchId); // 다시 불러도 두 번 세지 않음
       assert.equal((await S.strikeStatus(db, a)).count, 0);
-      // 11/10은 시작일(11/11) 전이라 제외 → 11/11·11/12 두 번 → 정지 (11/13 + 30일 = 12/13부터)
+      // 11/17은 시작일(11/18) 전이라 제외 → 11/18·11/19 두 번 → 정지 (11/20 + 30일 = 12/20부터)
       const st = await S.strikeStatus(db, b);
-      assert.deepEqual([st.count, st.suspendedUntil], [2, '2026-12-12T15:00:00.000Z']);
+      assert.deepEqual([st.count, st.suspendedUntil], [2, '2026-12-19T15:00:00.000Z']);
       const rows = await db.all('SELECT kind, appointment_id FROM strikes WHERE user_id = ? ORDER BY id', b);
       assert.deepEqual(rows.map((r) => r.kind), ['missed', 'missed']);
       // 정지 중에는 '같은 메이트와 계속하기'도 막힘
@@ -324,8 +324,8 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       const [a, b] = [await signup('a'), await signup('b')];
       await S.createRequest(db, a, baseReq);
       const { matchId } = await S.createRequest(db, b, baseReq);
-      // 11/10 약속에 둘 다 안 나오고, 11/11 낮에 a가 그만둠 → a: 미참석 1 + 그만두기 1, b: 미참석 1
-      setNow(kst(2026, 11, 11, 12, 0));
+      // 11/17 약속에 둘 다 안 나오고, 11/18 낮에 a가 그만둠 → a: 미참석 1 + 그만두기 1, b: 미참석 1
+      setNow(kst(2026, 11, 18, 12, 0));
       const left = await S.leaveMatch(db, a, matchId);
       assert.deepEqual([left.strikes.count, !!left.strikes.suspendedUntil], [2, true]);
       assert.deepEqual([(await S.strikeStatus(db, b)).count, (await S.strikeStatus(db, b)).suspendedUntil], [1, null]);
@@ -467,7 +467,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(ma.appointments[0].mateCode, null, '실제 메이트의 코드는 보이지 않음');
 
       await assert.rejects(S.confirmMate(db, a, apptId, bCode), /출석 확인은/, '약속 시간 전에는 안 됨');
-      setNow(kst(2026, 11, 10, 19, 0));
+      setNow(kst(2026, 11, 17, 19, 0));
       await assert.rejects(S.confirmMate(db, a, apptId, 'ZZZZZZ'), /맞지 않아요/);
       await assert.rejects(S.confirmMate(db, a, apptId, aCode), /메이트의 출석 코드를/);
       await S.confirmMate(db, a, apptId, bCode.toLowerCase()); // a가 b를 확인
@@ -522,7 +522,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       const m = await S.currentMatch(db, demoId);
       const ap = m.appointments[0];
       assert.ok(ap.mateCode, '데모 메이트 코드는 체험용으로 보임');
-      setNow(kst(2026, 11, 10, 19, 0));
+      setNow(kst(2026, 11, 17, 19, 0));
       await S.confirmMate(db, demoId, ap.id, ap.mateCode);
       const after = (await S.currentMatch(db, demoId)).appointments[0];
       assert.deepEqual([after.me.status, after.mate.status], ['studying', 'studying']);
