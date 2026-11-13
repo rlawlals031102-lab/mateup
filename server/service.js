@@ -986,6 +986,39 @@ export async function matchHistory(db, userId) {
   return out;
 }
 
+// 끝난 주들의 내 기록을 모아 누적·스트릭을 계산한다. (순수 함수 — 테스트하기 쉽게 분리)
+// weeks: 주 시작일 오름차순의 [{ attended, total, minutes, kept }] (한 주에 하나).
+//  - streak: 가장 최근까지 '약속을 다 지킨 주(kept)'가 연달아 이어진 수 (현재 연속)
+//  - best: 지금까지 가장 길게 이어진 연속
+export function aggregateRecord(weeks) {
+  let w = 0;
+  let minutes = 0;
+  let attended = 0;
+  let appts = 0;
+  let run = 0;
+  let best = 0;
+  for (const me of weeks) {
+    if (!me) continue;
+    w += 1;
+    minutes += me.minutes || 0;
+    attended += me.attended || 0;
+    appts += me.total || 0;
+    if (me.kept) { run += 1; if (run > best) best = run; } else { run = 0; }
+  }
+  return { weeks: w, minutes, attended, appts, rate: appts ? Math.round((attended / appts) * 100) : 0, streak: run, best };
+}
+
+// 마이페이지 '내 공부 기록': 끝난 주(리포트가 있는 매칭)를 모아 누적·스트릭을 돌려준다.
+export async function studyRecord(db, userId) {
+  const rows = await db.all(
+    `SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status IN ('reported', 'closed')
+     ORDER BY week_start ASC, id ASC`,
+    userId, userId,
+  );
+  const mine = rows.map((r) => parseMatch(r).report?.users?.[userId]).filter(Boolean);
+  return aggregateRecord(mine);
+}
+
 export async function homeState(db, userId, opts) {
   const matches = await activeMatches(db, userId, opts);
   const pendings = await pendingRequests(db, userId);
