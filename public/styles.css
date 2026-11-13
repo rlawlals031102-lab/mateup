@@ -525,6 +525,13 @@ a.link-item:hover { background: var(--soft); }
 .next-line, .meta-line { font-size: 13px; color: var(--muted); margin-top: 12px; }
 .next-line b, .meta-line b { color: var(--ink); }
 
+/* 내 공부 기록: 숫자 칸 네 개 (연속·주·시간·출석률) */
+.record-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.record { background: var(--soft); border-radius: var(--r); padding: 12px 6px; text-align: center; }
+.record b { display: block; font-size: 20px; font-weight: 800; color: var(--green); line-height: 1.15; word-break: keep-all; }
+.record span { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
+@media (max-width: 380px) { .record b { font-size: 17px; } }
+
 /* 나란히 놓인 숫자 칸 대신 한 줄씩 읽는 목록 */
 .facts { list-style: none; margin: 8px 0 0; }
 .facts li { display: flex; align-items: baseline; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }

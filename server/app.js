@@ -216,7 +216,10 @@ export function createApp({
   api.put('/me/personal', member, async (req, res) => {
     res.json({ personal: await S.setPersonalSchedule(db, req.user.id, req.body?.entries) });
   });
-  api.get('/me/history', member, async (req, res) => res.json({ matches: await S.matchHistory(db, req.user.id) }));
+  api.get('/me/history', member, async (req, res) => res.json({
+    matches: await S.matchHistory(db, req.user.id),
+    record: await S.studyRecord(db, req.user.id), // 내 공부 기록 (누적·스트릭)
+  }));
 
   // 매칭 신청
   api.post('/requests', member, async (req, res) => {

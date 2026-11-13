@@ -1669,7 +1669,7 @@ async function renderMe(alive) {
   setTop({ title: '마이페이지' });
   setTabs('me');
   loading();
-  const [{ user, strikes }, { matches }] = await Promise.all([api('/me'), api('/me/history')]);
+  const [{ user, strikes }, { matches, record }] = await Promise.all([api('/me'), api('/me/history')]);
   if (!alive()) return;
   const st = strikes ?? { count: 0, limit: rule().strikeLimit };
 
@@ -1687,6 +1687,22 @@ async function renderMe(alive) {
         </div>
       </div>
     </section>
+
+    ${record && record.weeks ? `
+    <section class="section">
+      <h2 class="section-title">내 공부 기록</h2>
+      <div class="record-grid">
+        <div class="record"><b>${record.streak}</b><span>주 연속</span></div>
+        <div class="record"><b>${record.weeks}</b><span>함께한 주</span></div>
+        <div class="record"><b>${fmtMinutes(record.minutes)}</b><span>총 공부</span></div>
+        <div class="record"><b>${record.rate}%</b><span>출석률</span></div>
+      </div>
+      ${record.streak >= 2
+        ? `<p class="small muted mt">약속을 <b>${record.streak}주 연속</b> 다 지키고 있어요. 이대로 쭉 가요!</p>`
+        : record.best >= 2
+          ? `<p class="small muted mt">최고 <b>${record.best}주 연속</b> 기록이 있어요. 다시 이어가 봐요.</p>`
+          : ''}
+    </section>` : ''}
 
     <section class="section">
       <div class="section-head"><h2 class="section-title">약속 기록</h2>
