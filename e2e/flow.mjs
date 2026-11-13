@@ -55,6 +55,16 @@ async function main() {
     if (!(await B.isVisible('#scan'))) fail('메이트 화면에 출석 확인(QR 찍기)이 없어요');
     await shot(B, '01_match');
 
+    step('약속을 캘린더(.ics)로 내려받기');
+    const [cal] = await Promise.all([B.waitForEvent('download'), B.click('#add-cal')]);
+    if (cal.suggestedFilename() !== 'studybuddy.ics') fail(`캘린더 파일 이름이 이상해요: ${cal.suggestedFilename()}`);
+    const calFile = path.join(dir, 'cal.ics');
+    await cal.saveAs(calFile);
+    const ics = await readFile(calFile, 'utf8');
+    for (const must of [/^BEGIN:VCALENDAR/, /BEGIN:VEVENT/, /DTSTART;TZID=Asia\/Seoul:\d{8}T\d{6}/, /END:VCALENDAR$/]) {
+      if (!must.test(ics)) fail(`.ics 내용이 이상해요: ${must}`);
+    }
+
     step('채팅 → 상대 탭에 안 읽은 숫자');
     await A.goto(`${BASE}/#/chat`);
     await A.waitForSelector('#send input');
