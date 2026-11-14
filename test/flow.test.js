@@ -673,14 +673,16 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal((await S.unreadCounts(db, demo)).total, 1, '데모 메이트의 자동 답장 1개');
     });
 
-    test('개발자 화면 권한: 김지민·나윤빈 학교 메일만', async () => {
+    test('개발자 화면 권한: 김지민·나윤빈·김근영·이주하 학교 메일만', async () => {
       const make = async (email) => (await S.signup(db, {
         email, password: 'secret1', name: '운영', department: '경영정보학부', phone: '010-1111-2222',
       })).user;
       const jimin = await make('rlawlals031102@kookmin.ac.kr');
       const yunbin = await make('YunBinNa6@kookmin.ac.kr'); // 대소문자 섞어 가입해도 같은 메일
+      const geunyoung = await make('rmsdud06@kookmin.ac.kr');
+      const juha = await make('dlwngk@kookmin.ac.kr');
       const other = await make('someone@kookmin.ac.kr');
-      assert.deepEqual([jimin.isAdmin, yunbin.isAdmin, other.isAdmin], [true, true, false]);
+      assert.deepEqual([jimin.isAdmin, yunbin.isAdmin, geunyoung.isAdmin, juha.isAdmin, other.isAdmin], [true, true, true, true, false]);
       await S.assertAdmin(db, jimin.id);
       await S.assertAdmin(db, yunbin.id);
       await assert.rejects(S.assertAdmin(db, other.id), /개발자만/);

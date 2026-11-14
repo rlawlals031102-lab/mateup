@@ -77,7 +77,7 @@ GitHub `main` 브랜치에 push하면 Vercel이 `npm run build:vercel`을 실행
 | 비밀번호 | scrypt(비동기), 없는 메일로 로그인해도 같은 시간 | `server/service.js` |
 | 횟수 제한 | 로그인 5번 틀리면 15분 잠금, 인증메일 IP당 1시간 10번·메일당 하루 10번, 메시지 1분 30개 등. DB에 세서 서버가 여러 대여도 같이 셈 | `server/security.js` |
 | 보안 헤더 | CSP(같은 주소의 스크립트만), 화면 끼워 넣기 금지, HSTS 등. `vercel.json`과 같은 값인지 테스트가 확인 | `server/security.js` |
-| 개인정보 | 처리방침(`public/privacy.html`)과 가입 동의, 기존 회원 동의 창, 내 정보 내려받기(JSON, 상대방 정보 제외), 회원 탈퇴(정보 삭제·'탈퇴한 사용자'), 보관 기간 지나면 자동 삭제. 전화번호는 운영 연락용으로 그대로 저장(2026-11-06 결정: 메이트에게는 안 보이고 운영자 2명만 열람) | `server/privacy.js` |
+| 개인정보 | 처리방침(`public/privacy.html`)과 가입 동의, 기존 회원 동의 창, 내 정보 내려받기(JSON, 상대방 정보 제외), 회원 탈퇴(정보 삭제·'탈퇴한 사용자'), 보관 기간 지나면 자동 삭제. 전화번호는 운영 연락용으로 그대로 저장(2026-11-06 결정: 메이트에게는 안 보이고 운영자만 열람, 2026-11-14부터 4명) | `server/privacy.js` |
 | 신고·운영자 | 채팅 신고, 매칭 대화 보기(누를 때마다 열람 기록), 운영자 열람 기록, 정지 풀기 | `server/reports.js`, `server/admin.js` |
 | 운영 | 요청 번호·오류 로그, 디스코드/슬랙 알림, `/api/health`, 매일 작업 기록, GitHub 30분 상태 확인(실패하면 메일), 약속 리마인드 메일(30분마다), 백업·복구 연습·운영 스크립트 | `server/ops.js`, `server/notify.js`, `scripts/`, `.github/workflows/uptime.yml`, `.github/workflows/reminders.yml` |
 | DB 구조 | 구조가 바뀐 경우에만 한 번 적용(지문 비교) + 번호 붙은 변경, 서버 여러 대가 동시에 켜져도 한 번만 | `server/migrate.js` |

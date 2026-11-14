@@ -44,7 +44,7 @@ export const PRIOR_TEAMS = 14;
 
 // 개발자 화면을 볼 수 있는 계정 (운영자). 메일은 소문자로 적는다.
 export const ADMIN_EMAIL = 'rlawlals031102@kookmin.ac.kr'; // 김지민
-export const ADMIN_EMAILS = [ADMIN_EMAIL, 'yunbinna6@kookmin.ac.kr']; // 김지민, 나윤빈
+export const ADMIN_EMAILS = [ADMIN_EMAIL, 'yunbinna6@kookmin.ac.kr', 'rmsdud06@kookmin.ac.kr', 'dlwngk@kookmin.ac.kr']; // 김지민, 나윤빈, 김근영, 이주하
 
 // 이메일 인증번호: 유효 시간(분), 최대 입력 시도, 재발송 간격(초)
 export const EMAIL_CODE_TTL_MIN = 10;
