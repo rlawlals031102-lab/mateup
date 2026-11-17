@@ -1860,6 +1860,11 @@ async function renderAdmin(alive) {
     return m ? ` (${m.names.join(' ↔ ')})` : '';
   };
   const shortDay = (s) => `${Number(s.slice(5, 7))}/${Number(s.slice(8))}`;
+  // 중간에 끝난 매칭 분류 (관리자 화면만): 출석 전에 끊기면 취소, 출석이 한 번이라도 있었으면 그만둠
+  const END_KINDS = ['취소', '상대 취소', '그만둠', '상대가 그만둠'];
+  const endLabel = (m, uid) => (!m.endKind ? null
+    : m.endKind === 'cancel' ? (m.leftById === uid ? '취소' : '상대 취소')
+      : (m.leftById === uid ? '그만둠' : '상대가 그만둠'));
   const maxHour = Math.max(1, ...a.visits.byHour);
   const funnelHTML = (rows) => {
     const max = Math.max(1, ...rows.map((f) => f.count));
@@ -1877,12 +1882,18 @@ async function renderAdmin(alive) {
     <section class="card">
       <div class="card-head"><h2>방문 통계</h2><span class="hint">총 ${a.visits.total}번 방문</span></div>
       <p class="small">지금까지 들어온 사람 <b>${a.visits.people}명</b></p>
-      <p class="small muted mt">날짜별 들어온 사람</p>
-      ${a.visits.byDay.map((d) => `<div class="list-item"><span>${shortDay(d.day)}</span><span><b>${d.people}명</b> <span class="tiny muted">· ${d.visits}번</span></span></div>`).join('') || '<p class="small muted">아직 기록이 없어요.</p>'}
       <p class="small muted mt">시간대별 방문 (한국 시간)</p>
       <div class="hour-bars">
         ${a.visits.byHour.map((v, h) => `<div title="${h}시 ${v}번"><i style="height:${(v / maxHour) * 100}%"></i><span>${h % 3 === 0 ? h : ''}</span></div>`).join('')}
       </div>
+      <p class="small muted mt">날짜별 들어온 사람 (최근 7일)</p>
+      ${(() => {
+        const days = [...a.visits.byDay].sort((x, y) => (x.day < y.day ? 1 : -1)); // 최신 날짜가 위
+        const row = (d) => `<div class="list-item"><span>${shortDay(d.day)}</span><span><b>${d.people}명</b> <span class="tiny muted">· ${d.visits}번</span></span></div>`;
+        if (!days.length) return '<p class="small muted">아직 기록이 없어요.</p>';
+        return days.slice(0, 7).map(row).join('')
+          + `<details class="mt"><summary class="small">전체 날짜 보기 (${days.length}일)</summary>${days.map(row).join('')}</details>`;
+      })()}
       <details class="mt"><summary class="small">같은 사람의 시간대별 방문 보기</summary>
         ${a.visits.perVisitor.map((p) => `<div class="list-item"><span>방문자${p.visitor} · ${shortDay(p.day)}</span><span class="tiny">${Object.entries(p.hours).map(([h, n]) => `${h}시 ${n}번`).join(', ')}</span></div>`).join('')}
       </details>
@@ -1900,24 +1911,17 @@ async function renderAdmin(alive) {
           <div class="row" style="justify-content:space-between"><b>${esc(u.name)}${waiting ? ' <span class="pill lime">대기 중</span>' : ''}</b><span class="tiny muted">${esc(u.department ?? '학과 없음')}</span></div>
           <div class="tiny muted">${esc(u.phone ?? '전화번호 없음')} · 가입 ${fmtAt(u.createdAt)} · 마지막 로그인 ${fmtAt(u.lastLogin)}</div>
           ${reqs.length || ms.length ? `
-          <details class="mt"><summary class="tiny">신청 ${reqs.length}건 · 성사 ${ms.length}건</summary>
+          <details class="mt"><summary class="tiny">신청 ${reqs.length}건 · 성사 ${ms.length}건(${END_KINDS.map((k) => `${k} ${ms.filter((m) => endLabel(m, u.id) === k).length}`).join(', ')})</summary>
             ${reqs.length ? '<p class="tiny mt"><b>신청한 매칭</b></p>' : ''}
             ${reqs.map((r) => `
               <div class="tiny muted"><span class="pill${r.status === 'pending' ? ' lime' : r.status === 'cancelled' ? ' gray' : ''}">${STATUS[r.status] ?? r.status}</span> ${fmtAt(r.createdAt)} 신청 · ${esc(scheduleText(r.schedule))} · ${esc(r.location)} · ${styleLabels(r.styles)}</div>`).join('')}
             ${ms.length ? '<p class="tiny mt"><b>성사된 매칭</b></p>' : ''}
             ${ms.map((m) => `
-              <div class="tiny muted"><span class="pill${m.status === 'closed' ? ' gray' : ' lime'}">${STATUS[m.status] ?? m.status}</span> 메이트 <b>${esc(m.names[m.userIds.indexOf(u.id) === 0 ? 1 : 0])}</b> · ${shortDay(m.weekStart)}~${shortDay(m.weekEnd)} · ${esc(scheduleText(m.schedule))} · ${esc(m.location)} · ${styleLabels(m.styles)}${m.leftBy ? ` · <span style="color:var(--red)">${esc(m.leftBy)}님이 중간에 그만둠</span>` : ''} · <a class="link" href="#/admin/match/${m.id}/${m.userIds.indexOf(u.id) === 0 ? 'a' : 'b'}">매칭 화면</a></div>`).join('')}
+              <div class="tiny muted"><span class="pill${m.status === 'closed' ? ' gray' : ' lime'}">${STATUS[m.status] ?? m.status}</span> 메이트 <b>${esc(m.names[m.userIds.indexOf(u.id) === 0 ? 1 : 0])}</b> · ${shortDay(m.weekStart)}~${shortDay(m.weekEnd)} · ${esc(scheduleText(m.schedule))} · ${esc(m.location)} · ${styleLabels(m.styles)}${endLabel(m, u.id) ? ` · <span style="color:var(--red)">${endLabel(m, u.id)}</span>` : ''} · <a class="link" href="#/admin/match/${m.id}/${m.userIds.indexOf(u.id) === 0 ? 'a' : 'b'}">매칭 화면</a></div>`).join('')}
           </details>` : '<div class="tiny muted">신청 없음</div>'}
         </div>`;
       }).join('')}
       <p class="tiny muted mt">마지막 로그인은 로그아웃하지 않은 기기 기준이에요. '매칭 화면'을 누르면 그 사람이 보는 화면이 열리고 운영 기록에 남아요.</p>
-    </section>
-
-    <section class="card">
-      <div class="card-head"><h2>인증메일</h2><span class="hint">가입 못 마친 사람 ${a.emailCodes.notJoined}명</span></div>
-      ${a.emailCodes.list.map((c) => `
-        <div class="list-item"><span class="small">${esc(c.email)} <span class="tiny muted">${c.purpose === 'reset' ? '비번 찾기' : '가입'}</span></span>
-          <span class="tiny">${fmtAt(c.created_at)} · ${c.used ? '사용함' : '<b style="color:var(--red)">안 씀</b>'}${c.attempts ? ` · 틀림 ${c.attempts}` : ''}${c.purpose === 'signup' && !c.joined ? ' · 미가입' : ''}</span></div>`).join('')}
     </section>
 
     <section class="card">
@@ -1927,7 +1931,7 @@ async function renderAdmin(alive) {
         <div class="admin-item">
           <div class="row" style="justify-content:space-between"><b>${esc(m.names.join(' ↔ '))}</b><span class="pill${m.status === 'closed' ? ' gray' : ' lime'}">${STATUS[m.status] ?? m.status}</span></div>
           <div class="tiny muted">${shortDay(m.weekStart)}~${shortDay(m.weekEnd)} · ${esc(scheduleText(m.schedule))} · ${esc(m.location)} · ${styleLabels(m.styles)}</div>
-          ${m.leftBy ? `<div class="tiny" style="color:var(--red)">${esc(m.leftBy)}님이 중간에 그만둠</div>` : ''}
+          ${m.endKind ? `<div class="tiny" style="color:var(--red)">${m.userIds.map((id, i) => `${esc(m.names[i])} ${endLabel(m, id)}`).join(' · ')}</div>` : ''}
           <a class="btn sm mt" href="#/admin/match/${m.id}">매칭 화면 보기</a>
           ${m.messageCount ? `<button type="button" class="btn sm mt" data-view-chat="${m.id}" data-label="대화 보기 (${m.messageCount})">대화 보기 (${m.messageCount})</button>
           <div id="admin-chat-${m.id}"></div>` : ''}
@@ -1946,6 +1950,20 @@ async function renderAdmin(alive) {
           <button type="button" class="btn sm mt" data-close-report="${r.id}">처리 완료</button>
         </details>`;
       }).join('') || '<p class="small muted">처리할 신고가 없어요.</p>'}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>인증메일</h2><span class="hint">가입 못 마친 사람 ${a.emailCodes.notJoined}명</span></div>
+      ${(() => {
+        // 최근 7일 것만 바로 보이고, 전체는 펼쳐서 본다 (목록은 이미 최신순)
+        const row = (c) => `
+        <div class="list-item"><span class="small">${esc(c.email)} <span class="tiny muted">${c.purpose === 'reset' ? '비번 찾기' : '가입'}</span></span>
+          <span class="tiny">${fmtAt(c.created_at)} · ${c.used ? '사용함' : '<b style="color:var(--red)">안 씀</b>'}${c.attempts ? ` · 틀림 ${c.attempts}` : ''}${c.purpose === 'signup' && !c.joined ? ' · 미가입' : ''}</span></div>`;
+        const since = Date.now() - 7 * 86400000;
+        const recent = a.emailCodes.list.filter((c) => Date.parse(c.created_at) >= since);
+        return `<p class="small muted">최근 7일</p>${recent.map(row).join('') || '<p class="small muted">최근 7일에 보낸 인증메일이 없어요.</p>'}`
+          + `<details class="mt"><summary class="small">전체 보기 (${a.emailCodes.list.length}건)</summary>${a.emailCodes.list.map(row).join('') || '<p class="small muted">보낸 인증메일이 없어요.</p>'}</details>`;
+      })()}
     </section>
 
     <section class="card">

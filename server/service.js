@@ -1171,6 +1171,10 @@ export async function adminDashboard(db) {
       id: m.id, userIds: [m.user_a, m.user_b], names: [nameOf.get(m.user_a), nameOf.get(m.user_b)], status: m.status,
       weekStart: m.week_start, weekEnd: m.week_end, schedule: m.schedule, location: m.location, styles: m.styles,
       leftBy: m.report?.leftBy ? nameOf.get(m.report.leftBy) : null, createdAt: m.created_at,
+      leftById: m.report?.leftBy ?? null,
+      // 중간에 끝난 매칭: 출석이 한 번도 없었으면 '취소', 한 번이라도 있었으면 '그만둠' (관리자 화면 분류)
+      endKind: m.report?.leftBy
+        ? (Object.values(m.report.users ?? {}).some((u) => (u?.attended ?? 0) > 0) ? 'quit' : 'cancel') : null,
       messageCount: messageCount.get(m.id) ?? 0, // 수만 (내용은 '대화 보기'로)
     })),
     users: users.map((u) => ({

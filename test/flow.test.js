@@ -673,6 +673,24 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal((await S.unreadCounts(db, demo)).total, 1, '데모 메이트의 자동 답장 1개');
     });
 
+    test('관리자 화면: 중간에 끝난 매칭은 출석 전이면 취소, 출석이 있었으면 그만둠', async () => {
+      const [a, b, c, d] = [await signup('ca'), await signup('cb'), await signup('cc'), await signup('cd')];
+      setNow(kst(2026, 11, 16, 12, 0)); // 첫 약속(11/17) 전
+      await S.createRequest(db, a, baseReq);
+      const { matchId: m1 } = await S.createRequest(db, b, baseReq);
+      await S.leaveMatch(db, a, m1); // 출석 전 → 취소
+      await S.createRequest(db, c, baseReq);
+      const { matchId: m2 } = await S.createRequest(db, d, baseReq);
+      const first = await db.get('SELECT id FROM appointments WHERE match_id = ? ORDER BY date', m2);
+      await db.run("INSERT INTO attendance (appointment_id, user_id, method, checked_in_at) VALUES (?, ?, 'mate', ?)",
+        first.id, c, kst(2026, 11, 17, 19, 0).toISOString());
+      setNow(kst(2026, 11, 18, 12, 0)); // 첫 약속 출석 뒤, 다음 약속 전
+      await S.leaveMatch(db, d, m2); // 출석이 있었음 → 그만둠
+      const ms = new Map((await S.adminDashboard(db)).matches.map((m) => [m.id, m]));
+      assert.deepEqual([ms.get(m1).endKind, ms.get(m1).leftById], ['cancel', a]);
+      assert.deepEqual([ms.get(m2).endKind, ms.get(m2).leftById], ['quit', d]);
+    });
+
     test('개발자 화면 권한: 김지민·나윤빈·김근영·이주하·김선우 학교 메일만', async () => {
       const make = async (email) => (await S.signup(db, {
         email, password: 'secret1', name: '운영', department: '경영정보학부', phone: '010-1111-2222',
