@@ -1096,7 +1096,7 @@ function drawMatch(m, alive, { admin = false } = {}) {
   <div class="mate-tabs">${m.viewer.names.map((n, i) => `
     <a href="#/admin/match/${m.id}/${'ab'[i]}" class="${m.viewer.side === 'ab'[i] ? 'on' : ''}">${esc(n)}<small>님이 보는 화면</small></a>`).join('')}
   </div>
-  <p class="tiny muted">개발자 화면 · 보기 전용이라 버튼은 눌리지 않아요. 연 기록이 운영 기록에 남아요.</p>` : mateTabs;
+  <p class="tiny muted">관리자 화면 · 보기 전용이라 버튼은 눌리지 않아요. 연 기록이 운영 기록에 남아요.</p>` : mateTabs;
   const target = m.appointments.find((a) => a.me.status === 'studying' || a.mate.status === 'studying')
     ?? m.appointments.find((a) => a.me.status === 'open' || a.mate.status === 'open');
   const next = m.appointments.find((a) => a.me.status === 'scheduled');
@@ -1742,7 +1742,7 @@ async function renderMe(alive) {
       <p class="tiny muted mt">매칭이 되거나 약속·리포트가 생기면 ${esc(user.email)}로 알려 드려요.</p>
     </section>
 
-    ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">개발자 화면</a>' : ''}
+    ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">관리자 화면</a>' : ''}
     <nav class="me-links" aria-label="계정">
       <a class="text-btn" href="privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a>
       <button type="button" class="text-btn" id="export-data">내 정보 내려받기</button>
@@ -1832,7 +1832,7 @@ function fmtAt(s) {
 }
 
 async function renderAdmin(alive) {
-  setTop({ title: '개발자 화면', back: '#/me' });
+  setTop({ title: '관리자 화면', back: '#/me' });
   setTabs(null);
   loading();
   let a;
@@ -1850,7 +1850,7 @@ async function renderAdmin(alive) {
   const STATUS = { pending: '대기', matched: '매칭됨', cancelled: '취소', active: '진행 중', reported: '리포트 대기', closed: '끝남' };
   const openReports = (a.reports ?? []).filter((r) => r.status === 'open');
   const ADMIN_ACTION = {
-    view_dashboard: '개발자 화면 열람', view_reports: '신고 대화 열람', close_report: '신고 처리 완료',
+    view_dashboard: '관리자 화면 열람', view_reports: '신고 대화 열람', close_report: '신고 처리 완료',
     unsuspend: '매칭 정지 풀기', cancel_requests: '대기 신청 취소', view_chat: '대화 열람', view_match: '매칭 화면 열람',
   };
   // 운영 기록에서 어느 매칭의 대화를 열었는지 이름으로 보여 준다
@@ -1889,13 +1889,28 @@ async function renderAdmin(alive) {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>가입자</h2><span class="hint">${a.users.length}명</span></div>
-      ${a.users.map((u) => `
+      <div class="card-head"><h2>가입자 · 매칭 신청</h2><span class="hint">${a.users.length}명 · 대기 ${a.summary.pendingRequests}건 · 신청 ${a.requests.length}건</span></div>
+      ${a.users.map((u) => {
+        // 가입자마다 신청한 매칭·성사된 매칭을 최신순으로 (서버에서 이미 최신순)
+        const reqs = a.requests.filter((r) => r.userId === u.id);
+        const ms = a.matches.filter((m) => m.userIds.includes(u.id));
+        const waiting = reqs.some((r) => r.status === 'pending');
+        return `
         <div class="admin-item">
-          <div class="row" style="justify-content:space-between"><b>${esc(u.name)}</b><span class="tiny muted">${esc(u.department ?? '학과 없음')}</span></div>
+          <div class="row" style="justify-content:space-between"><b>${esc(u.name)}${waiting ? ' <span class="pill lime">대기 중</span>' : ''}</b><span class="tiny muted">${esc(u.department ?? '학과 없음')}</span></div>
           <div class="tiny muted">${esc(u.phone ?? '전화번호 없음')} · 가입 ${fmtAt(u.createdAt)} · 마지막 로그인 ${fmtAt(u.lastLogin)}</div>
-        </div>`).join('')}
-      <p class="tiny muted mt">마지막 로그인은 로그아웃하지 않은 기기 기준이에요.</p>
+          ${reqs.length || ms.length ? `
+          <details class="mt"><summary class="tiny">신청 ${reqs.length}건 · 성사 ${ms.length}건</summary>
+            ${reqs.length ? '<p class="tiny mt"><b>신청한 매칭</b></p>' : ''}
+            ${reqs.map((r) => `
+              <div class="tiny muted"><span class="pill${r.status === 'pending' ? ' lime' : r.status === 'cancelled' ? ' gray' : ''}">${STATUS[r.status] ?? r.status}</span> ${fmtAt(r.createdAt)} 신청 · ${esc(scheduleText(r.schedule))} · ${esc(r.location)} · ${styleLabels(r.styles)}</div>`).join('')}
+            ${ms.length ? '<p class="tiny mt"><b>성사된 매칭</b></p>' : ''}
+            ${ms.map((m) => `
+              <div class="tiny muted"><span class="pill${m.status === 'closed' ? ' gray' : ' lime'}">${STATUS[m.status] ?? m.status}</span> 메이트 <b>${esc(m.names[m.userIds.indexOf(u.id) === 0 ? 1 : 0])}</b> · ${shortDay(m.weekStart)}~${shortDay(m.weekEnd)} · ${esc(scheduleText(m.schedule))} · ${esc(m.location)} · ${styleLabels(m.styles)}${m.leftBy ? ` · <span style="color:var(--red)">${esc(m.leftBy)}님이 중간에 그만둠</span>` : ''} · <a class="link" href="#/admin/match/${m.id}/${m.userIds.indexOf(u.id) === 0 ? 'a' : 'b'}">매칭 화면</a></div>`).join('')}
+          </details>` : '<div class="tiny muted">신청 없음</div>'}
+        </div>`;
+      }).join('')}
+      <p class="tiny muted mt">마지막 로그인은 로그아웃하지 않은 기기 기준이에요. '매칭 화면'을 누르면 그 사람이 보는 화면이 열리고 운영 기록에 남아요.</p>
     </section>
 
     <section class="card">
@@ -1903,16 +1918,6 @@ async function renderAdmin(alive) {
       ${a.emailCodes.list.map((c) => `
         <div class="list-item"><span class="small">${esc(c.email)} <span class="tiny muted">${c.purpose === 'reset' ? '비번 찾기' : '가입'}</span></span>
           <span class="tiny">${fmtAt(c.created_at)} · ${c.used ? '사용함' : '<b style="color:var(--red)">안 씀</b>'}${c.attempts ? ` · 틀림 ${c.attempts}` : ''}${c.purpose === 'signup' && !c.joined ? ' · 미가입' : ''}</span></div>`).join('')}
-    </section>
-
-    <section class="card">
-      <div class="card-head"><h2>매칭 신청</h2><span class="hint">대기 ${a.summary.pendingRequests}건 · 전체 ${a.requests.length}건</span></div>
-      ${a.requests.map((r) => `
-        <div class="admin-item">
-          <div class="row" style="justify-content:space-between"><b>${esc(r.name)}</b><span class="pill${r.status === 'pending' ? ' lime' : r.status === 'cancelled' ? ' gray' : ''}">${STATUS[r.status] ?? r.status}</span></div>
-          <div class="tiny muted">${esc(scheduleText(r.schedule))} · ${esc(r.location)} · ${styleLabels(r.styles)}</div>
-          <div class="tiny muted">신청 ${fmtAt(r.createdAt)}</div>
-        </div>`).join('') || '<p class="small muted">신청이 없어요.</p>'}
     </section>
 
     <section class="card">
@@ -1944,12 +1949,12 @@ async function renderAdmin(alive) {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>약속 기록</h2><span class="hint">${a.promise.length}명</span></div>
+      <div class="card-head"><h2>약속 어김 기록(약속 기록)</h2><span class="hint">${a.promise.length}명</span></div>
       ${a.promise.map((p) => `
         <div class="admin-item row" style="justify-content:space-between">
-          <span><b>${esc(p.name)}</b> <span class="tiny muted">${p.suspendedUntil ? `매칭 정지 · ${fmtAt(p.suspendedUntil)}까지` : `기록 ${p.count}회`}</span></span>
+          <span><b>${esc(p.name)}</b> <span class="tiny muted">${p.suspendedUntil ? `매칭 정지 · ${fmtAt(p.suspendedUntil)}까지` : `약속 어김 ${p.count}회`}</span></span>
           ${p.suspendedUntil ? `<button type="button" class="btn sm" data-unsuspend="${p.id}" data-name="${esc(p.name)}">정지 풀기</button>` : ''}
-        </div>`).join('') || '<p class="small muted">약속 기록이 있는 사람이 없어요.</p>'}
+        </div>`).join('') || '<p class="small muted">약속 어김 기록이 있는 사람이 없어요.</p>'}
     </section>
 
     <section class="card">
@@ -1983,7 +1988,7 @@ async function renderAdmin(alive) {
     } catch (err) { toast(err.message, true); }
   }));
   $$('[data-unsuspend]').forEach((b) => b.addEventListener('click', async () => {
-    if (!confirm(`${b.dataset.name}님의 매칭 정지를 풀까요? 약속 기록도 0회부터 다시 세요.`)) return;
+    if (!confirm(`${b.dataset.name}님의 매칭 정지를 풀까요? 약속 어김 기록도 0회부터 다시 세요.`)) return;
     try {
       await api(`/admin/users/${b.dataset.unsuspend}/unsuspend`, { method: 'POST' });
       toast('매칭 정지를 풀었어요.');

@@ -953,7 +953,7 @@ export async function adminMatchView(db, matchId, side) {
   if (!m) return null;
   const viewer = side === 'b' ? m.user_b : m.user_a;
   const detail = await matchDetail(db, viewer, m);
-  const names = [(await getUser(db, m.user_a)).name, (await getUser(db, m.user_b)).name];
+  const names = [adminName(await getUser(db, m.user_a)), adminName(await getUser(db, m.user_b))];
   return { ...detail, viewer: { side: side === 'b' ? 'b' : 'a', names, strikes: await strikeStatus(db, viewer) } };
 }
 
@@ -1075,16 +1075,22 @@ export async function recordVisit(db, visitorId) {
 
 export async function assertAdmin(db, userId) {
   const u = await getUser(db, userId);
-  if (!ADMIN_EMAILS.includes(u?.email)) throw new AppError(403, '개발자만 볼 수 있어요.');
+  if (!ADMIN_EMAILS.includes(u?.email)) throw new AppError(403, '관리자만 볼 수 있어요.');
 }
 
 const maskEmail = (e) => e.replace(/^(.{3}).*@/, '$1***@');
+
+// 관리자 화면에서는 운영자 계정 이름 앞에 [관리자]를 붙인다 (예: [관리자]김지민)
+export const adminName = (u) => (u && ADMIN_EMAILS.includes(u.email) ? `[관리자]${u.name}` : u?.name);
+// SQL 안에서 같은 이름을 만든다. alias는 users 테이블 별칭 (운영자 메일은 코드에 적힌 상수라 그대로 넣어도 안전)
+export const adminNameSql = (alias) =>
+  `CASE WHEN ${alias}.email IN (${ADMIN_EMAILS.map((e) => `'${e}'`).join(', ')}) THEN '[관리자]' || ${alias}.name ELSE ${alias}.name END`;
 
 export async function adminDashboard(db) {
   const real = (col) => `${col} IN (SELECT id FROM users WHERE is_bot = 0 AND email <> '${DEMO_ACCOUNT.email}')`;
   const n = async (sql) => Number((await db.get(sql)).n);
   const users = await db.all(`SELECT * FROM users WHERE is_bot = 0 AND email <> ? ORDER BY id DESC`, DEMO_ACCOUNT.email); // 최신 가입자가 위
-  const nameOf = new Map((await db.all('SELECT id, name, is_bot FROM users')).map((u) => [u.id, u.is_bot ? `${u.name}(데모)` : u.name]));
+  const nameOf = new Map((await db.all('SELECT id, name, email, is_bot FROM users')).map((u) => [u.id, u.is_bot ? `${u.name}(데모)` : adminName(u)]));
 
   // 방문: 사이트를 열 때마다 한 줄. 사람 수는 브라우저 id로 센다.
   const visits = await db.all('SELECT visitor_id, day, created_at FROM visits ORDER BY id');
@@ -1158,17 +1164,17 @@ export async function adminDashboard(db) {
     },
     funnel: { all: funnel(false), today: funnel(true) },
     requests: requests.map((r) => ({
-      id: r.id, name: nameOf.get(r.user_id), status: r.status, schedule: r.schedule,
+      id: r.id, userId: r.user_id, name: nameOf.get(r.user_id), status: r.status, schedule: r.schedule,
       location: r.location, styles: r.styles, createdAt: r.created_at,
     })),
     matches: matches.map((m) => ({
-      id: m.id, names: [nameOf.get(m.user_a), nameOf.get(m.user_b)], status: m.status,
+      id: m.id, userIds: [m.user_a, m.user_b], names: [nameOf.get(m.user_a), nameOf.get(m.user_b)], status: m.status,
       weekStart: m.week_start, weekEnd: m.week_end, schedule: m.schedule, location: m.location, styles: m.styles,
       leftBy: m.report?.leftBy ? nameOf.get(m.report.leftBy) : null, createdAt: m.created_at,
       messageCount: messageCount.get(m.id) ?? 0, // 수만 (내용은 '대화 보기'로)
     })),
     users: users.map((u) => ({
-      id: u.id, name: u.name, department: u.department ?? null, phone: decryptField(u.phone),
+      id: u.id, name: adminName(u), department: u.department ?? null, phone: decryptField(u.phone),
       createdAt: u.created_at, lastLogin: lastLogin.get(u.id) ?? null,
     })),
     emailCodes: {

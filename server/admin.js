@@ -2,7 +2,7 @@
 //  - 운영자 행동 기록(admin_logs): 개발자 화면 열람, 신고 대화 열람, 매칭 대화 열람, 정지 해제. 1년 보관.
 //  - 약속 지키기 현황과 정지 해제, 신고 목록, 매칭 하나의 대화.
 import * as T from './time.js';
-import { DEMO_ACCOUNT } from './service.js';
+import { DEMO_ACCOUNT, adminNameSql as N } from './service.js';
 import { REPORT_REASONS } from './reports.js';
 
 export async function logAdmin(db, adminId, action, target = null) {
@@ -12,7 +12,7 @@ export async function logAdmin(db, adminId, action, target = null) {
 
 export async function recentAdminLogs(db, limit = 30) {
   const rows = await db.all(
-    `SELECT l.*, u.name FROM admin_logs l JOIN users u ON u.id = l.admin_id ORDER BY l.id DESC LIMIT ${Number(limit) | 0}`,
+    `SELECT l.*, ${N('u')} AS name FROM admin_logs l JOIN users u ON u.id = l.admin_id ORDER BY l.id DESC LIMIT ${Number(limit) | 0}`,
   );
   return rows.map((r) => ({ id: r.id, name: r.name, action: r.action, target: r.target, at: r.created_at }));
 }
@@ -20,7 +20,7 @@ export async function recentAdminLogs(db, limit = 30) {
 // 약속 기록이 있거나 정지 중인 사람
 export async function promiseOverview(db) {
   const rows = await db.all(
-    `SELECT u.id, u.name, u.suspended_until,
+    `SELECT u.id, ${N('u')} AS name, u.suspended_until,
        (SELECT COUNT(*) FROM strikes s WHERE s.user_id = u.id AND s.created_at > COALESCE(u.strikes_since, '')) AS n
      FROM users u WHERE u.is_bot = 0 AND u.email <> ? AND u.deleted_at IS NULL ORDER BY u.id`,
     DEMO_ACCOUNT.email,
@@ -47,7 +47,7 @@ export async function unsuspend(db, adminId, userId) {
 // 신고 목록 (+ 신고된 대화 내용). 열람은 app.js 에서 admin_logs 에 남긴다.
 export async function reportList(db, { withMessages = true } = {}) {
   const rows = await db.all(
-    `SELECT r.*, ru.name AS reporter, ua.name AS name_a, ub.name AS name_b
+    `SELECT r.*, ${N('ru')} AS reporter, ${N('ua')} AS name_a, ${N('ub')} AS name_b
      FROM reports r JOIN users ru ON ru.id = r.reporter_id JOIN matches m ON m.id = r.match_id
      JOIN users ua ON ua.id = m.user_a JOIN users ub ON ub.id = m.user_b
      ORDER BY (r.status = 'open') DESC, r.id DESC`,
@@ -60,7 +60,7 @@ export async function reportList(db, { withMessages = true } = {}) {
     };
     if (withMessages) {
       item.messages = (await db.all(
-        `SELECT m.body, m.created_at, u.name FROM messages m JOIN users u ON u.id = m.user_id
+        `SELECT m.body, m.created_at, ${N('u')} AS name FROM messages m JOIN users u ON u.id = m.user_id
          WHERE m.match_id = ? ORDER BY m.id`, r.match_id,
       )).map((m) => ({ name: m.name, body: m.body, createdAt: m.created_at }));
     }
@@ -73,12 +73,12 @@ export async function reportList(db, { withMessages = true } = {}) {
 // 처리방침 5번: 신고된 대화와 약속 분쟁 처리에 꼭 필요한 경우에만 확인, 누가 언제 열람했는지 기록.
 export async function matchChat(db, adminId, matchId) {
   const m = await db.get(
-    `SELECT m.id, ua.name AS name_a, ub.name AS name_b FROM matches m
+    `SELECT m.id, ${N('ua')} AS name_a, ${N('ub')} AS name_b FROM matches m
      JOIN users ua ON ua.id = m.user_a JOIN users ub ON ub.id = m.user_b WHERE m.id = ?`, matchId,
   );
   if (!m) return null;
   const messages = (await db.all(
-    `SELECT msg.body, msg.created_at, u.name FROM messages msg JOIN users u ON u.id = msg.user_id
+    `SELECT msg.body, msg.created_at, ${N('u')} AS name FROM messages msg JOIN users u ON u.id = msg.user_id
      WHERE msg.match_id = ? ORDER BY msg.id`, matchId,
   )).map((x) => ({ name: x.name, body: x.body, createdAt: x.created_at }));
   await logAdmin(db, adminId, 'view_chat', `match:${matchId}`);

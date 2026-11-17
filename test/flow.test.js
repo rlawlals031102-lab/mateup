@@ -592,7 +592,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(admin.isAdmin, true);
       const a = await signup('a');
       const b = await signup('b');
-      await assert.rejects(S.assertAdmin(db, a), /개발자만/);
+      await assert.rejects(S.assertAdmin(db, a), /관리자만/);
       await S.assertAdmin(db, admin.id);
 
       await S.recordVisit(db, 'visitor0001');
@@ -605,7 +605,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.deepEqual(d.summary, { todayVisitors: 1, users: 3, pendingRequests: 0, activeMatches: 1 });
       assert.deepEqual(d.funnel.all.map((f) => f.count), [1, 3, 2, 2, 0]);
       assert.deepEqual(d.funnel.today.map((f) => f.count), [1, 3, 2, 2, 0], '모두 오늘 일어난 일');
-      assert.equal(d.users.find((u) => u.name === '운영자').phone, '010-1111-2222');
+      assert.equal(d.users.find((u) => u.name === '[관리자]운영자').phone, '010-1111-2222');
       // 운영진은 신고된 대화만 본다
       assert.deepEqual(d.chats, []);
       const { reportChat } = await import('../server/reports.js');
@@ -684,9 +684,14 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       const sunwoo = await make('ybfl2004@kookmin.ac.kr');
       const other = await make('someone@kookmin.ac.kr');
       assert.deepEqual([jimin.isAdmin, yunbin.isAdmin, geunyoung.isAdmin, juha.isAdmin, sunwoo.isAdmin, other.isAdmin], [true, true, true, true, true, false]);
+      // 관리자 화면에서는 운영자 이름 앞에 [관리자]
+      const names = new Map((await S.adminDashboard(db)).users.map((u) => [u.id, u.name]));
+      assert.equal(names.get(jimin.id), '[관리자]운영');
+      assert.equal(names.get(sunwoo.id), '[관리자]운영');
+      assert.equal(names.get(other.id), '운영');
       await S.assertAdmin(db, jimin.id);
       await S.assertAdmin(db, yunbin.id);
-      await assert.rejects(S.assertAdmin(db, other.id), /개발자만/);
+      await assert.rejects(S.assertAdmin(db, other.id), /관리자만/);
     });
   });
 }
