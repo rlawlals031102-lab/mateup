@@ -256,6 +256,7 @@ const routes = {
   chat: renderChat,
   me: renderMe,
   'me/edit': renderEditProfile,
+  points: renderPoints,
   admin: renderAdmin,
 };
 
@@ -436,6 +437,7 @@ function bindSendCode(form, purpose) {
 }
 
 async function renderLogin() {
+  if (OPTIONS.authMode === 'phone') return renderLoginPhone();
   authShell(`
     <h2>같은 시간에 만나<br>함께 공부해요</h2>
     <p class="lead">매주 새로운 ${OPTIONS.emailDomain ? '국민대 ' : ''}메이트와 약속을 잡고, 함께 공부하며 더 넓은 캠퍼스를 만나요.</p>
@@ -470,6 +472,7 @@ async function renderLogin() {
 }
 
 async function renderSignup() {
+  if (OPTIONS.authMode === 'phone') return renderSignupPhone();
   authShell(`
     <h2>회원가입</h2>
     <p class="lead">${OPTIONS.emailDomain ? '국민대학교 메일로 가입할 수 있어요.' : ''}</p>
@@ -502,13 +505,76 @@ async function renderSignup() {
   });
 }
 
+// ── 전화번호 간편 가입/로그인 (OPTIONS.authMode === 'phone') ──
+async function renderLoginPhone() {
+  authShell(`
+    <h2>같은 시간에 만나<br>함께 공부해요</h2>
+    <p class="lead">매주 새로운 메이트와 약속을 잡고, 함께 공부하며 더 넓은 캠퍼스를 만나요.</p>
+    <form id="f" class="card">
+      <label class="field"><span>전화번호</span><input class="input" name="phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="010-1234-5678" required></label>
+      <label class="field"><span>비밀번호 (숫자 4자리)</span><input class="input" name="password" type="password" inputmode="numeric" maxlength="4" autocomplete="current-password" placeholder="••••" required></label>
+      <button class="btn primary block mt-lg">로그인</button>
+    </form>
+    <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a></p>
+    <p class="legal-link"><a href="privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a></p>
+    ${OPTIONS.demoLogin ? `
+      <div class="demo-login">
+        <button type="button" class="btn block" id="demo-login">데모 계정으로 로그인</button>
+        <p class="tiny muted center">가입 없이 둘러볼 수 있는 체험용 계정이에요.</p>
+      </div>` : ''}`);
+  showIntro();
+  $('#demo-login')?.addEventListener('click', async () => {
+    try { await api('/auth/demo', { method: 'POST' }); location.hash = '#/home'; } catch (err) { toast(err.message, true); }
+  });
+  $('#f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    try {
+      await api('/auth/login', { method: 'POST', body: fd });
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+async function renderSignupPhone() {
+  authShell(`
+    <h2>회원가입</h2>
+    <p class="lead">전화번호만 있으면 바로 시작할 수 있어요.</p>
+    <form id="f" class="card">
+      <label class="field"><span>닉네임 (한글·영문)</span><input class="input" name="name" maxlength="20" autocomplete="nickname" placeholder="앱에서 보일 이름" required></label>
+      <label class="field"><span>전화번호</span><input class="input" name="phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="010-1234-5678" required></label>
+      <p class="tiny muted">전화번호는 운영진 연락용으로만 쓰고, 메이트에게는 보이지 않아요.</p>
+      <label class="field"><span>비밀번호 (숫자 4자리)</span><input class="input" name="password" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password" placeholder="••••" required></label>
+      ${consentSummary()}
+      <label class="agree"><input type="checkbox" name="agree" required>
+        <span><b>[필수]</b> 개인정보 수집·이용에 동의해요 · <a class="link" href="privacy.html" target="_blank" rel="noopener">처리방침 보기</a></span></label>
+      <button class="btn primary block mt">가입하고 시작하기</button>
+    </form>
+    <p class="switch-link">이미 계정이 있나요? <a href="#/login">로그인</a></p>`);
+  $('#f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    fd.agree = fd.agree === 'on';
+    try {
+      await withLoading('', '가입하는 중이에요', () => api('/auth/signup', { method: 'POST', body: fd }));
+      toast('가입을 마쳤어요.');
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
 // ── 개인정보 처리방침 (public/privacy.html) 요약과 동의 창 ──
-const consentSummary = () => `
+const consentSummary = () => (OPTIONS.authMode === 'phone' ? `
+      <dl class="consent-sum">
+        <dt>받는 정보</dt><dd>닉네임, 전화번호, 비밀번호(암호화해서 저장)</dd>
+        <dt>쓰는 곳</dt><dd>본인 확인, 매칭·출석 관리, 운영진 연락. 메이트에게는 닉네임·소개만 보여요</dd>
+        <dt>보관</dt><dd>탈퇴하면 바로 지워요 (자세한 기간은 처리방침)</dd>
+      </dl>` : `
       <dl class="consent-sum">
         <dt>받는 정보</dt><dd>국민대 메일, 이름, 학과, 전화번호, 비밀번호(암호화해서 저장)</dd>
         <dt>쓰는 곳</dt><dd>본인 확인, 매칭·출석 관리, 운영 연락. 메이트에게는 이름·소개만 보여요</dd>
         <dt>보관</dt><dd>탈퇴하면 바로 지워요 (자세한 기간은 처리방침)</dd>
-      </dl>`;
+      </dl>`);
 
 // 처리방침이 생겼거나 바뀐 뒤 처음 들어온 회원: 동의해야 계속 쓸 수 있다 (바깥을 눌러도 닫히지 않음)
 function showConsent() {
@@ -536,6 +602,49 @@ function showConsent() {
     await api('/auth/logout', { method: 'POST' }).catch(() => {});
     closeModal();
     location.hash = '#/login';
+  });
+}
+
+// 공부가 끝나면(체크아웃) 뜨는 간단 이용 후기 팝업: 스마일 별점 1~5(필수) + 서술형(선택, 추첨 안내). 닫기 가능.
+function showReviewPopup(appointmentId) {
+  const modal = $('#modal');
+  let rating = 0;
+  const smiles = [1, 2, 3, 4, 5].map((n) =>
+    `<button type="button" class="rv-star" data-n="${n}" aria-label="${n}점" style="font-size:36px;line-height:1;background:none;border:0;padding:4px;cursor:pointer;opacity:.28;transition:opacity .12s,transform .12s">😊</button>`).join('');
+  modal.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="rv-title">
+      <h3 id="rv-title">오늘 공부 어땠어요?</h3>
+      <p class="small muted">함께한 스터디가 어땠는지 별점으로 알려 주세요.</p>
+      <div id="rv-stars" style="display:flex;justify-content:center;gap:2px;margin:8px 0 4px">${smiles}</div>
+      <label class="field"><span>운영진에게 하고 싶은 말 (선택)</span>
+        <textarea class="input" id="rv-comment" rows="3" maxlength="500" placeholder="운영진에게 하고 싶은 말을 적어주세요, 추첨을 통해 소정의 선물을 드립니다."></textarea>
+      </label>
+      <button class="btn primary block mt" id="rv-submit">후기 보내기</button>
+      <button type="button" class="text-btn" id="rv-skip">다음에 할게요</button>
+    </div>`;
+  modal.hidden = false;
+  modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+  const stars = $('#rv-stars');
+  stars.addEventListener('click', (e) => {
+    const b = e.target.closest('.rv-star');
+    if (!b) return;
+    rating = Number(b.dataset.n);
+    [...stars.children].forEach((c, i) => {
+      const on = i < rating;
+      c.style.opacity = on ? '1' : '.28';
+      c.style.transform = on ? 'scale(1.1)' : 'scale(1)';
+    });
+  });
+  $('#rv-skip').addEventListener('click', closeModal);
+  $('#rv-submit').addEventListener('click', async () => {
+    if (!rating) return toast('별점을 매겨 주세요.', true);
+    try {
+      await api(`/appointments/${appointmentId}/review`, { method: 'POST', body: { rating, comment: $('#rv-comment').value } });
+      closeModal();
+      toast('후기 고마워요! 추첨 선물의 행운을 빌어요 🍀');
+    } catch (err) {
+      if (/이미 후기/.test(err.message)) { closeModal(); toast('이미 후기를 남겼어요. 고마워요!'); } else toast(err.message, true);
+    }
   });
 }
 
@@ -1242,9 +1351,11 @@ function drawMatch(m, alive, { admin = false } = {}) {
   $('#scan')?.addEventListener('click', (e) => openScanner(Number(e.target.dataset.id), refresh));
   $('#checkout')?.addEventListener('click', async (e) => {
     try {
-      const res = await api(`/appointments/${e.target.dataset.id}/checkout`, { method: 'POST' });
+      const apptId = e.target.dataset.id;
+      const res = await api(`/appointments/${apptId}/checkout`, { method: 'POST' });
       toast(`${fmtMinutes(res.minutes)} 공부를 기록했어요.`);
       refresh(res.match);
+      showReviewPopup(apptId); // 공부가 끝나면 간단 이용 후기 팝업
     } catch (err) { toast(err.message, true); }
   });
   // 남은 약속을 캘린더(.ics)로 내려받기 → 구글·애플·아웃룩 캘린더에서 열어 추가
@@ -1692,13 +1803,18 @@ async function renderMe(alive) {
         ${avatarHTML(user, 'lg')}
         <div>
           <div class="name">${esc(user.name)}</div>
-          <div class="small muted">${esc(user.email)}</div>
+          ${OPTIONS.authMode === 'phone' ? '' : `<div class="small muted">${esc(user.email)}</div>`}
           ${user.department || user.phone ? `<div class="small muted">${esc([user.department, user.phone].filter(Boolean).join(' · '))}</div>` : ''}
           ${user.bio ? `<div class="small mt">${esc(user.bio)}</div>` : ''}
           ${tagsHTML(user.tags)}
         </div>
       </div>
     </section>
+
+    <a class="card link-item" href="#/points" style="display:flex;align-items:center;justify-content:space-between">
+      <div><div class="small muted">모은 포인트</div><div style="font-size:22px;font-weight:800">${(user.points ?? 0).toLocaleString()}P</div></div>
+      <span class="small link">기프티콘 교환 ›</span>
+    </a>
 
     ${record && record.weeks ? `
     <section class="section">
@@ -1734,13 +1850,14 @@ async function renderMe(alive) {
         </a>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
     </section>
 
+    ${OPTIONS.authMode === 'phone' ? '' : `
     <section class="section">
       <h2 class="section-title">알림</h2>
       <button type="button" class="list-item" id="notify-toggle" aria-pressed="${!user.notifyOptOut}" style="width:100%;background:none;border:0;border-bottom:1px solid var(--soft);cursor:pointer">
         <span class="small">매칭·약속 이메일 알림</span><span class="switch"></span>
       </button>
       <p class="tiny muted mt">매칭이 되거나 약속·리포트가 생기면 ${esc(user.email)}로 알려 드려요.</p>
-    </section>
+    </section>`}
 
     ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">관리자 화면</a>' : ''}
     <nav class="me-links" aria-label="계정">
@@ -1764,7 +1881,7 @@ async function renderMe(alive) {
   });
   $('#delete-account').addEventListener('click', openDeleteAccount);
   $('#export-data').addEventListener('click', downloadMyData);
-  $('#notify-toggle').addEventListener('click', async (e) => {
+  $('#notify-toggle')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     const on = btn.getAttribute('aria-pressed') === 'true'; // 지금 켜져 있나
     btn.setAttribute('aria-pressed', String(!on));
@@ -1820,6 +1937,60 @@ function openDeleteAccount() {
       location.hash = '#/login';
     } catch (err) { toast(err.message, true); }
   });
+}
+
+// ───────────────────────── 포인트 · 기프티콘 상점 ─────────────────────────
+async function renderPoints(alive) {
+  setTop({ title: '포인트 · 기프티콘', back: '#/me' });
+  setTabs('me');
+  loading();
+  const { balance, logs, items, redemptions } = await api('/me/points');
+  if (!alive()) return;
+  view.innerHTML = `
+    <section class="card" style="text-align:center">
+      <div class="small muted">모은 포인트</div>
+      <div style="font-size:34px;font-weight:800">${balance.toLocaleString()}P</div>
+      <p class="tiny muted">약속을 지키면 보증금을 돌려받고, 메이트가 안 나오면 그 보증금이 내 포인트가 돼요.</p>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">기프티콘 교환</h2>
+      <p class="small muted">교환을 신청하면 포인트가 차감되고, 운영진이 전화번호로 기프티콘을 보내 드려요.</p>
+      ${items.map((it) => `
+        <div class="list-item">
+          <div><b>${esc(it.name)}</b><div class="tiny muted">${it.cost.toLocaleString()}P</div></div>
+          <button class="btn sm ${balance >= it.cost ? 'primary' : ''}" data-redeem="${esc(it.id)}" ${balance >= it.cost ? '' : 'disabled'}>교환 신청</button>
+        </div>`).join('')}
+    </section>
+
+    ${redemptions.length ? `
+    <section class="section">
+      <h2 class="section-title">내 교환 신청</h2>
+      ${redemptions.map((r) => `
+        <div class="list-item">
+          <div><b>${esc(r.item)}</b><div class="tiny muted">${fmtAt(r.createdAt)}</div></div>
+          <span class="small ${r.status === 'done' ? 'muted' : ''}">${r.status === 'done' ? '보냄 ✓' : '대기 중'}</span>
+        </div>`).join('')}
+    </section>` : ''}
+
+    <section class="section">
+      <h2 class="section-title">포인트 내역</h2>
+      ${logs.length ? logs.map((l) => `
+        <div class="list-item">
+          <div><div class="small">${esc(l.reason)}</div><div class="tiny muted">${fmtAt(l.createdAt)}</div></div>
+          <b class="${l.amount >= 0 ? '' : 'muted'}">${l.amount >= 0 ? '+' : ''}${l.amount.toLocaleString()}P</b>
+        </div>`).join('') : '<p class="small muted">아직 내역이 없어요.</p>'}
+    </section>`;
+
+  view.querySelectorAll('[data-redeem]').forEach((btn) => btn.addEventListener('click', async () => {
+    const it = items.find((x) => x.id === btn.dataset.redeem);
+    if (!it || !confirm(`${it.name} (${it.cost.toLocaleString()}P)으로 교환을 신청할까요?\n운영진이 직접 보내 드려요.`)) return;
+    try {
+      await api('/me/redeem', { method: 'POST', body: { itemId: btn.dataset.redeem } });
+      toast('교환을 신청했어요. 운영진이 곧 보내 드릴게요!');
+      if (alive()) renderPoints(alive);
+    } catch (err) { toast(err.message, true); }
+  }));
 }
 
 // ───────────────────────── 개발자 화면 (운영자 계정만) ─────────────────────────
@@ -1976,6 +2147,26 @@ async function renderAdmin(alive) {
     </section>
 
     <section class="card">
+      <div class="card-head"><h2>기프티콘 교환 신청</h2><span class="hint">대기 ${a.redemptions?.length ?? 0}건</span></div>
+      <p class="tiny muted">신청한 사람의 전화번호로 직접 기프티콘을 보낸 뒤 '보냄 완료'를 눌러 주세요. 포인트는 신청할 때 이미 차감됐어요.</p>
+      ${(a.redemptions ?? []).map((r) => `
+        <div class="admin-item row" style="justify-content:space-between">
+          <span><b>${esc(r.name)}</b> <span class="tiny muted">${esc(r.phone ?? '')} · ${esc(r.item)} (${Number(r.cost).toLocaleString()}P) · ${fmtAt(r.createdAt)}</span></span>
+          <button type="button" class="btn sm primary" data-fulfill="${r.id}">보냄 완료</button>
+        </div>`).join('') || '<p class="small muted">대기 중인 교환 신청이 없어요.</p>'}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>이용 후기</h2><span class="hint">최근 ${a.reviews?.length ?? 0}건</span></div>
+      <p class="tiny muted">별점과 서술형 후기예요. 서술형은 추첨 대상이에요.</p>
+      ${(a.reviews ?? []).map((v) => `
+        <div class="list-item">
+          <div><span class="small">${'😊'.repeat(Math.max(1, Math.min(5, Number(v.rating) || 0)))} <b>${esc(v.name)}</b></span>${v.comment ? `<div class="small mt">${esc(v.comment)}</div>` : ''}</div>
+          <span class="tiny muted">${fmtAt(v.createdAt)}</span>
+        </div>`).join('') || '<p class="small muted">아직 후기가 없어요.</p>'}
+    </section>
+
+    <section class="card">
       <div class="card-head"><h2>운영 기록</h2><span class="hint">최근 ${a.adminLogs.length}건</span></div>
       ${a.adminLogs.map((l) => `<div class="list-item"><span class="small">${esc(l.name)} · ${ADMIN_ACTION[l.action] ?? esc(l.action)}${esc(logTarget(l))}</span><span class="tiny muted">${fmtAt(l.at)}</span></div>`).join('') || '<p class="small muted">기록이 없어요.</p>'}
     </section>`;
@@ -2010,6 +2201,16 @@ async function renderAdmin(alive) {
     try {
       await api(`/admin/users/${b.dataset.unsuspend}/unsuspend`, { method: 'POST' });
       toast('매칭 정지를 풀었어요.');
+      router();
+    } catch (err) { toast(err.message, true); }
+  }));
+
+  // 기프티콘 교환 신청 완료 처리 (운영진이 직접 보낸 뒤)
+  $$('[data-fulfill]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('기프티콘을 보냈나요? 이 신청을 완료로 바꿀게요.')) return;
+    try {
+      await api(`/admin/redemptions/${b.dataset.fulfill}/done`, { method: 'POST' });
+      toast('교환 신청을 완료로 바꿨어요.');
       router();
     } catch (err) { toast(err.message, true); }
   }));
