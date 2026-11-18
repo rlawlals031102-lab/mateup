@@ -77,7 +77,8 @@ export function createApp({
   api.get('/options', (req, res) => {
     res.json({
       locations: LOCATIONS, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD,
-      emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, demoLogin, promiseRule: PROMISE_RULE,
+      emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, authMode: emailPolicy.mode ?? 'email',
+      demoLogin, promiseRule: PROMISE_RULE,
       privacyVersion: PRIVACY_POLICY.version, reportReasons: REPORT_REASONS,
     });
   });
@@ -97,8 +98,15 @@ export function createApp({
       ...dashboard,
       promise: await promiseOverview(db), // 약속 기록·매칭 정지
       reports: await reportList(db, { withMessages: false }), // 신고 (내용은 아래에서 따로)
+      reviews: await S.recentReviews(db), // 이용 후기 (서술형은 추첨용)
+      redemptions: await S.pendingRedemptions(db), // 대기 중인 기프티콘 교환 신청
       adminLogs: await recentAdminLogs(db), // 운영자 행동 기록
     });
+  });
+  // 기프티콘 교환 신청 완료 처리 (운영진이 전화번호로 직접 보낸 뒤 누른다)
+  api.post('/admin/redemptions/:id/done', member, async (req, res) => {
+    await S.assertAdmin(db, req.user.id);
+    res.json(await S.fulfillRedemption(db, Number(req.params.id)));
   });
   // 신고된 대화 내용 (열람 기록이 남는다)
   api.get('/admin/reports', member, async (req, res) => {
@@ -145,7 +153,7 @@ export function createApp({
   });
 
   // 인증 (요청 횟수 제한: server/security.js LIMITS)
-  const mailKey = (req) => emailHash(req.body?.email);
+  const mailKey = (req) => emailHash(req.body?.email ?? req.body?.phone ?? '');
   api.post('/auth/code', async (req, res) => {
     await limit(db, `code:ip:${ipKey(req)}`, LIMITS.codeIp);
     await limit(db, `code:email:${mailKey(req)}`, LIMITS.codeEmail);
@@ -220,6 +228,12 @@ export function createApp({
     matches: await S.matchHistory(db, req.user.id),
     record: await S.studyRecord(db, req.user.id), // 내 공부 기록 (누적·스트릭)
   }));
+  // 포인트: 잔액·내역·상점(기프티콘). 교환 신청하면 포인트를 차감하고 운영진이 직접 보내 준다.
+  api.get('/me/points', member, async (req, res) => res.json(await S.pointsState(db, req.user.id)));
+  api.post('/me/redeem', member, async (req, res) => {
+    await limit(db, `redeem:user:${req.user.id}`, LIMITS.request);
+    res.status(201).json(await S.requestRedemption(db, req.user.id, req.body?.itemId));
+  });
 
   // 매칭 신청
   api.post('/requests', member, async (req, res) => {
@@ -295,6 +309,10 @@ export function createApp({
   api.post('/appointments/:id/checkout', member, async (req, res) => {
     const { minutes } = await S.checkOut(db, req.user.id, Number(req.params.id), opts);
     res.json({ minutes, match: await S.matchForAppointment(db, req.user.id, Number(req.params.id), opts) });
+  });
+  // 공부 끝난 뒤 이용 후기 (별점 1~5 필수, 서술형 선택 · 운영진만 봄)
+  api.post('/appointments/:id/review', member, async (req, res) => {
+    res.status(201).json(await S.submitReview(db, req.user.id, Number(req.params.id), req.body ?? {}));
   });
 
   // 매일 작업 (Vercel Cron, 매일 00:00 KST): 주간 정산 → 대기 신청끼리 다시 맞추기 → 보관 기간 지난 기록 정리

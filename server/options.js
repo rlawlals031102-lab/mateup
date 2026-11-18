@@ -25,6 +25,15 @@ export const MIN_OVERLAP_MIN = 60;
 // 실서비스 가입·로그인을 허용하는 학교 메일 도메인 (데모 모드에서는 제한 없음)
 export const EMAIL_DOMAIN = 'kookmin.ac.kr';
 
+// 가입 방식: 'phone' = 닉네임 + 전화번호 + 4자리 비밀번호 (이메일·인증번호 없음) / 'email' = 국민대 메일 + 인증번호
+export const AUTH_MODE = 'phone';
+
+// 보증금(포인트): 매칭할 때 두 사람이 똑같이 거는 고정 포인트.
+// 약속을 다 지키면 돌려받고, 메이트가 안 나오면 내 몫까지 가져간다 (server/service.js settleMatch).
+export const DEPOSIT_POINTS = 1000;
+// 가입하면 주는 시작 포인트 (보증금을 걸 수 있게). 모은 포인트는 운영진이 기프티콘으로 교환해 준다.
+export const SIGNUP_POINTS = 10000;
+
 // 약속 지키기 (보증금 대신, 도서관 연체 정지처럼):
 // 매칭 그만두기·약속 날 미참석이 strikeLimit번 쌓이면 suspendDays일 동안 매칭 신청 정지. 정지가 끝나면 0번부터 다시 센다.
 // from 이전의 약속·그만두기는 세지 않는다 (규칙을 알린 다음 회차부터 적용).
@@ -33,7 +42,7 @@ export const PROMISE_RULE = { strikeLimit: 2, suspendDays: 30, from: '2026-11-06
 // 개인정보 처리방침 (public/privacy.html). 내용을 바꾸면 version 을 바꾸고 → 모든 회원에게 다시 동의를 받는다.
 // 책임자·담당자는 처리방침에 적힌 사람과 같아야 한다.
 export const PRIVACY_POLICY = {
-  version: '2026-11-06',
+  version: '2026-11-18',
   officer: { name: '김지민', role: '개인정보 보호책임자', email: 'rlawlals031102@kookmin.ac.kr' },
   manager: { name: '나윤빈', role: '개인정보 보호담당자', email: 'yunbinna6@kookmin.ac.kr' },
 };
@@ -45,6 +54,10 @@ export const PRIOR_TEAMS = 14;
 // 개발자 화면을 볼 수 있는 계정 (운영자). 메일은 소문자로 적는다.
 export const ADMIN_EMAIL = 'rlawlals031102@kookmin.ac.kr'; // 김지민
 export const ADMIN_EMAILS = [ADMIN_EMAIL, 'yunbinna6@kookmin.ac.kr', 'rmsdud06@kookmin.ac.kr', 'dlwngk@kookmin.ac.kr', 'ybfl2004@kookmin.ac.kr']; // 김지민, 나윤빈, 김근영, 이주하, 김선우
+// 전화번호 가입(AUTH_MODE='phone')에서 개발자 화면을 볼 운영자 전화번호. '010-1234-5678' 형식으로 넣는다.
+// ★ 전화번호로 가입하면 메일이 없어 위 ADMIN_EMAILS로는 운영자를 못 알아본다. 이 번호로 가입한 사람만 개발자 화면이 열린다.
+// 운영진을 더 넣으려면 번호를 쉼표로 이어서 추가하면 된다.
+export const ADMIN_PHONES = ['010-3753-7845'];
 
 // 이메일 인증번호: 유효 시간(분), 최대 입력 시도, 재발송 간격(초)
 export const EMAIL_CODE_TTL_MIN = 10;

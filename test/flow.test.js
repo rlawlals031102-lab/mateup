@@ -4,7 +4,7 @@ import { openSqlite } from '../server/db.js';
 import { openPglite } from '../server/db-pg.js';
 import * as S from '../server/service.js';
 import { setNow, kst } from '../server/time.js';
-import { PROMISE_RULE } from '../server/options.js';
+import { PROMISE_RULE, DEPOSIT_POINTS } from '../server/options.js';
 
 // 같은 테스트를 SQLite(로컬·데모)와 PostgreSQL(실서비스, PGlite로 대체)에서 모두 돌린다.
 const DRIVERS = {
@@ -58,15 +58,15 @@ test('신청 검증: 장소는 여러 개 고를 수 있음', () => {
   setNow(null);
 });
 
-test('신청 검증: 화·수·목 중 원하는 날짜, 시간은 19~21시 고정, 보증금 없음', () => {
+test('신청 검증: 화·수·목 중 원하는 날짜, 시간은 19~21시 고정, 보증금 고정', () => {
   setNow(kst(2026, 10, 31, 9, 0));
   assert.throws(() => S.validateRequest({ ...baseReq, location: '국민대 성곡도서관' }), /장소/);
   assert.throws(() => S.validateRequest({ ...baseReq, styles: ['x'] }), /스타일/);
   assert.throws(() => S.validateRequest({ ...baseReq, days: [] }), /하나 이상/);
   assert.throws(() => S.validateRequest({ ...baseReq, days: [1, 2] }), /스터디 날짜 중에서/);
-  // 보증금은 무시, 칸을 안 보내면 고른 날짜의 19~21시 전체
+  // 보증금은 고정 금액(DEPOSIT_POINTS) — 입력값은 무시. 칸을 안 보내면 고른 날짜의 19~21시 전체
   const r = S.validateRequest({ ...baseReq, days: [4, 2, 2], deposit: 20000 });
-  assert.deepEqual([r.days, r.startTime, r.endTime, r.deposit], [[2, 4], '19:00', '21:00', 0]);
+  assert.deepEqual([r.days, r.startTime, r.endTime, r.deposit], [[2, 4], '19:00', '21:00', DEPOSIT_POINTS]);
   assert.deepEqual(r.cells, ['2-7', '2-8', '4-7', '4-8']);
   // 1시간 칸만 고를 수 있고, 스터디 시간 밖의 칸은 버린다
   const one = S.validateRequest({ ...baseReq, days: [2, 4], cells: ['2-8', '4-7', '1-0'] });
@@ -124,7 +124,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       try { await fn(); } finally { PROMISE_RULE.from = saved; }
     };
 
-    test('전체 흐름: 매칭 → 출석 → 정산 (보증금 없음)', () => withRuleFrom('2099-01-01', async () => {
+    test('전체 흐름: 매칭 → 출석 → 정산 (보증금 이행 반환)', () => withRuleFrom('2099-01-01', async () => {
       const a = await signup('a');
       const b = await signup('b');
 
@@ -134,7 +134,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.ok(r2.matchId);
 
       const m = await S.currentMatch(db, a);
-      assert.equal(m.stake, 0);
+      assert.equal(m.stake, DEPOSIT_POINTS);
       assert.deepEqual(m.appointments.map((x) => [x.date, x.startTime, x.endTime]),
         STUDY_DATES.map((d) => [d, '19:00', '21:00']));
       assert.deepEqual(m.week.map((d) => d.date), STUDY_DATES, '주간 표시는 스터디 3일');
@@ -161,7 +161,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       assert.equal(reported.status, 'reported');
       assert.equal(reported.report.me.rate, 100);
       assert.equal(reported.report.me.minutes, 360);
-      assert.equal(reported.report.me.deposit.result, 'none');
+      assert.equal(reported.report.me.deposit.result, 'refunded');
       assert.equal(reported.report.mate.attended, 1);
       // B는 체크아웃을 안 했으므로 약속 종료 시각까지로 계산 (19:00~21:00)
       assert.equal(reported.report.mate.minutes, 120);
@@ -170,6 +170,10 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       // 정산은 한 번만 (크론과 조회가 겹쳐도)
       assert.equal(await S.autoSettle(db), 0);
       await S.settleMatch(db, m.id);
+
+      // 보증금: a는 세 번 다 지켜 반환 + b 몫 보상, b는 1/3만 출석해 몰수 (시작 10000P 기준)
+      assert.equal((await S.homeState(db, a)).user.points, 10000 + DEPOSIT_POINTS, 'a: 반환 + b 보증금 보상');
+      assert.equal((await S.homeState(db, b)).user.points, 10000 - DEPOSIT_POINTS, 'b: 미이행으로 보증금 몰수');
 
       // 스터디 기간이 끝나서 같은 메이트와 계속할 수는 없음 → 새 메이트는 고를 수 있음
       await S.chooseNext(db, a, m.id, 'continue');
@@ -243,10 +247,10 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       let { matchId } = await S.createRequest(db, b, baseReq);
       assert.equal((await S.currentMatch(db, a)).leavePolicy, 'penalty');
       const left = await S.leaveMatch(db, a, matchId);
-      assert.deepEqual([left.result, left.lostTo], ['left', null]);
+      assert.deepEqual([left.result, left.lostTo], ['left', 'mate']);
       assert.equal(left.strikes.count, 0, '규칙 시작(11/6) 전 그만두기는 세지 않음');
       assert.equal(await S.currentMatch(db, b), null);
-      assert.deepEqual((await S.homeState(db, b)).mateLeft, { mateName: 'a', refunded: 0, reward: 0 });
+      assert.deepEqual((await S.homeState(db, b)).mateLeft, { mateName: 'a', refunded: DEPOSIT_POINTS, reward: DEPOSIT_POINTS });
       assert.equal((await S.homeState(db, a)).mateLeft, null, '그만둔 본인에게는 안내 없음');
       assert.equal((await S.matchHistory(db, b))[0].left, 'mate');
       await assert.rejects(S.leaveMatch(db, a, matchId), /진행 중인 매칭만/);
