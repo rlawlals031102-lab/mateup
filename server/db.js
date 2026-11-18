@@ -232,16 +232,6 @@ CREATE TABLE IF NOT EXISTS reviews (
   UNIQUE (appointment_id, user_id)
 );
 
--- 기프티콘 교환 신청 (포인트 상점). 운영진이 전화번호로 직접 보내 주고 status 를 done 으로 바꾼다.
-CREATE TABLE IF NOT EXISTS redemptions (
-  id         ${ID},
-  user_id    INTEGER NOT NULL REFERENCES users(id),
-  item       TEXT NOT NULL,
-  cost       INTEGER NOT NULL,
-  status     TEXT NOT NULL DEFAULT 'pending',
-  created_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS email_codes (
   id         ${ID},
   email      TEXT NOT NULL,
@@ -274,13 +264,12 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_reports_match ON reports(match_id);
 CREATE INDEX IF NOT EXISTS idx_admin_logs_at ON admin_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_reviews_created ON reviews(created_at);
-CREATE INDEX IF NOT EXISTS idx_redemptions_status ON redemptions(status, id);
 ${dialect === 'pg' ? RLS : ''}`;
 }
 
 // PostgreSQL(Supabase)에서는 모든 테이블에 RLS를 켜 둔다. 정책이 없으므로 Supabase 공개 API(anon 키)로는
 // 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
-const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'reviews', 'redemptions', 'email_codes', 'attendance_codes', 'visits', 'chat_reads', 'strikes', 'sent_reminders',
+const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'reviews', 'email_codes', 'attendance_codes', 'visits', 'chat_reads', 'strikes', 'sent_reminders',
   'sessions', 'rate_limits', 'reports', 'admin_logs', 'blocked_emails', 'ops_heartbeats', 'schema_migrations']
   .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
   .join('\n');

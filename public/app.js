@@ -256,7 +256,6 @@ const routes = {
   chat: renderChat,
   me: renderMe,
   'me/edit': renderEditProfile,
-  points: renderPoints,
   admin: renderAdmin,
 };
 
@@ -615,6 +614,7 @@ function showReviewPopup(appointmentId) {
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="rv-title">
       <h3 id="rv-title">오늘 공부 어땠어요?</h3>
       <p class="small muted">함께한 스터디가 어땠는지 별점으로 알려 주세요.</p>
+      ${OPTIONS.deposit?.amount ? `<p class="small" style="background:var(--lime,#eef6e8);border-radius:10px;padding:8px 10px;margin:6px 0">약속을 지키셨네요! 보증금 ${OPTIONS.deposit.amount.toLocaleString()}원은 ${OPTIONS.deposit.refundMinutes ?? 10}분 안에 입금(환불)해 드려요.</p>` : ''}
       <div id="rv-stars" style="display:flex;justify-content:center;gap:2px;margin:8px 0 4px">${smiles}</div>
       <label class="field"><span>운영진에게 하고 싶은 말 (선택)</span>
         <textarea class="input" id="rv-comment" rows="3" maxlength="500" placeholder="운영진에게 하고 싶은 말을 적어주세요, 추첨을 통해 소정의 선물을 드립니다."></textarea>
@@ -1275,6 +1275,15 @@ function drawMatch(m, alive, { admin = false } = {}) {
       <p class="meta-line">${esc(styleLabels(m.styles))} · ${esc(m.location)}</p>
     </section>
 
+    ${OPTIONS.deposit?.amount && !m.mate.isBot && !admin ? `
+    <section class="card" style="border:1px solid var(--line,#dde4d5)">
+      <div class="card-head"><h2>보증금 입금 안내</h2><span class="hint">${OPTIONS.deposit.amount.toLocaleString()}원</span></div>
+      <p class="small">약속을 지키면 끝나고 <b>${OPTIONS.deposit.refundMinutes ?? 10}분 안에</b> 돌려드려요. 메이트가 안 나오면 보증금은 나온 사람에게 가요.</p>
+      <div class="list-item"><span class="small muted">입금 계좌</span><b>${esc(OPTIONS.deposit.bank)} ${esc(OPTIONS.deposit.account)}</b></div>
+      <div class="list-item"><span class="small muted">예금주</span><b>${esc(OPTIONS.deposit.holder)}</b></div>
+      <p class="tiny muted mt">입금·환불은 운영진이 문자로 직접 처리해요.</p>
+    </section>` : ''}
+
     <section class="section">
       <div class="section-head"><h2 class="section-title">이번 주 약속</h2><span class="hint">${fmtDateRange(m.weekStart, m.weekEnd)}</span></div>
       <p class="meta-line">내 출석 <b>${m.stats.me.attended}/${m.stats.me.total}</b> · 공부 <b>${fmtMinutes(m.stats.me.minutes)}</b> · 메이트 출석 <b>${m.stats.mate.attended}/${m.stats.mate.total}</b></p>
@@ -1811,11 +1820,6 @@ async function renderMe(alive) {
       </div>
     </section>
 
-    <a class="card link-item" href="#/points" style="display:flex;align-items:center;justify-content:space-between">
-      <div><div class="small muted">모은 포인트</div><div style="font-size:22px;font-weight:800">${(user.points ?? 0).toLocaleString()}P</div></div>
-      <span class="small link">기프티콘 교환 ›</span>
-    </a>
-
     ${record && record.weeks ? `
     <section class="section">
       <h2 class="section-title">내 공부 기록</h2>
@@ -1937,60 +1941,6 @@ function openDeleteAccount() {
       location.hash = '#/login';
     } catch (err) { toast(err.message, true); }
   });
-}
-
-// ───────────────────────── 포인트 · 기프티콘 상점 ─────────────────────────
-async function renderPoints(alive) {
-  setTop({ title: '포인트 · 기프티콘', back: '#/me' });
-  setTabs('me');
-  loading();
-  const { balance, logs, items, redemptions } = await api('/me/points');
-  if (!alive()) return;
-  view.innerHTML = `
-    <section class="card" style="text-align:center">
-      <div class="small muted">모은 포인트</div>
-      <div style="font-size:34px;font-weight:800">${balance.toLocaleString()}P</div>
-      <p class="tiny muted">약속을 지키면 보증금을 돌려받고, 메이트가 안 나오면 그 보증금이 내 포인트가 돼요.</p>
-    </section>
-
-    <section class="section">
-      <h2 class="section-title">기프티콘 교환</h2>
-      <p class="small muted">교환을 신청하면 포인트가 차감되고, 운영진이 전화번호로 기프티콘을 보내 드려요.</p>
-      ${items.map((it) => `
-        <div class="list-item">
-          <div><b>${esc(it.name)}</b><div class="tiny muted">${it.cost.toLocaleString()}P</div></div>
-          <button class="btn sm ${balance >= it.cost ? 'primary' : ''}" data-redeem="${esc(it.id)}" ${balance >= it.cost ? '' : 'disabled'}>교환 신청</button>
-        </div>`).join('')}
-    </section>
-
-    ${redemptions.length ? `
-    <section class="section">
-      <h2 class="section-title">내 교환 신청</h2>
-      ${redemptions.map((r) => `
-        <div class="list-item">
-          <div><b>${esc(r.item)}</b><div class="tiny muted">${fmtAt(r.createdAt)}</div></div>
-          <span class="small ${r.status === 'done' ? 'muted' : ''}">${r.status === 'done' ? '보냄 ✓' : '대기 중'}</span>
-        </div>`).join('')}
-    </section>` : ''}
-
-    <section class="section">
-      <h2 class="section-title">포인트 내역</h2>
-      ${logs.length ? logs.map((l) => `
-        <div class="list-item">
-          <div><div class="small">${esc(l.reason)}</div><div class="tiny muted">${fmtAt(l.createdAt)}</div></div>
-          <b class="${l.amount >= 0 ? '' : 'muted'}">${l.amount >= 0 ? '+' : ''}${l.amount.toLocaleString()}P</b>
-        </div>`).join('') : '<p class="small muted">아직 내역이 없어요.</p>'}
-    </section>`;
-
-  view.querySelectorAll('[data-redeem]').forEach((btn) => btn.addEventListener('click', async () => {
-    const it = items.find((x) => x.id === btn.dataset.redeem);
-    if (!it || !confirm(`${it.name} (${it.cost.toLocaleString()}P)으로 교환을 신청할까요?\n운영진이 직접 보내 드려요.`)) return;
-    try {
-      await api('/me/redeem', { method: 'POST', body: { itemId: btn.dataset.redeem } });
-      toast('교환을 신청했어요. 운영진이 곧 보내 드릴게요!');
-      if (alive()) renderPoints(alive);
-    } catch (err) { toast(err.message, true); }
-  }));
 }
 
 // ───────────────────────── 개발자 화면 (운영자 계정만) ─────────────────────────
@@ -2147,16 +2097,6 @@ async function renderAdmin(alive) {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>기프티콘 교환 신청</h2><span class="hint">대기 ${a.redemptions?.length ?? 0}건</span></div>
-      <p class="tiny muted">신청한 사람의 전화번호로 직접 기프티콘을 보낸 뒤 '보냄 완료'를 눌러 주세요. 포인트는 신청할 때 이미 차감됐어요.</p>
-      ${(a.redemptions ?? []).map((r) => `
-        <div class="admin-item row" style="justify-content:space-between">
-          <span><b>${esc(r.name)}</b> <span class="tiny muted">${esc(r.phone ?? '')} · ${esc(r.item)} (${Number(r.cost).toLocaleString()}P) · ${fmtAt(r.createdAt)}</span></span>
-          <button type="button" class="btn sm primary" data-fulfill="${r.id}">보냄 완료</button>
-        </div>`).join('') || '<p class="small muted">대기 중인 교환 신청이 없어요.</p>'}
-    </section>
-
-    <section class="card">
       <div class="card-head"><h2>이용 후기</h2><span class="hint">최근 ${a.reviews?.length ?? 0}건</span></div>
       <p class="tiny muted">별점과 서술형 후기예요. 서술형은 추첨 대상이에요.</p>
       ${(a.reviews ?? []).map((v) => `
@@ -2201,16 +2141,6 @@ async function renderAdmin(alive) {
     try {
       await api(`/admin/users/${b.dataset.unsuspend}/unsuspend`, { method: 'POST' });
       toast('매칭 정지를 풀었어요.');
-      router();
-    } catch (err) { toast(err.message, true); }
-  }));
-
-  // 기프티콘 교환 신청 완료 처리 (운영진이 직접 보낸 뒤)
-  $$('[data-fulfill]').forEach((b) => b.addEventListener('click', async () => {
-    if (!confirm('기프티콘을 보냈나요? 이 신청을 완료로 바꿀게요.')) return;
-    try {
-      await api(`/admin/redemptions/${b.dataset.fulfill}/done`, { method: 'POST' });
-      toast('교환 신청을 완료로 바꿨어요.');
       router();
     } catch (err) { toast(err.message, true); }
   }));
