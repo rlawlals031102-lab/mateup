@@ -2,6 +2,7 @@
 // server/service.js 의 로직을 그대로 쓰고, DB는 sql.js(SQLite WASM) + localStorage 로 대체한다.
 // server/app.js 의 라우트와 같은 경로/응답을 돌려준다.
 
+import './demo-period.js'; // 맨 먼저: 데모 날짜를 어제·오늘·내일로 (데모 메이트가 이 날짜로 만들어짐)
 import initSqlJs from 'sql.js';
 import wasmBinary from 'sql.js/dist/sql-wasm.wasm';
 import QRCode from 'qrcode';
@@ -12,6 +13,7 @@ import { LOCATIONS, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE
 import { consentState, recordConsent, deleteAccount, exportMyData } from '../server/privacy.js';
 import { reportChat, REPORT_REASONS } from '../server/reports.js';
 import { persist, clearSaved } from './shims/sqlite.js';
+import * as T from '../server/time.js';
 
 const TOKEN_KEY = 'studybuddy-standalone-token';
 const demo = true;
@@ -31,6 +33,48 @@ const getToken = () => { try { return localStorage.getItem(TOKEN_KEY); } catch {
 const setToken = (t) => {
   try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch { /* 무시 */ }
 };
+
+// 데모 체험: 매칭되면 어제·오늘·내일 세 번의 약속을 신청한 시간으로 잡고,
+// 첫 약속(어제)은 둘 다 출석한 것으로 채운다 → 오늘이 세 번 중 두 번째 약속이 된다.
+async function fillDemoWeek(db, matchId) {
+  const m = await db.get('SELECT * FROM matches WHERE id = ?', matchId);
+  if (!m) return;
+  const appts = await db.all('SELECT * FROM appointments WHERE match_id = ? ORDER BY date', matchId);
+  if (!appts.length) return;
+  const base = appts[0]; // 신청한 시간 (여러 날 골랐으면 첫 날 시간을 빈 날에 씀)
+  const code = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
+  const users = [m.user_a, m.user_b];
+  const byDate = new Map(appts.map((a) => [a.date, a]));
+  for (const date of STUDY_PERIOD.dates) {
+    if (byDate.has(date)) continue;
+    const { rows } = await db.run(
+      'INSERT INTO appointments (match_id, date, start_time, end_time, code) VALUES (?, ?, ?, ?, ?) RETURNING id',
+      matchId, date, base.start_time, base.end_time, code(),
+    );
+    for (const u of users) {
+      await db.run('INSERT INTO attendance_codes (appointment_id, user_id, code) VALUES (?, ?, ?)', rows[0].id, u, code());
+    }
+    byDate.set(date, { id: rows[0].id, date, start_time: base.start_time, end_time: base.end_time });
+  }
+  // 첫 약속(어제): 둘 다 출석, 끝까지 공부한 것으로
+  const first = byDate.get(STUDY_PERIOD.dates[0]);
+  const start = T.at(first.date, first.start_time);
+  const end = T.at(first.date, first.end_time);
+  const minutes = Math.round((end - start) / 60000);
+  for (const u of users) {
+    await db.run(
+      `INSERT INTO attendance (appointment_id, user_id, method, checked_in_at, checked_out_at, minutes) VALUES (?, ?, 'mate', ?, ?, ?)
+       ON CONFLICT (appointment_id, user_id) DO NOTHING`,
+      first.id, u, start.toISOString(), end.toISOString(), minutes,
+    );
+  }
+  // 매칭에 적힌 요일·시간표도 세 날 모두로
+  const all = [...byDate.values()].sort((x, y) => (x.date < y.date ? -1 : 1));
+  const days = all.map((a) => T.isoWeekday(a.date));
+  const schedule = all.map((a) => ({ day: T.isoWeekday(a.date), start: a.start_time, end: a.end_time }));
+  await db.run('UPDATE matches SET days = ?, schedule = ? WHERE id = ?', JSON.stringify(days), JSON.stringify(schedule), matchId);
+  persist();
+}
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -84,7 +128,11 @@ const routes = [
   ['GET', '/matches/:id', async (ctx) => ({ match: await S.matchById(ctx.db, needUser(ctx), ctx.id, opts) })],
   ['GET', '/me/history', async (ctx) => ({ matches: await S.matchHistory(ctx.db, needUser(ctx)) })],
 
-  ['POST', '/requests', (ctx) => S.createRequest(ctx.db, needUser(ctx), ctx.body)],
+  ['POST', '/requests', async (ctx) => {
+    const res = await S.createRequest(ctx.db, needUser(ctx), ctx.body);
+    if (res?.matchId) await fillDemoWeek(ctx.db, res.matchId);
+    return res;
+  }],
   ['DELETE', '/requests/:id', async (ctx) => {
     await S.cancelRequest(ctx.db, needUser(ctx), ctx.id);
     return { ok: true };
