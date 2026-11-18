@@ -4,7 +4,7 @@ import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
   EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS, PROMISE_RULE,
-  PRIVACY_POLICY, PRIOR_TEAMS, DEPOSIT_POINTS, SIGNUP_POINTS, ADMIN_PHONES,
+  PRIVACY_POLICY, PRIOR_TEAMS, ADMIN_PHONES,
 } from './options.js';
 import { createSession, sessionUser, endSession, endAllSessions } from './sessions.js';
 // 전화번호는 운영 결정(2026-11-06)으로 암호화하지 않고 그대로 저장한다. 예전에 암호화된 값이 있으면 읽을 때만 풀어 준다.
@@ -117,7 +117,7 @@ export const isAdminUser = (u) => !!u && (
 
 export const privateUser = (u) => u && {
   ...publicUser(u), email: u.email, department: u.department ?? null, phone: decryptField(u.phone),
-  isAdmin: isAdminUser(u), points: u.points ?? 0, notifyOptOut: !!u.notify_opt_out,
+  isAdmin: isAdminUser(u), notifyOptOut: !!u.notify_opt_out,
 };
 
 // 이메일 알림 켜기/끄기 (마이페이지). 돌려주는 값으로 화면 상태를 맞춘다.
@@ -280,14 +280,6 @@ async function verifyEmailCode(db, email, purpose, code) {
   return row.id;
 }
 
-// 가입 축하 포인트 내역 (잔액은 users INSERT에서 이미 SIGNUP_POINTS로 넣는다 → 여기서는 내역만 남긴다)
-async function logSignupBonus(t, id) {
-  if (!SIGNUP_POINTS) return;
-  await t.run(
-    'INSERT INTO point_logs (user_id, amount, balance, reason, match_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    id, SIGNUP_POINTS, SIGNUP_POINTS, '가입 축하 포인트', null, iso(),
-  );
-}
 // 매칭 정지 중에 탈퇴했던 아이디면 남은 정지 기간을 이어 간다 (server/privacy.js). 전화번호 가입은 e가 내부 주소.
 async function carryoverSuspension(t, e, id) {
   const blocked = await t.get('SELECT blocked_until FROM blocked_emails WHERE email_hash = ?', emailHash(e));
@@ -309,16 +301,15 @@ export async function signup(db, body, policy = NO_POLICY) {
   const passwordHash = await hashPassword(String(password));
   return db.tx(async (t) => {
     const { rows } = await t.run(
-      `INSERT INTO users (email, password_hash, name, age, department, phone, points, created_at, agreed_at, privacy_version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO users (email, password_hash, name, age, department, phone, created_at, agreed_at, privacy_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (email) DO NOTHING RETURNING id`,
-      e, passwordHash, profile.name, profile.age ?? null, profile.department, profile.phone, SIGNUP_POINTS, iso(),
+      e, passwordHash, profile.name, profile.age ?? null, profile.department, profile.phone, iso(),
       agree === true ? iso() : null, agree === true ? PRIVACY_POLICY.version : null,
     );
     if (!rows.length) throw new AppError(409, '이미 가입된 이메일입니다.');
     if (codeId) await t.run('UPDATE email_codes SET used = 1 WHERE id = ?', codeId);
     const id = rows[0].id;
-    await logSignupBonus(t, id);
     await carryoverSuspension(t, e, id);
     return { user: privateUser(await getUser(t, id)), token: await issueToken(t, id) };
   });
@@ -335,15 +326,14 @@ async function signupByPhone(db, { name, phone, password, agree }, policy) {
   const passwordHash = await hashPassword(String(password));
   return db.tx(async (t) => {
     const { rows } = await t.run(
-      `INSERT INTO users (email, password_hash, name, phone, points, created_at, agreed_at, privacy_version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO users (email, password_hash, name, phone, created_at, agreed_at, privacy_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (email) DO NOTHING RETURNING id`,
-      e, passwordHash, nick, phoneNorm, SIGNUP_POINTS, iso(),
+      e, passwordHash, nick, phoneNorm, iso(),
       agree === true ? iso() : null, agree === true ? PRIVACY_POLICY.version : null,
     );
     if (!rows.length) throw new AppError(409, '이미 가입된 전화번호입니다. 로그인해 주세요.');
     const id = rows[0].id;
-    await logSignupBonus(t, id);
     await carryoverSuspension(t, e, id);
     return { user: privateUser(await getUser(t, id)), token: await issueToken(t, id) };
   });
@@ -524,41 +514,6 @@ export async function adjustPoints(db, userId, amount, reason, matchId = null) {
   );
 }
 
-// ───────────────────────── 포인트 상점 (기프티콘 교환) ─────────────────────────
-// 모은 포인트로 바꿀 수 있는 기프티콘. 실제 발송은 운영진이 직접 한다(수동). 가격·품목은 여기서 고치면 된다.
-export const STORE_ITEMS = [
-  { id: 'cu3000', name: '편의점 모바일 교환권 3,000원', cost: 3000 },
-  { id: 'cafe', name: '카페 아메리카노', cost: 5000 },
-  { id: 'cu5000', name: '편의점 모바일 교환권 5,000원', cost: 5000 },
-  { id: 'chicken', name: '치킨 기프티콘', cost: 15000 },
-];
-
-// 내 포인트 현황: 잔액 + 최근 내역 + 상점 목록 + 내 교환 신청
-export async function pointsState(db, userId) {
-  const u = await getUser(db, userId);
-  const logs = await db.all(
-    'SELECT amount, balance, reason, created_at AS "createdAt" FROM point_logs WHERE user_id = ? ORDER BY id DESC LIMIT 30', userId,
-  );
-  const redemptions = await db.all(
-    'SELECT id, item, cost, status, created_at AS "createdAt" FROM redemptions WHERE user_id = ? ORDER BY id DESC LIMIT 20', userId,
-  );
-  return { balance: u?.points ?? 0, logs, items: STORE_ITEMS, redemptions };
-}
-
-// 기프티콘 교환 신청: 포인트를 바로 차감하고 '대기'로 접수한다. 운영진이 직접 보내 주고 '완료'로 바꾼다.
-export async function requestRedemption(db, userId, itemId) {
-  const item = STORE_ITEMS.find((x) => x.id === itemId);
-  if (!item) throw new AppError(400, '교환할 상품을 다시 골라 주세요.');
-  return db.tx(async (t) => {
-    await adjustPoints(t, userId, -item.cost, `기프티콘 교환 신청 · ${item.name}`);
-    const { rows } = await t.run(
-      `INSERT INTO redemptions (user_id, item, cost, status, created_at) VALUES (?, ?, ?, 'pending', ?) RETURNING id`,
-      userId, item.name, item.cost, iso(),
-    );
-    return { ok: true, id: rows[0].id, balance: (await getUser(t, userId)).points };
-  });
-}
-
 // ───────────────────────── 매칭 신청 ─────────────────────────
 
 // 스터디 날짜의 시간 (날짜별로 다르게 정한 날이 있으면 그 시간)
@@ -600,7 +555,7 @@ export function validateRequest(input) {
   const endTime = T.fromMin(Math.max(...runs.map((r) => T.toMin(r.end))));
   return {
     cells, days: [...new Set(runs.map((r) => r.day))], startTime, endTime,
-    locations, location: locations.join(' · '), styles, deposit: DEPOSIT_POINTS,
+    locations, location: locations.join(' · '), styles, deposit: 0,
   };
 }
 
@@ -674,8 +629,6 @@ export async function createRequest(db, userId, input) {
         userId, JSON.stringify(req.days), req.startTime, req.endTime, JSON.stringify(req.locations),
         JSON.stringify(req.styles), req.deposit, JSON.stringify(req.cells), iso(),
       );
-      // 보증금(포인트)을 신청과 동시에 예치한다. 잔액이 모자라면 신청이 막힌다. (취소 때 반환, 정산 때 이행/미이행에 따라 처리)
-      if (req.deposit) await adjustPoints(t, userId, -req.deposit, '매칭 신청 보증금 예치');
       const match = await tryMatch(t, rows[0].id);
       const request = match ? null : parseRequest(await t.get('SELECT * FROM match_requests WHERE id = ?', rows[0].id));
       return { request, matchId: match?.id ?? null };
@@ -1182,22 +1135,6 @@ export async function recentReviews(db) {
     `SELECT v.rating, v.comment, v.created_at AS "createdAt", u.name
      FROM reviews v JOIN users u ON u.id = v.user_id ORDER BY v.id DESC LIMIT 100`,
   );
-}
-
-// 기프티콘 교환 신청 (대기 중). 운영진이 전화번호로 직접 보내 주고 완료 처리한다.
-export async function pendingRedemptions(db) {
-  return db.all(
-    `SELECT r.id, r.item, r.cost, r.status, r.created_at AS "createdAt", u.name, u.phone
-     FROM redemptions r JOIN users u ON u.id = r.user_id WHERE r.status = 'pending' ORDER BY r.id DESC`,
-  );
-}
-
-export async function fulfillRedemption(db, rowId) {
-  const { rows } = await db.run(
-    "UPDATE redemptions SET status = 'done' WHERE id = ? AND status = 'pending' RETURNING id", rowId,
-  );
-  if (!rows.length) throw new AppError(404, '처리할 교환 신청이 없어요.');
-  return { ok: true };
 }
 
 const maskEmail = (e) => e.replace(/^(.{3}).*@/, '$1***@');

@@ -8,7 +8,6 @@
 //  한 곳만 적용하도록 트랜잭션 잠금(pg_advisory_xact_lock)을 건다. 되돌리기는 하지 않고, 앞으로 고치는 변경을 새로 추가한다.
 import crypto from 'node:crypto';
 import { schema, migrations } from './db.js';
-import { SIGNUP_POINTS } from './options.js';
 
 const LOCK_ID = 727274; // 마이그레이션 잠금 번호 (아무 숫자, 바꾸지 않기)
 
@@ -27,12 +26,6 @@ export const STEPS = [
       checkConstraint('matches', 'matches_status_valid', "status IN ('active', 'reported', 'closed')"),
       checkConstraint('reports', 'reports_status_valid', "status IN ('open', 'closed')"),
     ],
-  },
-  {
-    id: 'm002',
-    name: '보증금 부활: 기존 회원에게 시작 포인트 한 번만 지급 (0point인 실사용자만)',
-    sqlite: [`UPDATE users SET points = ${SIGNUP_POINTS} WHERE is_bot = 0 AND deleted_at IS NULL AND points = 0`],
-    pg: [`UPDATE users SET points = ${SIGNUP_POINTS} WHERE is_bot = 0 AND deleted_at IS NULL AND points = 0`],
   },
 ];
 
