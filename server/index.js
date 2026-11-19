@@ -9,7 +9,7 @@ import { seedBots, retireOldBots } from './seed.js';
 import { autoSettle } from './service.js';
 import { createApp } from './app.js';
 import { createGmailMailer } from './mailer.js';
-import { EMAIL_DOMAIN, AUTH_MODE } from './options.js';
+import { EMAIL_DOMAIN } from './options.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const demo = process.argv.includes('--demo') || process.env.DEMO_MODE === '1';
@@ -43,10 +43,7 @@ setInterval(() => autoSettle(db).catch(console.error), 10 * 60 * 1000).unref();
 
 // 데모가 아니면 실서비스처럼 국민대 메일 + 인증번호. (메일은 .env.local 의 GMAIL_USER / GMAIL_APP_PASSWORD)
 const mailer = await createGmailMailer({ user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD });
-// 가입 방식 (options.js AUTH_MODE): 'phone' 이면 메일·인증번호 없이 전화번호 + 4자리 비번으로 가입·로그인.
-const emailPolicy = AUTH_MODE === 'phone'
-  ? { domain: null, verify: false, mode: 'phone' }
-  : (demo ? { domain: null, verify: false } : { domain: EMAIL_DOMAIN, verify: true });
+const emailPolicy = demo ? { domain: null, verify: false } : { domain: EMAIL_DOMAIN, verify: true };
 
 createApp({ db, demo, emailPolicy, mailer, consentRequired }).listen(port, () => {
   console.log(`스터디버디 서버 실행 중 → http://localhost:${port}${demo ? '  (데모 모드)' : ''}`);

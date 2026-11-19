@@ -4,7 +4,7 @@ import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
   EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS, PROMISE_RULE,
-  PRIVACY_POLICY, PRIOR_TEAMS, ADMIN_PHONES,
+  PRIVACY_POLICY, PRIOR_TEAMS,
 } from './options.js';
 import { createSession, sessionUser, endSession, endAllSessions } from './sessions.js';
 // 전화번호는 운영 결정(2026-11-06)으로 암호화하지 않고 그대로 저장한다. 예전에 암호화된 값이 있으면 읽을 때만 풀어 준다.
@@ -109,15 +109,9 @@ export const publicUser = (u) => u && {
   isBot: !!u.is_bot && !!u.bot_template, // 체험용 데모 메이트 (화면에 "가상 인물"로 표시)
 };
 
-// 운영자 판별: 운영자 메일(이메일 가입) 또는 운영자 전화번호(전화번호 가입). options.js ADMIN_EMAILS / ADMIN_PHONES
-export const isAdminUser = (u) => !!u && (
-  ADMIN_EMAILS.includes(u.email)
-  || ADMIN_PHONES.map((p) => String(p).replace(/\D/g, '')).includes(String(u.phone ?? '').replace(/\D/g, '') || '\u0000')
-);
-
 export const privateUser = (u) => u && {
   ...publicUser(u), email: u.email, department: u.department ?? null, phone: decryptField(u.phone),
-  isAdmin: isAdminUser(u), notifyOptOut: !!u.notify_opt_out,
+  isAdmin: ADMIN_EMAILS.includes(u.email), notifyOptOut: !!u.notify_opt_out,
 };
 
 // 이메일 알림 켜기/끄기 (마이페이지). 돌려주는 값으로 화면 상태를 맞춘다.
@@ -215,13 +209,6 @@ const checkPassword = (password) => {
   if (String(password ?? '').length < 6) throw new AppError(400, '비밀번호는 6자 이상이어야 합니다.');
 };
 
-// 전화번호 간편 가입: 숫자 4자리 비밀번호 (이메일·인증번호 없음)
-const checkPin = (password) => {
-  if (!/^\d{4}$/.test(String(password ?? ''))) throw new AppError(400, '비밀번호는 숫자 4자리로 입력해 주세요.');
-};
-// 전화번호를 로그인 아이디로 쓸 때 DB의 email 칸에 넣는 내부 주소 (실제 메일 아님 → 메일 발송 안 함)
-const phoneLoginEmail = (phone) => `${String(phone).replace(/\D/g, '')}@phone.local`;
-
 const hashCode = (email, code) => crypto.createHash('sha256').update(`${email}:${code}`).digest('hex');
 
 // 인증번호 메일 보내기. purpose: 'signup'(가입) | 'reset'(비밀번호 찾기)
@@ -280,19 +267,8 @@ async function verifyEmailCode(db, email, purpose, code) {
   return row.id;
 }
 
-// 매칭 정지 중에 탈퇴했던 아이디면 남은 정지 기간을 이어 간다 (server/privacy.js). 전화번호 가입은 e가 내부 주소.
-async function carryoverSuspension(t, e, id) {
-  const blocked = await t.get('SELECT blocked_until FROM blocked_emails WHERE email_hash = ?', emailHash(e));
-  if (blocked && new Date(blocked.blocked_until) > T.now()) {
-    await t.run('UPDATE users SET suspended_until = ?, strikes_since = ? WHERE id = ?', blocked.blocked_until, blocked.blocked_until, id);
-  }
-}
-
-// policy.mode: 'phone' = 닉네임 + 전화번호 + 4자리 비번 (이메일 인증 없음) / 그 외 = 국민대 메일 + 인증번호
 // policy.consent: 개인정보 처리방침 동의가 필요한지 (실서비스). 동의하면 시각과 처리방침 버전을 남긴다.
-export async function signup(db, body, policy = NO_POLICY) {
-  if (policy.mode === 'phone') return signupByPhone(db, body, policy);
-  const { email, password, name, age, department, phone, code, agree } = body;
+export async function signup(db, { email, password, name, age, department, phone, code, agree }, policy = NO_POLICY) {
   const e = normalizeEmail(email, policy);
   checkPassword(password);
   const profile = validateProfile({ name, age, department, phone });
@@ -301,8 +277,8 @@ export async function signup(db, body, policy = NO_POLICY) {
   const passwordHash = await hashPassword(String(password));
   return db.tx(async (t) => {
     const { rows } = await t.run(
-      `INSERT INTO users (email, password_hash, name, age, department, phone, created_at, agreed_at, privacy_version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO users (email, password_hash, name, age, department, phone, points, created_at, agreed_at, privacy_version)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
        ON CONFLICT (email) DO NOTHING RETURNING id`,
       e, passwordHash, profile.name, profile.age ?? null, profile.department, profile.phone, iso(),
       agree === true ? iso() : null, agree === true ? PRIVACY_POLICY.version : null,
@@ -310,46 +286,19 @@ export async function signup(db, body, policy = NO_POLICY) {
     if (!rows.length) throw new AppError(409, '이미 가입된 이메일입니다.');
     if (codeId) await t.run('UPDATE email_codes SET used = 1 WHERE id = ?', codeId);
     const id = rows[0].id;
-    await carryoverSuspension(t, e, id);
+    // 매칭 정지 중에 탈퇴했던 메일이면 남은 정지 기간을 이어 간다 (server/privacy.js)
+    const blocked = await t.get('SELECT blocked_until FROM blocked_emails WHERE email_hash = ?', emailHash(e));
+    if (blocked && new Date(blocked.blocked_until) > T.now()) {
+      await t.run('UPDATE users SET suspended_until = ?, strikes_since = ? WHERE id = ?', blocked.blocked_until, blocked.blocked_until, id);
+    }
     return { user: privateUser(await getUser(t, id)), token: await issueToken(t, id) };
   });
 }
 
-// 전화번호 간편 가입: 닉네임(한글·영문) + 전화번호(운영진 연락용) + 4자리 비밀번호. 전화번호가 로그인 아이디.
-async function signupByPhone(db, { name, phone, password, agree }, policy) {
-  const nick = String(name ?? '').trim();
-  if (nick.length < 1 || nick.length > 20) throw new AppError(400, '닉네임은 1~20자로 입력해 주세요. (한글·영문)');
-  const phoneNorm = normalizePhone(phone);
-  checkPin(password);
-  if (policy.consent && agree !== true) throw new AppError(400, '개인정보 수집·이용에 동의해 주세요.');
-  const e = phoneLoginEmail(phoneNorm);
-  const passwordHash = await hashPassword(String(password));
-  return db.tx(async (t) => {
-    const { rows } = await t.run(
-      `INSERT INTO users (email, password_hash, name, phone, created_at, agreed_at, privacy_version)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (email) DO NOTHING RETURNING id`,
-      e, passwordHash, nick, phoneNorm, iso(),
-      agree === true ? iso() : null, agree === true ? PRIVACY_POLICY.version : null,
-    );
-    if (!rows.length) throw new AppError(409, '이미 가입된 전화번호입니다. 로그인해 주세요.');
-    const id = rows[0].id;
-    await carryoverSuspension(t, e, id);
-    return { user: privateUser(await getUser(t, id)), token: await issueToken(t, id) };
-  });
-}
-
-export async function login(db, body, policy = NO_POLICY) {
-  if (policy.mode === 'phone') {
-    const e = phoneLoginEmail(normalizePhone(body.phone));
-    const u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', e);
-    const ok = await passwordMatches(String(body.password ?? ''), u?.password_hash ?? DUMMY_HASH);
-    if (!u || !ok) throw new AppError(401, '전화번호 또는 비밀번호가 올바르지 않습니다.');
-    return { user: privateUser(u), token: await issueToken(db, u.id) };
-  }
-  const e = normalizeEmail(body.email, policy);
+export async function login(db, { email, password }, policy = NO_POLICY) {
+  const e = normalizeEmail(email, policy);
   const u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', e);
-  const ok = await passwordMatches(String(body.password ?? ''), u?.password_hash ?? DUMMY_HASH);
+  const ok = await passwordMatches(String(password ?? ''), u?.password_hash ?? DUMMY_HASH);
   if (!u || !ok) {
     throw new AppError(401, '이메일 또는 비밀번호가 올바르지 않습니다.');
   }
@@ -1126,28 +1075,16 @@ export async function recordVisit(db, visitorId) {
 
 export async function assertAdmin(db, userId) {
   const u = await getUser(db, userId);
-  if (!isAdminUser(u)) throw new AppError(403, '관리자만 볼 수 있어요.');
-}
-
-// 최근 이용 후기 (운영진만). 서술형 comment 는 추첨 대상.
-export async function recentReviews(db) {
-  return db.all(
-    `SELECT v.rating, v.comment, v.created_at AS "createdAt", u.name
-     FROM reviews v JOIN users u ON u.id = v.user_id ORDER BY v.id DESC LIMIT 100`,
-  );
+  if (!ADMIN_EMAILS.includes(u?.email)) throw new AppError(403, '관리자만 볼 수 있어요.');
 }
 
 const maskEmail = (e) => e.replace(/^(.{3}).*@/, '$1***@');
 
 // 관리자 화면에서는 운영자 계정 이름 앞에 [관리자]를 붙인다 (예: [관리자]김지민)
-export const adminName = (u) => (isAdminUser(u) ? `[관리자]${u.name}` : u?.name);
-// SQL 안에서 같은 이름을 만든다. alias는 users 테이블 별칭 (운영자 메일·전화번호는 코드에 적힌 상수라 그대로 넣어도 안전)
-export const adminNameSql = (alias) => {
-  const emails = ADMIN_EMAILS.map((e) => `'${e}'`).join(', ');
-  const phones = ADMIN_PHONES.map((p) => `'${p}'`).join(', ');
-  const cond = phones ? `${alias}.email IN (${emails}) OR ${alias}.phone IN (${phones})` : `${alias}.email IN (${emails})`;
-  return `CASE WHEN ${cond} THEN '[관리자]' || ${alias}.name ELSE ${alias}.name END`;
-};
+export const adminName = (u) => (u && ADMIN_EMAILS.includes(u.email) ? `[관리자]${u.name}` : u?.name);
+// SQL 안에서 같은 이름을 만든다. alias는 users 테이블 별칭 (운영자 메일은 코드에 적힌 상수라 그대로 넣어도 안전)
+export const adminNameSql = (alias) =>
+  `CASE WHEN ${alias}.email IN (${ADMIN_EMAILS.map((e) => `'${e}'`).join(', ')}) THEN '[관리자]' || ${alias}.name ELSE ${alias}.name END`;
 
 export async function adminDashboard(db) {
   const real = (col) => `${col} IN (SELECT id FROM users WHERE is_bot = 0 AND email <> '${DEMO_ACCOUNT.email}')`;
@@ -1377,25 +1314,6 @@ export async function checkOut(db, userId, appointmentId, { demo = false } = {})
     }
     return { minutes };
   });
-}
-
-// ───────────────────────── 이용 후기 ─────────────────────────
-// 공부가 끝난 뒤(체크아웃) 남기는 간단 후기. 약속마다 사람별 1개. rating 1~5(별점), comment 선택(운영진만 봄·추첨용).
-export async function submitReview(db, userId, appointmentId, { rating, comment } = {}) {
-  const r = Number(rating);
-  if (!Number.isInteger(r) || r < 1 || r > 5) throw new AppError(400, '별점을 1~5점으로 매겨 주세요.');
-  const text = String(comment ?? '').trim().slice(0, 500);
-  const { appt, m } = await loadAppointment(db, userId, appointmentId);
-  try {
-    await db.run(
-      'INSERT INTO reviews (appointment_id, match_id, user_id, rating, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      appt.id, m.id, userId, r, text || null, iso(),
-    );
-  } catch (err) {
-    if (isUniqueViolation(err)) throw new AppError(409, '이미 후기를 남겼어요. 고마워요!');
-    throw err;
-  }
-  return { ok: true };
 }
 
 // ───────────────────────── 주간 정산 / 리포트 ─────────────────────────

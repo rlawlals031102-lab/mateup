@@ -43,8 +43,8 @@ async function main() {
     const B = await newPhone(browser, 'B');
 
     step('가입: 처리방침 동의 체크 없이는 가입 버튼이 안 넘어감 → 체크하고 가입');
-    await signup(A, '010-1111-1111', '가나다');
-    await signup(B, '010-2222-2222', '라마바');
+    await signup(A, 'e2e-a@test.dev', '가나다');
+    await signup(B, 'e2e-b@test.dev', '라마바');
 
     step('신청 → 매칭');
     await apply(A);
@@ -99,20 +99,20 @@ async function main() {
     await A.goto(`${BASE}/#/me`);
     await A.waitForSelector('#delete-account');
     await A.click('#delete-account');
-    await A.fill('#del-form input[name="password"]', '1234');
+    await A.fill('#del-form input[name="password"]', 'secret1');
     A.once('dialog', (dlg) => dlg.accept());
     await A.click('#del-form button');
     await A.waitForURL(/#\/login/);
     await A.waitForSelector('#intro-ok');
     await A.click('#intro-ok');
-    await A.fill('input[name="phone"]', '010-1111-1111');
-    await A.fill('input[name="password"]', '1234');
+    await A.fill('input[name="email"]', 'e2e-a@test.dev');
+    await A.fill('input[name="password"]', 'secret1');
     await A.click('#f button.primary');
     await A.waitForFunction(() => document.querySelector('#toast.error'));
 
     step('처리방침 동의 전 회원 → 홈에서 동의 창');
     const db = new DatabaseSync(dbFile);
-    db.prepare("UPDATE users SET privacy_version = NULL WHERE email = '01022222222@phone.local'").run();
+    db.prepare("UPDATE users SET privacy_version = NULL WHERE email = 'e2e-b@test.dev'").run();
     db.close();
     await B.goto(`${BASE}/#/me`); // 다른 화면으로 가도 홈으로 돌아와 동의 창
     await B.waitForSelector('#consent-ok', { timeout: 15000 });
@@ -129,7 +129,7 @@ async function main() {
     await download.saveAs(saved);
     const text = await readFile(saved, 'utf8');
     const mine = JSON.parse(text);
-    if (mine.profile?.phone !== '010-2222-2222' || mine.reportsMade?.length !== 1) fail('내려받은 파일 내용이 이상해요');
+    if (mine.profile?.email !== 'e2e-b@test.dev' || mine.reportsMade?.length !== 1) fail('내려받은 파일 내용이 이상해요');
     if (mine.matches?.[0]?.mateName !== '탈퇴한 사용자') fail('탈퇴한 메이트 이름이 이상해요');
     if (text.includes('안녕하세요, 내일 봬요')) fail('상대가 보낸 메시지가 들어 있어요');
 
@@ -165,12 +165,14 @@ async function newPhone(browser, who) {
   return page;
 }
 
-async function signup(page, phone, name) {
+async function signup(page, email, name) {
   await page.goto(`${BASE}/#/signup`);
   await page.waitForSelector('#f');
+  await page.fill('input[name="email"]', email);
   await page.fill('input[name="name"]', name);
-  await page.fill('input[name="phone"]', phone);
-  await page.fill('input[name="password"]', '1234');
+  await page.fill('input[name="department"]', '경영정보학부');
+  await page.fill('input[name="phone"]', '010-1234-5678');
+  await page.fill('input[name="password"]', 'secret1');
   await page.click('#f button.primary');
   if (!page.url().includes('#/signup')) fail('동의 없이 가입이 넘어갔어요');
   await page.check('input[name="agree"]');

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import * as S from './service.js';
-import { LOCATIONS, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE_RULE, PRIVACY_POLICY, DEPOSIT } from './options.js';
+import { LOCATIONS, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE_RULE, PRIVACY_POLICY } from './options.js';
 import { sessionUser } from './sessions.js';
 import { emailHash } from './fieldcrypt.js';
 import { LIMITS, limit, assertUnder, countHit, clearHits, ipKey, securityHeaders } from './security.js';
@@ -77,8 +77,7 @@ export function createApp({
   api.get('/options', (req, res) => {
     res.json({
       locations: LOCATIONS, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD,
-      emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, authMode: emailPolicy.mode ?? 'email',
-      demoLogin, promiseRule: PROMISE_RULE, deposit: DEPOSIT,
+      emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, demoLogin, promiseRule: PROMISE_RULE,
       privacyVersion: PRIVACY_POLICY.version, reportReasons: REPORT_REASONS,
     });
   });
@@ -98,7 +97,6 @@ export function createApp({
       ...dashboard,
       promise: await promiseOverview(db), // 약속 기록·매칭 정지
       reports: await reportList(db, { withMessages: false }), // 신고 (내용은 아래에서 따로)
-      reviews: await S.recentReviews(db), // 이용 후기 (서술형은 추첨용)
       adminLogs: await recentAdminLogs(db), // 운영자 행동 기록
     });
   });
@@ -147,7 +145,7 @@ export function createApp({
   });
 
   // 인증 (요청 횟수 제한: server/security.js LIMITS)
-  const mailKey = (req) => emailHash(req.body?.email ?? req.body?.phone ?? '');
+  const mailKey = (req) => emailHash(req.body?.email);
   api.post('/auth/code', async (req, res) => {
     await limit(db, `code:ip:${ipKey(req)}`, LIMITS.codeIp);
     await limit(db, `code:email:${mailKey(req)}`, LIMITS.codeEmail);
@@ -297,10 +295,6 @@ export function createApp({
   api.post('/appointments/:id/checkout', member, async (req, res) => {
     const { minutes } = await S.checkOut(db, req.user.id, Number(req.params.id), opts);
     res.json({ minutes, match: await S.matchForAppointment(db, req.user.id, Number(req.params.id), opts) });
-  });
-  // 공부 끝난 뒤 이용 후기 (별점 1~5 필수, 서술형 선택 · 운영진만 봄)
-  api.post('/appointments/:id/review', member, async (req, res) => {
-    res.status(201).json(await S.submitReview(db, req.user.id, Number(req.params.id), req.body ?? {}));
   });
 
   // 매일 작업 (Vercel Cron, 매일 00:00 KST): 주간 정산 → 대기 신청끼리 다시 맞추기 → 보관 기간 지난 기록 정리

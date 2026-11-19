@@ -444,27 +444,27 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       const [a, b] = [browser(), browser()];
       await join(a, 'ra@test.dev'); await join(b, 'rb@test.dev');
       await a('POST', '/requests', REQ);
-      const { data: { matchId } } = await b('POST', '/requests', REQ); // 11/24·25·26 16:00 약속
+      const { data: { matchId } } = await b('POST', '/requests', REQ); // 11/17·18·19 19:00 약속
       assert.ok(matchId);
       sent.length = 0; // 매칭 성사 메일은 비워 두고 리마인드만 본다
 
-      // 11/24 14:00 = 당일 16:00 약속 2시간 전 → '오늘' 리마인드 두 사람
-      setNow(kst(2026, 11, 24, 14, 0));
+      // 11/17 16:00 = 당일 19:00 약속 3시간 전 → '오늘' 리마인드 두 사람
+      setNow(kst(2026, 11, 17, 16, 0));
       assert.equal((await a('GET', '/cron/reminders')).data.sent, 2);
       assert.ok(sent.every((m) => /오늘/.test(m.subject)), '당일 리마인드');
       // 다시 돌려도 중복 발송 없음
       assert.equal((await a('GET', '/cron/reminders')).data.sent, 0);
 
-      // 11/24 20:00 = 내일(11/25) 약속 전날 저녁 → '내일' 리마인드 두 사람
+      // 11/17 20:00 = 내일(11/18) 약속 전날 저녁 → '내일' 리마인드 두 사람
       sent.length = 0;
-      setNow(kst(2026, 11, 24, 20, 0));
+      setNow(kst(2026, 11, 17, 20, 0));
       assert.equal((await a('GET', '/cron/reminders')).data.sent, 2);
       assert.ok(sent.every((m) => /내일/.test(m.subject)), '전날 저녁 리마인드');
 
       // 알림 끈 사람은 제외
       sent.length = 0;
       await b('POST', '/me/notify', { optOut: true });
-      setNow(kst(2026, 11, 26, 14, 0)); // 11/26 16:00 약속 2시간 전
+      setNow(kst(2026, 11, 18, 16, 0)); // 11/18 19:00 약속 3시간 전
       await a('GET', '/cron/reminders');
       assert.deepEqual(sent.map((m) => m.to), ['ra@test.dev'], '알림 끈 b는 제외');
     });
@@ -479,7 +479,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
         const u = await S.signup(db, { email: `${n}@test.dev`, password: 'secret1', name: n, department: '경영정보학부', phone: '010-1234-5678' });
         const { rows } = await db.run(
           `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, cells, created_at)
-           VALUES (?, '[2]', '19:00', '21:00', ?, '["check"]', 0, '["2-3","2-4"]', ?) RETURNING id`,
+           VALUES (?, '[2]', '19:00', '21:00', ?, '["check"]', 0, '["2-7","2-8"]', ?) RETURNING id`,
           u.user.id, JSON.stringify([ROOM]), new Date().toISOString(),
         );
         ids.push(rows[0].id);
