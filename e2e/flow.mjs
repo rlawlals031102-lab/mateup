@@ -52,7 +52,7 @@ async function main() {
     await apply(B);
     await B.waitForURL(/#\/match\/\d+/, { timeout: 15000 });
     await B.waitForSelector('.att-table tbody tr');
-    if (!(await B.isVisible('#scan'))) fail('메이트 화면에 출석 확인(QR 찍기)이 없어요');
+    if (!(await B.isVisible('[data-att-tab="scan"]'))) fail('메이트 화면에 출석 확인(QR 찍기 탭)이 없어요');
     await shot(B, '01_match');
 
     step('약속을 캘린더(.ics)로 내려받기');
