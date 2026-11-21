@@ -31,8 +31,8 @@ function initials(name) {
   if (first.length >= 3 && SURNAMES.includes(first[0])) return first.slice(1, 3);
   return first.slice(0, 2);
 }
-// 사람마다 다른 은은한 색 (포스터의 올리브·연두·모래색 계열)
-const AV_TONES = [['#e3f0d6', '#3d6125'], ['#eef3c6', '#4f5c1a'], ['#f1e8d2', '#6a5226'], ['#e6eadb', '#465a31']];
+// 사람마다 다른 은은한 색 (연초록·청록·연회색·민트)
+const AV_TONES = [['#dcf5e4', '#166534'], ['#ddf3f1', '#0f5f55'], ['#eef0f3', '#3f4a56'], ['#e3f7ef', '#11694a']];
 function avatarHTML(u, size = '') {
   const n = [...String(u?.name ?? '')].reduce((sum, c) => sum + c.codePointAt(0), 0);
   const [bg, fg] = AV_TONES[n % AV_TONES.length];
@@ -96,7 +96,7 @@ function kDay(iso) {
   return `${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일`;
 }
 const reopenText = (st) => `${kDay(st.suspendedUntil)}부터 다시 신청할 수 있어요.`;
-const RULE_TEXT = () => `약속 날 안 나오거나 매칭을 그만두면 1회로 기록돼요. ${rule().strikeLimit}회가 되면 ${rule().suspendDays}일 동안 매칭 신청이 멈추고, 정지가 끝나면 다시 0회부터 시작해요.`;
+const RULE_TEXT = () => `약속 날 안 나오거나 매칭을 그만두면 1회로 기록돼요.<br>${rule().strikeLimit}회가 되면 ${rule().suspendDays}일 동안 매칭 신청이 멈추고, 정지가 끝나면<br>다시 0회부터 시작해요.`;
 let myStrikes = null; // 내 약속 기록 (메이트 화면을 열 때 받아 둔다)
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -191,11 +191,11 @@ function poll(fn, gaps = POLL_GAPS) {
   return { active: () => { quietSince = Date.now(); nextAt = Math.min(nextAt, Date.now() + gaps[0][1]); } };
 }
 
-function setTop({ title = '', back = null, brand = false, right = '' } = {}) {
+function setTop({ title = '', back = null, brand = false, right = '', center = false } = {}) {
   topbar.hidden = false;
   topbar.innerHTML = `
     <div>${back ? `<a class="icon-btn" href="${back}" aria-label="뒤로">${icon('caret-left')}</a>` : ''}</div>
-    ${brand ? '<div class="center"><img class="logo" src="logo.svg" alt="스터디버디"></div>' : `<h1>${esc(title)}</h1>`}
+    ${brand ? '<div class="center"><img class="logo" src="logo.svg" alt="스터디버디"></div>' : `<h1${center ? ' class="mid"' : ''}>${esc(title)}</h1>`}
     <div>${right}</div>`;
 }
 
@@ -598,7 +598,7 @@ const introBody = () => `
         <li><b>약속 지키기</b><span class="small muted">약속 날 안 나오거나 매칭을 중간에 그만두면 1회로 쌓여요. ${rule().strikeLimit}회가 되면 ${rule().suspendDays}일 동안 매칭 신청이 멈춰요.</span></li>
       </ol>
       <p class="small mt">${periodText()}</p>
-      <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a>에 올려요.</p>`;
+      <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a></p>`;
 
 function showIntro() {
   const modal = $('#modal');
@@ -825,7 +825,6 @@ async function renderHome(alive) {
           ${exam ? `<li><span>${esc(exam.name)}까지</span><b>${dday}</b><small>${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일</small></li>` : ''}
           <li><span>지금까지 함께 공부한 팀</span><b>${community.studiedTeams}팀</b>${community.waiting ? `<small>대기 ${community.waiting}명</small>` : ''}</li>
         </ul>`;
-  const heroStats = facts;
   const homeStats = `<section class="section">${facts}</section>`;
   const ttCard = '<section class="card" id="my-tt-card"></section>';
   // 매칭·신청이 있으면: 시간표 → 매칭 상태 카드들 → 통계
@@ -837,17 +836,28 @@ async function renderHome(alive) {
       + ruleNote
       + homeStats
     : `${leftNote}
-      <div class="card hero compact">
-        <h2>${stopped ? '지금은 매칭을 신청할 수 없어요' : '메이트 신청'}</h2>
-        <p class="small muted">${stopped ? `약속 기록이 ${st.limit}회가 되어 ${rule().suspendDays}일 동안 매칭 신청이 멈췄어요. ${reopenText(st)}`
-          : `${periodText()} 중 원하는 시간만 고르면 돼요.`}</p>
-        ${heroStats}
-        ${stopped ? '' : `<a class="btn lime block" href="#/apply">매칭 신청하기</a>${ruleNote}`}
+      <div class="home-tiles">
+        <div class="tile big">
+          <h2>${stopped ? '지금은 신청할 수 없어요' : '메이트 신청'}</h2>
+          <p>${stopped ? `약속 기록이 ${st.limit}회가 되어 ${rule().suspendDays}일 동안 매칭 신청이 멈췄어요. ${reopenText(st)}`
+            : `<b>${periodText()}</b>원하는 시간만 고르면 돼요`}</p>
+          ${stopped ? '' : '<a class="btn primary block" href="#/apply">매칭 신청하기</a>'}
+        </div>
+        <div class="tile">
+          <span class="tile-label">${exam ? `${esc(exam.name)}까지` : '스터디 시간'}</span>
+          <b class="tile-num">${exam ? dday : '매일'}</b>
+          <span class="tile-sub">${exam ? `${Number(exam.date.slice(5, 7))}월 ${Number(exam.date.slice(8))}일` : '17:00–22:00'}</span>
+        </div>
+        <div class="tile">
+          <span class="tile-label">함께 공부한 팀</span>
+          <b class="tile-num">${community.studiedTeams}팀</b>
+          <span class="tile-sub">${community.waiting ? `대기 ${community.waiting}명` : '지금까지'}</span>
+        </div>
       </div>
+      ${ruleNote}
       ${ttCard}`;
 
   view.innerHTML = `
-    <p class="hello">${esc(user.name)}님</p>
     ${main}
     <section class="section">
       <h2 class="section-title">스터디버디는 이렇게 진행돼요</h2>
@@ -868,7 +878,46 @@ async function renderHome(alive) {
       b.innerHTML = info?.label ? `<span>${esc(info.label)}</span>` : '';
     });
   };
+  // 매칭·신청이 없는 첫 화면: 위 타일 묶음(메이트 신청 · 디데이 · 함께 공부한 팀)은 화면의 약 1/4(결제 앱 첫 화면 타일 비율),
+  // 남은 높이에 '내 시간표' 전체(09~22시)가 스크롤 없이 들어가도록 칸 높이를 맞춘다.
+  const fitHome = () => {
+    if (!alive()) return;
+    const hero = $('.home-tiles');
+    const card = $('#my-tt-card');
+    const tt = $('#my-tt');
+    if (!card || !tt || (!hasAny && !hero)) return;
+    // 매칭·신청이 있으면: 시간표 바로 아래 첫 카드(이번 주 메이트 등)까지 한 화면에 보이게 시간표를 줄인다 (늘리지는 않음)
+    const anchor = hasAny ? (card.nextElementSibling ?? card) : card;
+    const sc = scroller();
+    const inPhone = sc !== document.scrollingElement;
+    const viewTop = inPhone ? sc.getBoundingClientRect().top : 0;
+    const viewH = inPhone ? sc.clientHeight : window.innerHeight;
+    const topH = topbar.hidden ? 0 : topbar.getBoundingClientRect().height;
+    const tabH = tabbar.hidden ? 0 : tabbar.getBoundingClientRect().height;
+    if (hero) hero.style.minHeight = `${Math.round((viewH - topH - tabH) * 0.24)}px`;
+    const cells = [...tt.querySelectorAll('.tt-cell')].filter((c) => c.dataset.cell?.startsWith('1-'));
+    const units = cells.reduce((n, c) => n + (c.classList.contains('evening') ? 0.85 : 1), 0);
+    tt.classList.remove('fit');
+    const base = parseFloat(getComputedStyle(cells.find((c) => !c.classList.contains('evening'))).height);
+    for (let k = 0; k < 2; k++) {
+      const bottom = anchor.getBoundingClientRect().bottom - viewTop + (sc.scrollTop || 0);
+      const extra = (viewH - tabH - 10) - bottom;
+      const cur = parseFloat(getComputedStyle(cells.find((c) => !c.classList.contains('evening'))).height);
+      const next = Math.max(12, Math.min(hasAny ? base : 44, cur + extra / units));
+      tt.classList.add('fit');
+      tt.style.setProperty('--tt-h', `${next.toFixed(1)}px`);
+    }
+  };
+  // 휴대폰에서 스크롤하면 주소창이 숨었다 나타나며 화면 높이가 바뀐다 → 그때마다 다시 맞추면 시간표가 늘었다 줄었다 한다.
+  // 그래서 화면 폭이 바뀔 때(가로·세로 돌리기 등)만 다시 맞춘다.
+  let fitWidth = window.innerWidth;
+  window.onresize = () => {
+    if (window.innerWidth === fitWidth) return;
+    fitWidth = window.innerWidth;
+    fitHome();
+  };
   const drawTimetable = () => {
+    setTimeout(fitHome, 0);
     const map = myTimetable({ matches, pendingRequests, personal: mine });
     const card = $('#my-tt-card');
     const empty = !matches.length && !pendingRequests.length && !mine.length;
@@ -1108,7 +1157,10 @@ const mateTabsHTML = (matches, current, base) => (matches.length < 2 ? '' : `
   </div>`);
 
 async function renderMatch(alive, id) {
-  setTop({ title: '내 메이트' });
+  // 매칭 화면은 위쪽 띠 없이 바로 출석 카드부터 (빈 여백도 없앤다)
+  setTop({});
+  topbar.innerHTML = '';
+  topbar.hidden = true;
   setTabs('match');
   loading();
   const { matches, strikes } = await api('/matches/active');
@@ -1158,40 +1210,49 @@ function drawMatch(m, alive, { admin = false } = {}) {
   if (target) {
     const meIn = ['studying', 'done'].includes(target.me.status);
     const mateIn = ['studying', 'done'].includes(target.mate.status);
-    const myPart = meIn
-      ? (target.me.status === 'studying' ? `
-        <div class="center">
+    // 내 출석이 확인된 뒤: 공부 시간 기록 중 / 오늘 기록 끝
+    const myDone = !meIn ? '' : (target.me.status === 'studying' ? `
+        <div class="center att-status">
           <p class="small muted">메이트가 내 출석을 확인했어요</p>
           <div class="timer mt" id="timer" data-since="${esc(target.me.checkedInAt)}">00:00:00</div>
           <p class="tiny muted">공부 시간 기록 중</p>
           <button class="btn primary block mt" id="checkout" data-id="${target.id}">공부 종료하고 기록하기</button>
-        </div>` : '<p class="small">오늘 내 출석 완료 · 공부 기록을 마쳤어요</p>')
-      : `
-        <div class="checkin">
+        </div>` : '<p class="small att-status">오늘 내 출석 완료 · 공부 기록을 마쳤어요</p>');
+    // 아직 남은 확인: 탭 세 개 (메이트 QR 찍기 / QR 보여주기 / 코드 직접 입력하기)
+    const panes = [];
+    // '메이트 QR 찍기' 탭은 누르면 바로 카메라가 열린다 (내용 칸 없음)
+    if (!mateIn) panes.push(['scan', '메이트 QR 찍기', null]);
+    if (!meIn) {
+      panes.push(['show', 'QR 보여주기', `
+        <div class="att-show">
           <div>
-            <p class="small"><b>내 출석 코드</b></p>
+            <p class="small">메이트가 이 QR을 찍으면 내 출석이 바로 확인돼요.</p>
+            <p class="tiny att-dim mt">내 출석 코드</p>
             <div class="code">${esc(target.myCode ?? '')}</div>
-            <p class="tiny muted mt">메이트가 이 QR을 찍으면 내 출석이 바로 확인돼요. QR이 안 되면 이 코드를 알려 주세요.</p>
           </div>
           <div class="qr-box"><img data-qr="${target.id}" alt="내 출석 QR 코드"></div>
-        </div>`;
-    const matePart = mateIn
-      ? `<p class="small">${esc(m.mate.name)}님 출석 확인 완료</p>`
-      : `
-        <p class="small"><b>${esc(m.mate.name)}님 출석 확인하기</b></p>
-        <p class="tiny muted">메이트 화면의 QR을 찍으면 메이트 출석이 바로 확인돼요.</p>
-        <button class="btn primary block mt" id="scan" data-id="${target.id}">메이트 QR 찍기</button>
-        <p class="tiny muted mt">QR이 안 되면 메이트 화면의 출석 코드를 입력해 주세요.</p>
-        ${target.mateCode ? `<p class="tiny muted">데모 메이트 코드: <b class="code" style="font-size:12px">${esc(target.mateCode)}</b></p>` : ''}
+        </div>`]);
+    }
+    if (!mateIn) {
+      panes.push(['code', '코드 직접 입력하기', `
+        <p class="small">QR이 안 되면 ${esc(m.mate.name)}님 화면의 출석 코드를 입력해 주세요.</p>
+        ${target.mateCode ? `<p class="tiny att-dim mt">데모 메이트 코드: <b class="code" style="font-size:12px">${esc(target.mateCode)}</b></p>` : ''}
         <form class="row mt" id="confirm-form" data-id="${target.id}">
           <input class="input code" name="code" maxlength="6" placeholder="메이트 코드" autocomplete="off" style="text-transform:uppercase" required>
-          <button class="btn inline-btn">확인</button>
-        </form>`;
+          <button class="btn primary inline-btn">확인</button>
+        </form>
+        ${!meIn ? `<p class="tiny att-dim mt">내 코드 <b class="code" style="font-size:12px">${esc(target.myCode ?? '')}</b> 를 메이트에게 알려 줘도 돼요.</p>` : ''}`]);
+    }
+    const first = panes.find(([k]) => k === 'show')?.[0] ?? panes.find(([, , body]) => body)?.[0];
     checkinCard = `
-    <section class="card">
-      <div class="card-head"><h2>현장 출석 확인</h2><span class="hint">${fmtDate(target.date, true)} ${fmtRange(target.startTime, target.endTime)}</span></div>
-      <div class="att-part">${myPart}</div>
-      <div class="att-part">${matePart}</div>
+    <section class="card att-card">
+      ${myDone}
+      ${panes.length ? `
+      <div class="att-tabs" role="tablist">
+        ${panes.map(([k, label]) => `<button type="button" role="tab" data-att-tab="${k}" data-id="${target.id}" aria-selected="${k === first}">${label}</button>`).join('')}
+      </div>
+      ${panes.filter(([, , body]) => body).map(([k, , body]) => `<div class="att-pane" role="tabpanel" data-att-pane="${k}"${k === first ? '' : ' hidden'}>${body}</div>`).join('')}` : ''}
+      ${mateIn ? `<p class="small att-status">${esc(m.mate.name)}님 출석 확인 완료</p>` : ''}
     </section>`;
   } else if (next) {
     nextLine = `<p class="next-line">다음 약속 <b>${fmtDate(next.date, true)} ${fmtTime(next.startTime)}</b> · 시작 ${OPTIONS.checkinEarlyMin}분 전부터 출석할 수 있어요.</p>`;
@@ -1212,7 +1273,7 @@ function drawMatch(m, alive, { admin = false } = {}) {
         </div>
       </div>
       ${m.mate.isBot ? '<div class="notice">체험용 <b>가상 메이트</b>예요. 실제로 약속 장소에 나오지 않아요. 내가 출석하면 함께 출석하고, 채팅에 자동으로 답해요.</div>' : ''}
-      <p class="meta-line">${esc(styleLabels(m.styles))} · ${esc(m.location)}</p>
+      <p class="meta-line mate-meta">${esc(styleLabels(m.styles))} · ${esc(m.location)}</p>
     </section>
 
     <section class="section">
@@ -1289,6 +1350,18 @@ function drawMatch(m, alive, { admin = false } = {}) {
     confirmMate(e.target.dataset.id, e.target.code.value);
   });
   $('#scan')?.addEventListener('click', (e) => openScanner(Number(e.target.dataset.id), refresh));
+  // 출석 확인 탭 바꾸기
+  const pickAttTab = (key) => {
+    $$('[data-att-tab]').forEach((t) => t.setAttribute('aria-selected', t.dataset.attTab === key));
+    $$('[data-att-pane]').forEach((p) => { p.hidden = p.dataset.attPane !== key; });
+  };
+  $$('[data-att-tab]').forEach((tab) => tab.addEventListener('click', () => {
+    if (tab.dataset.attTab !== 'scan') return pickAttTab(tab.dataset.attTab);
+    // 'QR 찍기'는 바로 전체 카메라 화면으로. 뒤로 가면 'QR 보여주기'(없으면 '코드 입력'), 카메라 화면의 다른 탭을 누르면 그 탭으로
+    pickAttTab('scan');
+    const hasShow = !!$('[data-att-pane="show"]');
+    openScanner(Number(tab.dataset.id), refresh, (key) => { if ($('[data-att-pane]')) pickAttTab(key); }, { hasShow });
+  }));
   $('#checkout')?.addEventListener('click', async (e) => {
     try {
       const apptId = e.target.dataset.id;
@@ -1511,18 +1584,32 @@ async function qrReader(video) {
   };
 }
 
-function openScanner(appointmentId, onDone) {
+// 메이트 QR 찍기: 화면 전체를 카메라로 비추고, 가운데 초록 모서리 안에 QR을 맞춘다.
+// 위쪽: ← 뒤로 / 탭(메이트 QR 찍기 · QR 보여주기 · 코드 직접 입력하기). 다른 탭을 누르면 카메라를 닫고 그 탭으로 간다.
+// 카메라 권한: 열 때 브라우저(휴대폰)가 권한을 묻는다. 거절했거나 쓸 수 없으면 검은 화면에 안내와 '다시 요청' 버튼.
+// onClose(key): 닫힐 때 돌아갈 탭 ('show' | 'code'). 휴대폰 뒤로가기도 화면을 떠나지 않고 카메라만 닫는다.
+function openScanner(appointmentId, onDone, onClose = null, { hasShow = true } = {}) {
   const modal = $('#modal');
-  const canScan = !!navigator.mediaDevices?.getUserMedia;
+  let backTo = hasShow ? 'show' : 'code';
   modal.innerHTML = `
-    <div class="sheet">
-      <div class="row between"><h3>메이트 QR 찍기</h3><button class="btn sm ghost" id="close">닫기</button></div>
-      <p class="small muted">메이트 화면의 출석 QR을 비추면 바로 출석이 확인돼요. 안 되면 아래에 메이트의 코드를 입력하세요.</p>
-      ${canScan ? '<div class="scanner"><video id="video" playsinline muted></video></div>' : '<div class="notice">이 브라우저는 카메라를 쓸 수 없어요. 메이트 화면의 6자리 코드를 입력해 주세요.</div>'}
-      <form id="code-form" class="row mt">
-        <input class="input code" name="code" maxlength="6" placeholder="메이트 코드" autocomplete="off" style="text-transform:uppercase" required>
-        <button class="btn primary">출석 확인</button>
-      </form>
+    <div class="scan-full" role="dialog" aria-modal="true" aria-label="메이트 QR 찍기">
+      <video id="video" playsinline muted></video>
+      <div class="scan-top">
+        <button type="button" class="scan-back" id="close" aria-label="뒤로">${icon('caret-left')}</button>
+        <div class="scan-tabs" role="tablist">
+          <button type="button" role="tab" aria-selected="true">메이트 QR 찍기</button>
+          ${hasShow ? '<button type="button" role="tab" aria-selected="false" data-go="show">QR 보여주기</button>' : ''}
+          <button type="button" role="tab" aria-selected="false" data-go="code">코드 직접 입력하기</button>
+        </div>
+      </div>
+      <p class="scan-guide" id="scan-guide">메이트 화면의 QR코드를 찍어 주세요</p>
+      <div class="scan-frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <div class="scan-denied" id="scan-denied" hidden>
+        <p><b>카메라 권한이 필요해요</b></p>
+        <p class="small">QR을 찍으려면 카메라를 허용해 주세요. 허용 창이 뜨지 않으면 휴대폰 설정에서 이 브라우저의 카메라 권한을 켜 주세요.</p>
+        <button type="button" class="btn primary block mt" id="scan-retry">카메라 권한 요청하기</button>
+        <button type="button" class="text-btn" data-go="code">코드 직접 입력하기</button>
+      </div>
     </div>`;
   modal.hidden = false;
 
@@ -1532,9 +1619,18 @@ function openScanner(appointmentId, onDone) {
     stopped = true;
     stream?.getTracks().forEach((t) => t.stop());
   };
-  modal.addEventListener('close', stop, { once: true });
-  modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+  history.pushState({ scanner: true }, '');
+  const onPop = () => closeModal();
+  window.addEventListener('popstate', onPop, { once: true });
+  modal.addEventListener('close', () => {
+    stop();
+    window.removeEventListener('popstate', onPop);
+    if (history.state?.scanner) history.back(); // 뒤로 버튼·탭으로 닫았으면 쌓은 기록을 치운다
+    onClose?.(backTo);
+  }, { once: true });
+  modal.onclick = null;
   $('#close').addEventListener('click', closeModal);
+  modal.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { backTo = b.dataset.go; closeModal(); }));
 
   const submit = async (code) => {
     try {
@@ -1549,34 +1645,37 @@ function openScanner(appointmentId, onDone) {
     }
   };
 
-  $('#code-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    submit(new FormData(e.target).get('code'));
-  });
-
-  if (canScan) {
-    (async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        if (stopped) return stop();
-        const video = $('#video');
-        video.srcObject = stream;
-        await video.play();
-        const read = await qrReader(video);
-        const loop = async () => {
-          if (stopped) return;
-          const hit = (await read()).find((v) => v.startsWith('SB:'));
-          // 읽었는데 확인에 실패하면(시간 전 등) 잠깐 쉬었다가 다시 찍을 수 있게 한다
-          if (hit && await submit(hit.split(':')[2])) return;
-          if (hit) return setTimeout(loop, 2000);
-          requestAnimationFrame(loop);
-        };
-        loop();
-      } catch {
-        toast('카메라를 사용할 수 없어요. 코드를 입력해 주세요.', true);
-      }
-    })();
-  }
+  const showDenied = (on) => {
+    $('#scan-denied').hidden = !on;
+    $('#scan-guide').hidden = on;
+    modal.querySelector('.scan-frame').hidden = on;
+  };
+  const start = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) return showDenied(true);
+    try {
+      // 이때 휴대폰(브라우저)이 카메라 권한을 묻는다
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      if (stopped) return stop();
+      showDenied(false);
+      const video = $('#video');
+      video.srcObject = stream;
+      await video.play();
+      const read = await qrReader(video);
+      const loop = async () => {
+        if (stopped) return;
+        const hit = (await read()).find((v) => v.startsWith('SB:'));
+        // 읽었는데 확인에 실패하면(시간 전 등) 잠깐 쉬었다가 다시 찍을 수 있게 한다
+        if (hit && await submit(hit.split(':')[2])) return;
+        if (hit) return setTimeout(loop, 2000);
+        requestAnimationFrame(loop);
+      };
+      loop();
+    } catch {
+      if (!stopped) showDenied(true);
+    }
+  };
+  $('#scan-retry').addEventListener('click', start);
+  start();
 }
 
 // ───────────────────────── 채팅 ─────────────────────────
@@ -1595,7 +1694,7 @@ async function renderChat(alive, id) {
       <p>매칭이 되면 메이트와 약속을 이야기할 수 있어요.</p></div>`;
     return;
   }
-  setTop({ title: match.mate.name, right: '<button type="button" class="top-action" id="report">신고</button>' });
+  setTop({ title: match.mate.name, center: true, right: '<button type="button" class="top-action" id="report">신고</button>' });
   $('#report').addEventListener('click', () => openReport(match));
   const quick = quickMessages(match);
   view.innerHTML = `${mateTabsHTML(matches, match.id, 'chat')}
@@ -1729,7 +1828,7 @@ function quickMessages(match) {
 // ───────────────────────── 마이페이지 ─────────────────────────
 
 async function renderMe(alive) {
-  setTop({ title: '마이페이지' });
+  setTop({ title: '마이페이지', center: true });
   setTabs('me');
   loading();
   const [{ user, strikes }, { matches, record }] = await Promise.all([api('/me'), api('/me/history')]);
