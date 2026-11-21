@@ -364,19 +364,22 @@ const emailInput = () => (OPTIONS.emailDomain
   ? `<div class="email-input"><input class="input" name="email" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="아이디" required><span>@${esc(OPTIONS.emailDomain)}</span></div>`
   : '<input class="input" name="email" type="email" autocomplete="email" required>');
 
-// @kookmin.ac.kr 을 입력한 글자(비어 있으면 '아이디' 안내 글자) 바로 뒤에 붙인다.
-// 칸 끝까지 차면 오른쪽 끝에 멈추고, 글자는 그 앞에서 옆으로 밀린다.
+// 아이디 칸의 폭을 입력한 글자(비어 있으면 '아이디' 안내 글자)만큼으로 맞춰, @kookmin.ac.kr 이 바로 뒤에 오게 한다.
+// 아이디 칸과 @kookmin.ac.kr 은 한 줄에 나란히 놓여서(styles.css .email-input) 서로 겹치지 않는다.
+// 칸이 꽉 차면 아이디 칸이 줄어들고, 글자는 그 안에서 옆으로 밀린다.
 const measureCtx = document.createElement('canvas').getContext('2d');
 function placeDomain(input) {
-  const span = input.nextElementSibling;
-  if (!span) return;
   const cs = getComputedStyle(input);
   measureCtx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
   const text = input.value || input.placeholder;
-  const left = parseFloat(cs.paddingLeft) + measureCtx.measureText(text).width + 2;
-  span.style.left = `${Math.min(left, input.clientWidth - span.offsetWidth - 12)}px`;
+  input.style.width = `${Math.ceil(measureCtx.measureText(text).width) + 4}px`;
 }
 document.fonts?.ready.then(() => $$('.email-input input').forEach(placeDomain));
+// 상자 아무 데나 눌러도(@kookmin.ac.kr 위 포함) 아이디 칸에 입력할 수 있게
+document.addEventListener('click', (e) => {
+  const box = e.target.closest?.('.email-input');
+  if (box && e.target.tagName !== 'INPUT') box.querySelector('input').focus();
+});
 
 // 아이디 칸에 전체 주소를 붙여 넣으면 @ 앞만 남긴다
 document.addEventListener('input', (e) => {

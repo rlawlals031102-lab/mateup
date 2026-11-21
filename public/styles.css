@@ -468,10 +468,17 @@ a.link-item:hover { background: var(--soft); }
 .apply-tt .tt-cell span { top: 50%; transform: translateY(-50%); text-align: center; font-size: 10px; color: var(--muted); }
 
 /* 메일 입력칸: @ 앞만 입력하고 @kookmin.ac.kr 은 칸 오른쪽에 고정으로 보인다 */
-.email-input { position: relative; display: block; }
+/* 바깥 상자가 입력칸 모양이고, 그 안에 [아이디 칸][@kookmin.ac.kr] 이 나란히 놓인다 → 글자가 서로 겹칠 수 없다 */
+.email-input {
+  display: flex; align-items: center; width: 100%; height: 46px; padding: 0 14px; cursor: text;
+  border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface);
+}
+.email-input:focus-within { border-color: var(--green); box-shadow: 0 0 0 3px rgba(69, 110, 42, .14); }
 .field .row .email-input { flex: 1; min-width: 0; }
-.email-input .input { width: 100%; padding-right: 112px; }
-.email-input span { position: absolute; top: 50%; white-space: nowrap; transform: translateY(-50%); font-size: 13px; color: var(--muted); pointer-events: none; }
+.email-input .input,
+.email-input .input:focus,
+.field .row .email-input .input { flex: 0 1 auto; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.email-input span { flex: none; white-space: nowrap; font-size: 13px; color: var(--muted); }
 
 /* 개발자 화면 */
 .hour-bars { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; height: 80px; align-items: end; margin-top: 6px; }
