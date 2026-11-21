@@ -97,6 +97,7 @@ export function createApp({
       ...dashboard,
       promise: await promiseOverview(db), // 약속 기록·매칭 정지
       reports: await reportList(db, { withMessages: false }), // 신고 (내용은 아래에서 따로)
+      reviews: await S.recentReviews(db), // 이용 후기 (서술형은 추첨용)
       adminLogs: await recentAdminLogs(db), // 운영자 행동 기록
     });
   });
@@ -295,6 +296,10 @@ export function createApp({
   api.post('/appointments/:id/checkout', member, async (req, res) => {
     const { minutes } = await S.checkOut(db, req.user.id, Number(req.params.id), opts);
     res.json({ minutes, match: await S.matchForAppointment(db, req.user.id, Number(req.params.id), opts) });
+  });
+  // 공부 끝난 뒤 이용 후기 (별점 1~5 필수, 서술형 선택 · 운영진만 봄)
+  api.post('/appointments/:id/review', member, async (req, res) => {
+    res.status(201).json(await S.submitReview(db, req.user.id, Number(req.params.id), req.body ?? {}));
   });
 
   // 매일 작업 (Vercel Cron, 매일 00:00 KST): 주간 정산 → 대기 신청끼리 다시 맞추기 → 보관 기간 지난 기록 정리

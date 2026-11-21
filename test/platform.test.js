@@ -1,4 +1,5 @@
 // 보안·개인정보·운영 장치 테스트 (HTTP 요청으로 확인). SQLite와 PostgreSQL(PGlite) 양쪽에서 돌린다.
+import './fixed-period.js'; // 스터디 기간 고정 (다른 import 보다 먼저)
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -479,7 +480,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
         const u = await S.signup(db, { email: `${n}@test.dev`, password: 'secret1', name: n, department: '경영정보학부', phone: '010-1234-5678' });
         const { rows } = await db.run(
           `INSERT INTO match_requests (user_id, days, start_time, end_time, location, styles, deposit, cells, created_at)
-           VALUES (?, '[2]', '19:00', '21:00', ?, '["check"]', 0, '["2-7","2-8"]', ?) RETURNING id`,
+           VALUES (?, '[2]', '19:00', '21:00', ?, '["check"]', 0, '["2-10","2-11"]', ?) RETURNING id`,
           u.user.id, JSON.stringify([ROOM]), new Date().toISOString(),
         );
         ids.push(rows[0].id);

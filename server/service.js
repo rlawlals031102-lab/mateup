@@ -71,6 +71,7 @@ function runsOf(cells) {
   const byDay = new Map();
   for (const c of cells) {
     const [d, i] = parseCell(c);
+    if (!TIME_SLOTS[i]) continue; // 시간표가 바뀌기 전의 칸은 건너뛴다
     byDay.set(d, [...(byDay.get(d) ?? []), i]);
   }
   const runs = [];
@@ -1078,6 +1079,14 @@ export async function assertAdmin(db, userId) {
   if (!ADMIN_EMAILS.includes(u?.email)) throw new AppError(403, '관리자만 볼 수 있어요.');
 }
 
+// 최근 이용 후기 (운영진만). 서술형 comment 는 추첨 대상.
+export async function recentReviews(db) {
+  return db.all(
+    `SELECT v.rating, v.comment, v.created_at AS "createdAt", u.name
+     FROM reviews v JOIN users u ON u.id = v.user_id ORDER BY v.id DESC LIMIT 100`,
+  );
+}
+
 const maskEmail = (e) => e.replace(/^(.{3}).*@/, '$1***@');
 
 // 관리자 화면에서는 운영자 계정 이름 앞에 [관리자]를 붙인다 (예: [관리자]김지민)
@@ -1314,6 +1323,25 @@ export async function checkOut(db, userId, appointmentId, { demo = false } = {})
     }
     return { minutes };
   });
+}
+
+// ───────────────────────── 이용 후기 ─────────────────────────
+// 공부가 끝난 뒤(체크아웃) 남기는 간단 후기. 약속마다 사람별 1개. rating 1~5(별점), comment 선택(운영진만 봄·추첨용).
+export async function submitReview(db, userId, appointmentId, { rating, comment } = {}) {
+  const r = Number(rating);
+  if (!Number.isInteger(r) || r < 1 || r > 5) throw new AppError(400, '별점을 1~5점으로 매겨 주세요.');
+  const text = String(comment ?? '').trim().slice(0, 500);
+  const { appt, m } = await loadAppointment(db, userId, appointmentId);
+  try {
+    await db.run(
+      'INSERT INTO reviews (appointment_id, match_id, user_id, rating, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      appt.id, m.id, userId, r, text || null, iso(),
+    );
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new AppError(409, '이미 후기를 남겼어요. 고마워요!');
+    throw err;
+  }
+  return { ok: true };
 }
 
 // ───────────────────────── 주간 정산 / 리포트 ─────────────────────────

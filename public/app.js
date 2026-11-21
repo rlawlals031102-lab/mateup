@@ -57,9 +57,10 @@ function fmtTime(t) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 const fmtRange = (a, b) => `${fmtTime(a)}–${fmtTime(b)}`;
-// 이번 회차 날짜·시간 한 줄: "11월 17일(화)·18일(수)·19일(목) 19:00–21:00"
+// 스터디 날짜·시간 한 줄 (매일) → "매일 17:00–22:00"
 function periodText() {
   const p = OPTIONS.studyPeriod;
+  if (p.dates.length >= 7) return `매일 ${fmtRange(p.start, p.end)}`;
   const days = p.dates.map((d, i) => {
     const [, mo, dd] = d.split('-').map(Number);
     const wd = WD[new Date(`${d}T00:00:00`).getDay() || 7];
@@ -215,6 +216,7 @@ function runsOfCells(cells) {
   const byDay = {};
   for (const c of cells) {
     const [d, i] = c.split('-').map(Number);
+    if (!S[i]) continue; // 시간표가 바뀌기 전의 칸은 건너뛴다
     (byDay[d] ??= []).push(i);
   }
   const runs = [];
@@ -542,6 +544,49 @@ function showConsent() {
   });
 }
 
+// 공부가 끝나면(체크아웃) 뜨는 간단 이용 후기 팝업: 스마일 별점 1~5(필수) + 서술형(선택, 추첨 안내). 닫기 가능.
+function showReviewPopup(appointmentId) {
+  const modal = $('#modal');
+  let rating = 0;
+  const smiles = [1, 2, 3, 4, 5].map((n) =>
+    `<button type="button" class="rv-star" data-n="${n}" aria-label="${n}점" style="font-size:36px;line-height:1;background:none;border:0;padding:4px;cursor:pointer;opacity:.28;transition:opacity .12s,transform .12s">😊</button>`).join('');
+  modal.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="rv-title">
+      <h3 id="rv-title">오늘 공부 어땠어요?</h3>
+      <p class="small muted">함께한 스터디가 어땠는지 별점으로 알려 주세요.</p>
+      <div id="rv-stars" style="display:flex;justify-content:center;gap:2px;margin:8px 0 4px">${smiles}</div>
+      <label class="field"><span>운영진에게 하고 싶은 말 (선택)</span>
+        <textarea class="input" id="rv-comment" rows="3" maxlength="500" placeholder="운영진에게 하고 싶은 말을 적어주세요, 추첨을 통해 소정의 선물을 드립니다."></textarea>
+      </label>
+      <button class="btn primary block mt" id="rv-submit">후기 보내기</button>
+      <button type="button" class="text-btn" id="rv-skip">다음에 할게요</button>
+    </div>`;
+  modal.hidden = false;
+  modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+  const stars = $('#rv-stars');
+  stars.addEventListener('click', (e) => {
+    const b = e.target.closest('.rv-star');
+    if (!b) return;
+    rating = Number(b.dataset.n);
+    [...stars.children].forEach((c, i) => {
+      const on = i < rating;
+      c.style.opacity = on ? '1' : '.28';
+      c.style.transform = on ? 'scale(1.1)' : 'scale(1)';
+    });
+  });
+  $('#rv-skip').addEventListener('click', closeModal);
+  $('#rv-submit').addEventListener('click', async () => {
+    if (!rating) return toast('별점을 매겨 주세요.', true);
+    try {
+      await api(`/appointments/${appointmentId}/review`, { method: 'POST', body: { rating, comment: $('#rv-comment').value } });
+      closeModal();
+      toast('후기 고마워요! 추첨 선물의 행운을 빌어요 🍀');
+    } catch (err) {
+      if (/이미 후기/.test(err.message)) { closeModal(); toast('이미 후기를 남겼어요. 고마워요!'); } else toast(err.message, true);
+    }
+  });
+}
+
 // 로그인 화면에 들어오면 스터디버디 소개 팝업을 띄운다
 // 스터디버디 소개 (로그인 팝업·홈 진행 안내 카드 공용)
 const introBody = () => `
@@ -552,7 +597,7 @@ const introBody = () => `
         <li><b>함께 공부</b><span class="small muted">약속한 날 만나 각자 공부하고, 서로 QR을 찍어 출석을 확인해요.</span></li>
         <li><b>약속 지키기</b><span class="small muted">약속 날 안 나오거나 매칭을 중간에 그만두면 1회로 쌓여요. ${rule().strikeLimit}회가 되면 ${rule().suspendDays}일 동안 매칭 신청이 멈춰요.</span></li>
       </ol>
-      <p class="small mt"><b>4회차</b> ${periodText()}</p>
+      <p class="small mt">${periodText()}</p>
       <p class="small muted center mt">소식은 인스타그램 <a class="link" href="https://www.instagram.com/study._.buddys/" target="_blank" rel="noopener">@study._.buddys</a>에 올려요.</p>`;
 
 function showIntro() {
@@ -638,13 +683,14 @@ function timetableHTML(id, cellInfo) {
   return `
     <div class="tt" id="${id}">
       <div class="tt-corner"></div>${days.map((d) => `<div class="tt-day${d > 5 ? ' weekend' : ''}">${WD[d]}</div>`).join('')}
-      ${SLOTS.map((s, i) => `${i === 6 ? '<div class="tt-divider"></div>' : ''}
-        <div class="tt-time${i >= 6 ? ' evening' : ''}">${s.start}</div>
+      ${SLOTS.map((s, i) => `${s.start === '18:00' && i > 0 ? '<div class="tt-divider"></div>' : ''}
+        <div class="tt-time${s.start >= '18:00' ? ' evening' : ''}">${s.start}</div>
         ${days.map((d) => {
           const info = cellInfo(`${d}-${i}`) ?? {};
-          return `<button type="button" class="tt-cell${i >= 6 ? ' evening' : ''}${info.cls ? ` ${info.cls}` : ''}" data-cell="${d}-${i}"
+          return `<button type="button" class="tt-cell${s.start >= '18:00' ? ' evening' : ''}${info.cls ? ` ${info.cls}` : ''}" data-cell="${d}-${i}"
             aria-pressed="${!!info.on}"${info.disabled ? ' disabled' : ''} aria-label="${WD[d]} ${s.start}~${s.end}${info.label ? ` ${esc(info.label)}` : ''}">${info.label ? `<span>${esc(info.label)}</span>` : ''}</button>`;
         }).join('')}`).join('')}
+      <div class="tt-time">${SLOTS.at(-1).end}</div><div style="grid-column: span ${days.length}"></div>
     </div>`;
 }
 
@@ -792,7 +838,7 @@ async function renderHome(alive) {
       + homeStats
     : `${leftNote}
       <div class="card hero compact">
-        <h2>${stopped ? '지금은 매칭을 신청할 수 없어요' : '이번 주 메이트 신청'}</h2>
+        <h2>${stopped ? '지금은 매칭을 신청할 수 없어요' : '메이트 신청'}</h2>
         <p class="small muted">${stopped ? `약속 기록이 ${st.limit}회가 되어 ${rule().suspendDays}일 동안 매칭 신청이 멈췄어요. ${reopenText(st)}`
           : `${periodText()} 중 원하는 시간만 고르면 돼요.`}</p>
         ${heroStats}
@@ -914,7 +960,7 @@ async function renderApply(alive) {
   if (!alive()) return;
   const { user } = state;
   const stopped = !!state.strikes?.suspendedUntil; // 약속 지키기: 매칭 정지 중
-  // 스터디 날짜(화·수·목) 19~21시를 1시간 칸으로 보여 주고, 원하는 칸을 여러 개 고른다.
+  // 스터디 날짜(오늘부터 7일) 17~22시를 1시간 칸으로 보여 주고, 원하는 칸을 여러 개 고른다.
   // 이미 끝난 칸, 이미 신청·매칭한 칸은 고를 수 없다.
   const period = OPTIONS.studyPeriod;
   const taken = myTimetable(state);
@@ -948,8 +994,8 @@ async function renderApply(alive) {
     <section class="card">
       <div class="card-head"><h2>공부 일정 및 장소 설정</h2></div>
       <div class="field"><span>공부할 시간 (중복 선택 가능)</span>
-        <div class="tt apply-tt" id="days">
-          <div class="tt-corner"></div>${studyDays.map((d) => `<div class="tt-day">${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8))} (${WD[d.day]})</div>`).join('')}
+        <div class="tt apply-tt" id="days" style="grid-template-columns: 40px repeat(${studyDays.length}, 1fr)">
+          <div class="tt-corner"></div>${studyDays.map((d) => `<div class="tt-day">${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8))}<br>${WD[d.day]}</div>`).join('')}
           ${slots.map((s, k) => `
             <div class="tt-time"><i>${s.start}</i>${k === slots.length - 1 ? `<i class="end">${s.end}</i>` : ''}</div>
             ${studyDays.map((d) => `<button type="button" class="tt-cell" data-cell="${d.cells[k].cell}" aria-pressed="false"${d.cells[k].disabled ? ' disabled' : ''}
@@ -1245,9 +1291,11 @@ function drawMatch(m, alive, { admin = false } = {}) {
   $('#scan')?.addEventListener('click', (e) => openScanner(Number(e.target.dataset.id), refresh));
   $('#checkout')?.addEventListener('click', async (e) => {
     try {
-      const res = await api(`/appointments/${e.target.dataset.id}/checkout`, { method: 'POST' });
+      const apptId = e.target.dataset.id;
+      const res = await api(`/appointments/${apptId}/checkout`, { method: 'POST' });
       toast(`${fmtMinutes(res.minutes)} 공부를 기록했어요.`);
       refresh(res.match);
+      showReviewPopup(apptId); // 공부가 끝나면 간단 이용 후기 팝업
     } catch (err) { toast(err.message, true); }
   });
   // 남은 약속을 캘린더(.ics)로 내려받기 → 구글·애플·아웃룩 캘린더에서 열어 추가
@@ -1976,6 +2024,16 @@ async function renderAdmin(alive) {
           <span><b>${esc(p.name)}</b> <span class="tiny muted">${p.suspendedUntil ? `매칭 정지 · ${fmtAt(p.suspendedUntil)}까지` : `약속 어김 ${p.count}회`}</span></span>
           ${p.suspendedUntil ? `<button type="button" class="btn sm" data-unsuspend="${p.id}" data-name="${esc(p.name)}">정지 풀기</button>` : ''}
         </div>`).join('') || '<p class="small muted">약속 어김 기록이 있는 사람이 없어요.</p>'}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>이용 후기</h2><span class="hint">최근 ${a.reviews?.length ?? 0}건</span></div>
+      <p class="tiny muted">별점과 서술형 후기예요. 서술형은 추첨 대상이에요.</p>
+      ${(a.reviews ?? []).map((v) => `
+        <div class="list-item">
+          <div><span class="small">${'😊'.repeat(Math.max(1, Math.min(5, Number(v.rating) || 0)))} <b>${esc(v.name)}</b></span>${v.comment ? `<div class="small mt">${esc(v.comment)}</div>` : ''}</div>
+          <span class="tiny muted">${fmtAt(v.createdAt)}</span>
+        </div>`).join('') || '<p class="small muted">아직 후기가 없어요.</p>'}
     </section>
 
     <section class="card">

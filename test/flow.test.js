@@ -1,3 +1,4 @@
+import './fixed-period.js'; // 스터디 기간 고정 (다른 import 보다 먼저)
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { openSqlite } from '../server/db.js';
@@ -67,10 +68,10 @@ test('신청 검증: 화·수·목 중 원하는 날짜, 시간은 19~21시 고�
   // 보증금은 무시, 칸을 안 보내면 고른 날짜의 19~21시 전체
   const r = S.validateRequest({ ...baseReq, days: [4, 2, 2], deposit: 20000 });
   assert.deepEqual([r.days, r.startTime, r.endTime, r.deposit], [[2, 4], '19:00', '21:00', 0]);
-  assert.deepEqual(r.cells, ['2-7', '2-8', '4-7', '4-8']);
+  assert.deepEqual(r.cells, ['2-10', '2-11', '4-10', '4-11']);
   // 1시간 칸만 고를 수 있고, 스터디 시간 밖의 칸은 버린다
-  const one = S.validateRequest({ ...baseReq, days: [2, 4], cells: ['2-8', '4-7', '1-0'] });
-  assert.deepEqual([one.days, one.cells, one.startTime, one.endTime], [[2, 4], ['2-8', '4-7'], '19:00', '21:00']);
+  const one = S.validateRequest({ ...baseReq, days: [2, 4], cells: ['2-11', '4-10', '1-0'] });
+  assert.deepEqual([one.days, one.cells, one.startTime, one.endTime], [[2, 4], ['2-11', '4-10'], '19:00', '21:00']);
   assert.throws(() => S.validateRequest({ ...baseReq, days: [2], cells: ['1-0'] }), /시간을/);
   // 이미 지난 날짜는 못 고름, 마지막 약속이 끝나면 신청 마감
   setNow(kst(2026, 11, 17, 21, 0));

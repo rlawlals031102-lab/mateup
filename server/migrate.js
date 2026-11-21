@@ -27,6 +27,31 @@ export const STEPS = [
       checkConstraint('reports', 'reports_status_valid', "status IN ('open', 'closed')"),
     ],
   },
+  {
+    id: 'm002',
+    name: '시간표 칸 바꾸기: 예전 12칸(09~24시, 낮 1시간 30분) → 09~22시 1시간 13칸. 개인 일정 칸을 옮기고, 예전 날짜의 대기 신청은 취소',
+    js: async (t) => {
+      // 예전 칸 번호 → 새 칸 번호 (시간이 겹치는 칸으로). 22시 뒤 칸은 새 시간표에 없어서 지운다.
+      const OLD_TO_NEW = { 0: [0, 1], 1: [1, 2], 2: [3, 4], 3: [4, 5], 4: [6, 7], 5: [7, 8], 6: [9], 7: [10], 8: [11], 9: [12] };
+      for (const u of await t.all("SELECT id, personal FROM users WHERE personal IS NOT NULL AND personal <> ''")) {
+        let list;
+        try { list = JSON.parse(u.personal); } catch { continue; }
+        if (!Array.isArray(list)) continue;
+        const seen = new Set();
+        const out = [];
+        for (const p of list) {
+          const [d, i] = String(p?.cell ?? '').split('-').map(Number);
+          for (const n of OLD_TO_NEW[i] ?? []) {
+            const cell = `${d}-${n}`;
+            if (!seen.has(cell)) { seen.add(cell); out.push({ cell, title: p.title }); }
+          }
+        }
+        await t.run('UPDATE users SET personal = ? WHERE id = ?', JSON.stringify(out), u.id);
+      }
+      // 실제 사용자의 대기 신청은 예전 날짜·칸 것이라 취소한다. 데모 메이트 신청은 서버가 켜질 때 새로 맞춘다.
+      await t.run("UPDATE match_requests SET status = 'cancelled' WHERE status = 'pending' AND user_id IN (SELECT id FROM users WHERE is_bot = 0)");
+    },
+  },
 ];
 
 export const fingerprint = (dialect) => crypto.createHash('sha256')
@@ -73,6 +98,7 @@ export async function migrate(db) {
     for (const step of STEPS) {
       if (done.has(step.id)) continue;
       for (const sql of step[dialect] ?? []) await t.exec(sql);
+      if (step.js) await step.js(t);
       applied.push(step.id);
     }
     const at = new Date().toISOString();
