@@ -47,7 +47,7 @@ test('거의 동시에 들어온 신청끼리 바로 매칭 (서버 두 대처�
     for (let i = 0; i < 12; i++) {
       const a = await S.signup(d1, { email: `a${i}@t.dev`, password: 'secret1', name: `a${i}`, department: 'x', phone: '010-1234-5678' });
       const b = await S.signup(d1, { email: `b${i}@t.dev`, password: 'secret1', name: `b${i}`, department: 'x', phone: '010-1234-5678' });
-      const req = { days: [day], cells: [`${day}-7`], locations: ['채팅으로 정하기'], styles: [['check', 'talk', 'social'][i % 3]] };
+      const req = { days: [day], cells: [`${day}-10`], locations: ['채팅으로 정하기'], styles: [['check', 'talk', 'social'][i % 3]] };
       const [ra, rb] = await Promise.all([S.createRequest(d1, a.user.id, req), S.createRequest(d2, b.user.id, req)]);
       assert.ok(ra.matchId || rb.matchId, `${i}번째 쌍이 매칭되지 않음`);
       await d1.run("UPDATE match_requests SET status = 'cancelled' WHERE status = 'pending'");
