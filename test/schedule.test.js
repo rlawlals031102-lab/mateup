@@ -96,3 +96,52 @@ for (const [name, open] of Object.entries(DRIVERS)) {
     });
   });
 }
+
+for (const [name, open] of Object.entries(DRIVERS)) {
+  describe(`리포트 시점/${name}`, () => {
+    let db;
+    beforeEach(async () => { setNow(kst(2026, 11, 22, 10, 0)); db = await open(); });
+    afterEach(async () => { setNow(null); await db.close?.(); });
+
+    // 월요일(11/23) 17~22시 약속 하나짜리 매칭
+    const pair = async () => {
+      const join = async (email) => (await S.signup(db, {
+        email, password: 'secret1', name: email[0], department: '경영정보학부', phone: '010-1234-5678',
+      })).user.id;
+      const a = await join('a@test.dev');
+      const b = await join('b@test.dev');
+      const req = { days: [1], location: ROOM, styles: ['check'] };
+      await S.createRequest(db, a, req);
+      const { matchId } = await S.createRequest(db, b, req);
+      const appt = await db.get('SELECT * FROM appointments WHERE match_id = ?', matchId);
+      return { a, b, matchId, appt };
+    };
+    const status = async (id) => (await db.get('SELECT status FROM matches WHERE id = ?', id)).status;
+
+    test('마지막 약속 시간이 끝나면 주간이 끝나기 전이어도 바로 리포트', async () => {
+      const { matchId } = await pair();
+      setNow(kst(2026, 11, 23, 21, 59));
+      await S.autoSettle(db);
+      assert.equal(await status(matchId), 'active');
+      setNow(kst(2026, 11, 23, 22, 0));
+      await S.autoSettle(db);
+      assert.equal(await status(matchId), 'reported');
+    });
+
+    test('마지막 약속에서 두 사람 모두 공부를 마치면 약속 시간 전이어도 바로 리포트, 한 사람만이면 기다림', async () => {
+      const { a, b, matchId, appt } = await pair();
+      setNow(kst(2026, 11, 23, 17, 0));
+      const codeA = (await S.myAttendanceCode(db, a, appt.id)).code;
+      const codeB = (await S.myAttendanceCode(db, b, appt.id)).code;
+      await S.confirmMate(db, a, appt.id, codeB);
+      await S.confirmMate(db, b, appt.id, codeA);
+      setNow(kst(2026, 11, 23, 19, 0));
+      await S.checkOut(db, a, appt.id);
+      await S.autoSettle(db);
+      assert.equal(await status(matchId), 'active');
+      await S.checkOut(db, b, appt.id);
+      await S.autoSettle(db);
+      assert.equal(await status(matchId), 'reported');
+    });
+  });
+}

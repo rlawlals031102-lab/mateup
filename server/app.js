@@ -295,6 +295,7 @@ export function createApp({
   });
   api.post('/appointments/:id/checkout', member, async (req, res) => {
     const { minutes } = await S.checkOut(db, req.user.id, Number(req.params.id), opts);
+    await S.autoSettle(db); // 마지막 약속을 마치면 바로 리포트
     res.json({ minutes, match: await S.matchForAppointment(db, req.user.id, Number(req.params.id), opts) });
   });
   // 공부 끝난 뒤 이용 후기 (별점 1~5 필수, 서술형 선택 · 운영진만 봄)

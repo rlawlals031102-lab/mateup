@@ -173,6 +173,7 @@ const routes = [
   ['POST', '/appointments/:id/checkout', async (ctx) => {
     const uid = needUser(ctx);
     const { minutes } = await S.checkOut(ctx.db, uid, ctx.id, opts);
+    await S.autoSettle(ctx.db); // 마지막 약속을 마치면 바로 리포트
     return { minutes, match: await S.matchForAppointment(ctx.db, uid, ctx.id, opts) };
   }],
 ].map(([method, pattern, handler]) => ({

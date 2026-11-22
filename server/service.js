@@ -816,8 +816,23 @@ async function loadMatchForUser(db, userId, matchId) {
 }
 
 // 약속 주간이 끝난 매칭의 리포트를 만든다. (크론 + 조회할 때마다)
+// 정산(리포트) 시점: 주간이 끝났거나, 마지막 약속이 끝났거나,
+// 마지막 약속만 남았고 그 약속에서 두 사람 모두 '공부 종료'를 눌렀을 때 (쿼리 한 번으로 고른다)
 export async function autoSettle(db) {
-  const due = await db.all("SELECT id FROM matches WHERE status = 'active' AND week_end < ?", T.today());
+  const today = T.today();
+  const hm = new Date(T.now().getTime() + 9 * 3600000).toISOString().slice(11, 16); // 지금 한국 시각 HH:MM
+  const left = `(SELECT COUNT(*) FROM appointments a WHERE a.match_id = m.id AND (a.date > ? OR (a.date = ? AND a.end_time > ?)))`;
+  const lastAppt = '(SELECT MAX(a2.date) FROM appointments a2 WHERE a2.match_id = m.id)';
+  const due = await db.all(
+    `SELECT m.id FROM matches m WHERE m.status = 'active' AND (
+       m.week_end < ?
+       OR ${left} = 0
+       OR (${left} = 1
+           AND (SELECT COUNT(*) FROM attendance t JOIN appointments a ON a.id = t.appointment_id
+                WHERE a.match_id = m.id AND a.date = ${lastAppt} AND t.checked_out_at IS NOT NULL) >= 2)
+     )`,
+    today, today, today, hm, today, today, hm,
+  );
   for (const { id } of due) await settleMatch(db, id);
   return due.length;
 }
