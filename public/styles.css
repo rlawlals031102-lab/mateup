@@ -883,3 +883,29 @@ body { font-variant-numeric: tabular-nums; }
 /* 내 시간표 카드: 제목 위 여백 조금 더 줄이기 */
 #my-tt-card { padding-top: 8px; }
 #view > #my-tt-card:first-child { margin-top: -2px; }
+
+/* 홈: 이번 주 메이트 카드 여러 장은 가로로 넘겨 보기 (한 장씩 딱 맞게 멈춤) */
+.swipe { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; margin: 0 -12px; padding: 0 12px 4px; scroll-padding: 0 12px; }
+.swipe::-webkit-scrollbar { display: none; }
+.swipe > .card { flex: 0 0 100%; scroll-snap-align: start; }
+.swipe-dots { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
+.swipe-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); transition: width .2s, background .2s; }
+.swipe-dots i.on { width: 16px; border-radius: 3px; background: var(--green); }
+@media (min-width: 481px) { .swipe { margin: 0 -16px; padding: 0 16px 4px; scroll-padding: 0 16px; } }
+
+/* 매칭 화면: 다음/이전 메이트로 넘길 때 옆에서 밀려 들어오는 느낌 */
+@keyframes slide-in-right { from { transform: translateX(40px); opacity: .3; } to { transform: none; opacity: 1; } }
+@keyframes slide-in-left { from { transform: translateX(-40px); opacity: .3; } to { transform: none; opacity: 1; } }
+#view.slide-right { animation: slide-in-right .25s ease-out; }
+#view.slide-left { animation: slide-in-left .25s ease-out; }
+/* 일정 추가(개인 일정 편집) 중: 내 시간표 카드 아래 내용은 숨긴다 */
+#view.tt-editing #my-tt-card ~ * { display: none; }
+/* 매칭 화면 위 점: 메이트가 여러 명이면 옆으로 넘길 수 있다는 표시 (지금 메이트는 긴 초록 점) */
+.match-dots { margin: 2px 0 8px; }
+.match-dots a { display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); transition: width .2s; }
+.match-dots a.on { width: 16px; border-radius: 3px; background: var(--green); }
+/* 일정 추가 중: 취소·저장은 제목 줄 오른쪽, 이름 입력칸은 범례 자리에 (카드 크기를 그대로 지키려고 납작하게) */
+.tt-edit-btns { display: flex; gap: 6px; }
+.tt-edit-btns .btn { height: 34px; padding: 0 12px; }
+.input.tt-title { height: 38px; }
+.tt-help { margin-top: 4px; }

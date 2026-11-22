@@ -831,7 +831,7 @@ async function renderHome(alive) {
   // 없으면: 매칭 신청 카드(통계 포함) → 시간표 (첫 화면에서 시간표가 잘리지 않게 위쪽을 작게)
   const main = hasAny
     ? ttCard
-      + [...matches.map((m) => (m.status === 'reported' ? reportCard(m) : matchCard(m))), ...pendingRequests.map(pendingCard)].join('')
+      + swipeCards([...matches.map((m) => (m.status === 'reported' ? reportCard(m) : matchCard(m))), ...pendingRequests.map(pendingCard)])
       + (stopped ? '' : '<a class="btn block mt" href="#/apply">다른 날짜에도 신청하기</a>')
       + ruleNote
       + homeStats
@@ -867,6 +867,7 @@ async function renderHome(alive) {
   // ── 내 시간표 (매칭 · 대기 · 개인 일정) + 개인 일정 편집
   let mine = personal.map((p) => ({ ...p }));
   let editing = false;
+  let editBottom = 0; // 일정 추가를 누르기 전 시간표 카드 아래 끝 (편집 중에도 이 크기를 지킨다)
   let editTitle = '수업';
   // 편집 중에는 칸 모양과 이름만 다시 칠한다 (끌기 상태 유지)
   const redrawCells = () => {
@@ -887,7 +888,7 @@ async function renderHome(alive) {
     const tt = $('#my-tt');
     if (!card || !tt || (!hasAny && !hero)) return;
     // 매칭·신청이 있으면: 시간표 바로 아래 첫 카드(이번 주 메이트 등)까지 한 화면에 보이게 시간표를 줄인다 (늘리지는 않음)
-    const anchor = hasAny ? (card.nextElementSibling ?? card) : card;
+    const anchor = editing || !hasAny ? card : (card.nextElementSibling ?? card);
     const sc = scroller();
     const inPhone = sc !== document.scrollingElement;
     const viewTop = inPhone ? sc.getBoundingClientRect().top : 0;
@@ -901,9 +902,9 @@ async function renderHome(alive) {
     const base = parseFloat(getComputedStyle(cells.find((c) => !c.classList.contains('evening'))).height);
     for (let k = 0; k < 2; k++) {
       const bottom = anchor.getBoundingClientRect().bottom - viewTop + (sc.scrollTop || 0);
-      const extra = (viewH - tabH - 10) - bottom;
+      const extra = (editing && editBottom ? editBottom : viewH - tabH - 10) - bottom;
       const cur = parseFloat(getComputedStyle(cells.find((c) => !c.classList.contains('evening'))).height);
-      const next = Math.max(12, Math.min(hasAny ? base : 44, cur + extra / units));
+      const next = Math.max(10, Math.min(hasAny && !editing ? base : 44, cur + extra / units));
       tt.classList.add('fit');
       tt.style.setProperty('--tt-h', `${next.toFixed(1)}px`);
     }
@@ -917,30 +918,28 @@ async function renderHome(alive) {
     fitHome();
   };
   const drawTimetable = () => {
+    view.classList.toggle('tt-editing', editing);
     setTimeout(fitHome, 0);
     const map = myTimetable({ matches, pendingRequests, personal: mine });
     const card = $('#my-tt-card');
     const empty = !matches.length && !pendingRequests.length && !mine.length;
     card.innerHTML = `
       <div class="card-head"><h2>내 시간표</h2>
-        ${editing ? '' : '<button class="btn sm ghost" id="tt-edit">개인 일정</button>'}</div>
+        ${editing ? `<div class="tt-edit-btns"><button class="btn sm ghost" id="tt-cancel">취소</button><button class="btn sm primary" id="tt-save">저장</button></div>`
+          : '<button class="btn sm ghost" id="tt-edit">일정 추가</button>'}</div>
+      ${editing ? `
+        <input class="input tt-title" id="tt-title" maxlength="20" value="${esc(editTitle)}" placeholder="일정 이름 (예: 마케팅 수업)" aria-label="일정 이름">
+        <p class="tiny muted tt-help">이름을 적고 칸을 누르거나 끌어서 넣어요. 다시 누르면 빠져요.</p>` : `
       <div class="tt-legend tiny">
         <span><i class="lg match"></i>매칭</span><span><i class="lg pending"></i>대기</span><span><i class="lg personal"></i>개인 일정</span>
-      </div>
-      ${editing ? `
-        <div class="notice">일정 이름을 적고 칸을 누르거나 끌어서 넣어요. 같은 칸을 다시 누르면 빠져요.</div>
-        <div class="row mt"><input class="input" id="tt-title" maxlength="20" value="${esc(editTitle)}" placeholder="예: 마케팅 수업"></div>` : ''}
+      </div>`}
       ${timetableHTML('my-tt', (cell) => {
         const info = map.get(cell);
         if (!info) return editing ? {} : { cls: 'ro' };
         if (editing) return { cls: info.kind, label: info.label, disabled: info.kind !== 'personal' };
         return { cls: `${info.kind} ${info.kind === 'match' ? 'link' : 'ro'}`, label: info.label };
       })}
-      ${editing ? `
-        <div class="btn-row mt">
-          <button class="btn" id="tt-cancel">취소</button>
-          <button class="btn primary" id="tt-save">저장</button>
-        </div>` : (empty ? '<p class="tiny muted mt">매칭이나 개인 일정이 생기면 여기에 보여요.</p>' : '')}`;
+      ${editing ? '' : (empty ? '<p class="tiny muted mt">매칭이나 개인 일정이 생기면 여기에 보여요.</p>' : '')}`;
 
     const tt = $('#my-tt');
     if (!editing) {
@@ -950,7 +949,15 @@ async function renderHome(alive) {
         const info = btn && map.get(btn.dataset.cell);
         if (info) location.hash = `#/match/${info.matchId}`;
       });
-      $('#tt-edit').addEventListener('click', () => { editing = true; drawTimetable(); });
+      $('#tt-edit').addEventListener('click', () => {
+        // 일정 추가: 내 시간표 카드는 누르기 전 크기 그대로, 그 아래 내용은 숨긴다
+        const sc = scroller();
+        const viewTop = sc !== document.scrollingElement ? sc.getBoundingClientRect().top : 0;
+        editBottom = $('#my-tt-card').getBoundingClientRect().bottom - viewTop + (sc.scrollTop || 0);
+        view.classList.add('tt-editing');
+        editing = true;
+        drawTimetable();
+      });
       return;
     }
     $('#tt-title').addEventListener('input', (e) => { editTitle = e.target.value; });
@@ -1151,6 +1158,18 @@ function apptTable(m, { highlight = null, minutes = false } = {}) {
 
 // 메이트가 여럿이면 화면 위에 메이트 고르는 버튼을 보여 준다
 let mateTabs = '';
+// 카드가 여러 장이면 가로로 넘겨 보는 칸 + 아래 점 (한 장이면 그대로)
+const swipeCards = (cards) => (cards.length < 2 ? cards.join('') : `
+  <div class="swipe" data-swipe>${cards.join('')}</div>
+  <div class="swipe-dots" aria-hidden="true">${cards.map((_, i) => `<i${i ? '' : ' class="on"'}></i>`).join('')}</div>`);
+// 넘길 때 아래 점 표시를 맞춘다
+document.addEventListener('scroll', (e) => {
+  const box = e.target;
+  if (!(box instanceof Element) || !box.matches('[data-swipe]')) return;
+  const i = Math.round(box.scrollLeft / box.clientWidth);
+  box.nextElementSibling?.querySelectorAll('i').forEach((d, k) => d.classList.toggle('on', k === i));
+}, true);
+
 const mateTabsHTML = (matches, current, base) => (matches.length < 2 ? '' : `
   <div class="mate-tabs">${matches.map((m) => `
     <a href="#/${base}/${m.id}" class="${m.id === current ? 'on' : ''}">${esc(m.mate.name)}${base === 'chat' && m.id !== current && unread.byMatch[m.id] ? `<span class="badge inline">${unread.byMatch[m.id]}</span>` : ''}<small>${esc(scheduleText(m.schedule))}</small></a>`).join('')}
@@ -1167,7 +1186,9 @@ async function renderMatch(alive, id) {
   if (!alive()) return;
   myStrikes = strikes ?? null;
   const match = matches.find((m) => m.id === id) ?? matches[0];
-  mateTabs = mateTabsHTML(matches, match?.id, 'match');
+  // 메이트 고르는 칸 대신, 홈처럼 '옆으로 넘길 수 있다'는 점 표시 (누르면 그 메이트로)
+  mateTabs = matches.length < 2 ? '' : `
+  <div class="swipe-dots match-dots" role="tablist" aria-label="메이트 넘기기">${matches.map((m) => `<a href="#/match/${m.id}" role="tab" aria-label="${esc(m.mate.name)}"${m.id === match?.id ? ' class="on" aria-selected="true"' : ''}></a>`).join('')}</div>`;
   if (!match) {
     view.innerHTML = `
       <div class="empty">
@@ -1179,7 +1200,34 @@ async function renderMatch(alive, id) {
   }
   if (match.status === 'reported') return renderReport(match, alive);
   drawMatch(match, alive);
+  // 메이트가 여러 명이면: 화면을 왼쪽으로 밀면 다음 메이트, 오른쪽으로 밀면 이전 메이트 (출석·프로필·약속이 한 번에 바뀜)
+  const order = matches.map((m) => m.id);
+  const at = order.indexOf(match.id);
+  if (order.length > 1) {
+    if (slideFrom) { view.classList.add(`slide-${slideFrom}`); setTimeout(() => view.classList.remove(`slide-${slideFrom}`), 300); slideFrom = null; }
+    let sx = 0;
+    let sy = 0;
+    let on = false;
+    view.ontouchstart = (e) => {
+      on = !e.target.closest('.mate-tabs, input, textarea, .tt, .modal');
+      sx = e.touches[0].clientX;
+      sy = e.touches[0].clientY;
+    };
+    view.ontouchend = (e) => {
+      if (!on || !alive()) return;
+      const dx = e.changedTouches[0].clientX - sx;
+      const dy = e.changedTouches[0].clientY - sy;
+      if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      const next = order[(at + (dx < 0 ? 1 : -1) + order.length) % order.length];
+      slideFrom = dx < 0 ? 'right' : 'left';
+      location.hash = `#/match/${next}`;
+    };
+  } else {
+    view.ontouchstart = null;
+    view.ontouchend = null;
+  }
 }
+let slideFrom = null; // 매칭 화면 넘길 때 새 화면이 들어오는 방향
 
 // 개발자 화면 '매칭 화면 보기': 당사자 한 명이 보는 매칭중 화면 그대로 (버튼은 눌리지 않음, 열람은 운영 기록에 남음)
 async function renderAdminMatch(alive, id, side) {
