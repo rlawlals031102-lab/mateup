@@ -4,7 +4,7 @@ import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
   EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS, PROMISE_RULE,
-  PRIVACY_POLICY, PRIOR_TEAMS,
+  PRIVACY_POLICY, PRIOR_TEAMS, roomLocation, NO_ROOM_DATES,
 } from './options.js';
 import { createSession, sessionUser, endSession, endAllSessions } from './sessions.js';
 // 전화번호는 운영 결정(2026-11-06)으로 암호화하지 않고 그대로 저장한다. 예전에 암호화된 값이 있으면 읽을 때만 풀어 준다.
@@ -501,6 +501,11 @@ export function validateRequest(input) {
     throw new AppError(400, '공부 스타일을 하나 이상 골라 주세요.');
   }
   const runs = runsOf(cells);
+  const noRoom = [...new Set(runs.map((r) => studyDateOfDay(r.day)))].filter((d) => NO_ROOM_DATES.includes(d));
+  if (noRoom.length && locations.some((l) => l.startsWith('지정 강의실'))) {
+    const md = noRoom.map((d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8))}`).join('·');
+    throw new AppError(400, `${md}은 지정 강의실을 고를 수 없어요. '채팅으로 정하기'를 골라 주세요.`);
+  }
   const startTime = T.fromMin(Math.min(...runs.map((r) => T.toMin(r.start))));
   const endTime = T.fromMin(Math.max(...runs.map((r) => T.toMin(r.end))));
   return {
@@ -894,7 +899,7 @@ export async function matchDetail(db, userId, m, { demo = false } = {}) {
       weekday: T.isoWeekday(a.date),
       startTime: a.start_time,
       endTime: a.end_time,
-      location: m.location,
+      location: roomLocation(m.location, a.date), // 날짜별 지정 강의실
       myCode: codeOf(a.id, userId), // 메이트에게 보여 주는 내 출석 코드
       // 데모 메이트는 내 코드를 입력해 줄 수 없으니, 체험용으로 메이트 코드를 보여 준다.
       mateCode: mateIsBot ? codeOf(a.id, mateId) : null,

@@ -57,6 +57,11 @@ function fmtTime(t) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 const fmtRange = (a, b) => `${fmtTime(a)}–${fmtTime(b)}`;
+// 지정 강의실은 날짜마다 다를 수 있다 (OPTIONS.roomsByDate). 그날의 강의실 이름, 없으면 기본 강의실.
+const isRoom = (loc) => String(loc ?? '').startsWith('지정 강의실');
+const defaultRoom = () => (OPTIONS.locations.find(isRoom)?.match(/\((.*)\)/) ?? [])[1] ?? '';
+const roomOf = (date) => OPTIONS.roomsByDate?.[date] ?? defaultRoom();
+const roomName = (loc) => (String(loc ?? '').match(/\((.*)\)/) ?? [])[1] ?? loc; // "지정 강의실 (공학관 …)" → "공학관 …"
 // 스터디 날짜·시간 한 줄 (매일) → "매일 17:00–22:00"
 function periodText() {
   const p = OPTIONS.studyPeriod;
@@ -1064,7 +1069,7 @@ async function renderApply(alive) {
             const [, name, sub] = l.match(/^(.*?)\s*\((.*)\)$/) ?? [null, l, ''];
             return `<button type="button" data-loc="${esc(l)}" aria-pressed="false">
               <span class="check" aria-hidden="true"></span>
-              <span class="ct"><b>${esc(name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>
+              <span class="ct"><b>${esc(name)}</b>${isRoom(l) ? '<small id="room-sub" hidden></small>' : sub ? `<small>${esc(sub)}</small>` : ''}</span>
             </button>`;
           }).join('')}
         </div>
@@ -1097,12 +1102,45 @@ async function renderApply(alive) {
     const c = b.dataset.cell;
     form.cells.has(c) ? form.cells.delete(c) : form.cells.add(c);
     b.setAttribute('aria-pressed', form.cells.has(c));
+    showRooms();
   });
+  // 고른 날짜에 맞춰 지정 강의실을 보여 준다. 날짜마다 다르면 날짜별로 (예: 11/25(수)·11/26(목) 공학관 … / 11/27(금) 미래관 …)
+  function showRooms() {
+    const sub = $('#room-sub');
+    if (!sub) return;
+    const picked = studyDays.filter((d) => [...form.cells].some((c) => Number(c.split('-')[0]) === d.day));
+    const md = (d) => `${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8))}(${WD[d.day]})`;
+    // 지정 강의실을 쓸 수 없는 날(OPTIONS.noRoomDates)을 고르면 지정 강의실은 못 고른다
+    const noRoom = picked.filter((d) => OPTIONS.noRoomDates?.includes(d.date));
+    const roomBtn = sub.closest('button');
+    roomBtn.disabled = noRoom.length > 0;
+    if (noRoom.length) {
+      form.locations.delete(roomBtn.dataset.loc);
+      roomBtn.setAttribute('aria-pressed', false);
+      sub.innerHTML = `${esc(noRoom.map(md).join('·'))}은 지정 강의실을 고를 수 없어요`;
+      sub.hidden = false;
+      return;
+    }
+    const groups = new Map();
+    for (const d of picked) {
+      const room = roomOf(d.date);
+      groups.set(room, [...(groups.get(room) ?? []), md(d)]);
+    }
+    sub.hidden = !groups.size; // 날짜를 고르기 전에는 호실을 보여 주지 않는다
+    sub.innerHTML = !groups.size ? ''
+      : groups.size === 1 ? esc([...groups.keys()][0])
+        : [...groups].map(([room, days]) => `${esc(days.join('·'))} ${esc(room)}`).join('<br>');
+  }
   // 장소는 여러 개 고를 수 있다
   $('#loc').addEventListener('click', (e) => {
     const b = e.target.closest('button');
-    if (!b) return;
+    if (!b || b.disabled) return;
     const l = b.dataset.loc;
+    // 지정 강의실은 날짜마다 호실이 달라서 시간을 먼저 고르게 한다
+    if (isRoom(l) && !form.cells.size && !form.locations.has(l)) {
+      toast('시간을 먼저 선택해 주세요.', true);
+      return;
+    }
     form.locations.has(l) ? form.locations.delete(l) : form.locations.add(l);
     b.setAttribute('aria-pressed', form.locations.has(l));
   });
@@ -1149,7 +1187,7 @@ function apptTable(m, { highlight = null, minutes = false } = {}) {
       <thead><tr><th>날짜</th><th>나</th><th title="${esc(m.mate.name)}">${esc(m.mate.name)}</th></tr></thead>
       <tbody>${m.appointments.map((a) => `
         <tr${a.id === highlight ? ' class="is-open"' : ''}>
-          <td><b>${fmtDate(a.date)}</b> <span class="muted">(${WD[a.weekday]})</span><small>${fmtRange(a.startTime, a.endTime)}</small></td>
+          <td><b>${fmtDate(a.date)}</b> <span class="muted">(${WD[a.weekday]})</span><small>${fmtRange(a.startTime, a.endTime)}</small>${isRoom(m.location) ? `<small>${esc(roomName(a.location))}</small>` : ''}</td>
           <td>${statusHTML(a.me.status, { minutes: minutes ? a.me.minutes : 0 })}</td>
           <td>${statusHTML(a.mate.status, { mate: true })}</td>
         </tr>`).join('')}</tbody>
@@ -1321,7 +1359,7 @@ function drawMatch(m, alive, { admin = false } = {}) {
         </div>
       </div>
       ${m.mate.isBot ? '<div class="notice">체험용 <b>가상 메이트</b>예요. 실제로 약속 장소에 나오지 않아요. 내가 출석하면 함께 출석하고, 채팅에 자동으로 답해요.</div>' : ''}
-      <p class="meta-line mate-meta">${esc(styleLabels(m.styles))} · ${esc(m.location)}</p>
+      <p class="meta-line mate-meta">${esc(styleLabels(m.styles))} · ${esc(isRoom(m.location) && new Set(m.appointments.map((a) => a.location)).size > 1 ? '지정 강의실 (날짜별 강의실은 아래 약속에)' : (m.appointments[0]?.location ?? m.location))}</p>
     </section>
 
     <section class="section">

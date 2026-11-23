@@ -5,10 +5,11 @@ import { openSqlite } from '../server/db.js';
 import { openPglite } from '../server/db-pg.js';
 import * as S from '../server/service.js';
 import { setNow, kst } from '../server/time.js';
-import { STUDY_PERIOD, TIME_SLOTS } from '../server/options.js';
+import { STUDY_PERIOD, TIME_SLOTS, roomLocation } from '../server/options.js';
 import { migrate } from '../server/migrate.js';
 
 const ROOM = '지정 강의실 (미래관 320호)';
+const CHAT = '채팅으로 정하기'; // 11/23·24는 지정 강의실을 못 고르므로 그날 신청은 채팅으로
 
 test('시간표 칸: 09~22시 1시간 13칸', () => {
   assert.equal(TIME_SLOTS.length, 13);
@@ -32,8 +33,24 @@ test('신청 검증: 월~일 어느 요일이든, 시간은 17~22시 칸만', ()
   assert.deepEqual([r.days, r.startTime, r.endTime], [[6, 7], '17:00', '22:00']);
   assert.deepEqual(r.cells, ['6-8', '6-9', '6-10', '6-11', '6-12', '7-8', '7-9', '7-10', '7-11', '7-12']);
   // 17시 전 칸(09:00 = 0번)은 버린다
-  const one = S.validateRequest({ days: [1], location: ROOM, styles: ['check'], cells: ['1-0', '1-9'] });
+  const one = S.validateRequest({ days: [1], location: CHAT, styles: ['check'], cells: ['1-0', '1-9'] });
   assert.deepEqual([one.cells, one.startTime, one.endTime], [['1-9'], '18:00', '19:00']);
+  setNow(null);
+});
+
+test('지정 강의실: 날짜마다 다른 강의실, 없는 날은 기본', () => {
+  assert.equal(roomLocation(ROOM, '2026-11-25'), '지정 강의실 (공학관 B119호)');
+  assert.equal(roomLocation(ROOM, '2026-11-27'), '지정 강의실 (미래관 320호)');
+  assert.equal(roomLocation(ROOM, '2026-11-24'), ROOM);
+  assert.equal(roomLocation('채팅으로 정하기', '2026-11-25'), '채팅으로 정하기');
+});
+
+test('11/23·24는 지정 강의실을 고를 수 없음 (채팅으로 정하기는 됨)', () => {
+  setNow(kst(2026, 11, 22, 10, 0));
+  assert.throws(() => S.validateRequest({ days: [1, 3], locations: [ROOM], styles: ['check'] }), /11\/23은 지정 강의실/);
+  assert.throws(() => S.validateRequest({ days: [2], locations: [ROOM, CHAT], styles: ['check'] }), /지정 강의실/);
+  assert.ok(S.validateRequest({ days: [1], locations: [CHAT], styles: ['check'] }));
+  assert.ok(S.validateRequest({ days: [3], locations: [ROOM], styles: ['check'] }));
   setNow(null);
 });
 
@@ -82,7 +99,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       const a = await join('a@test.dev');
       const b = await join('b@test.dev');
       const c = await join('c@test.dev');
-      const req = { days: [1], location: ROOM, styles: ['check'] };
+      const req = { days: [1], location: CHAT, styles: ['check'] };
       await S.createRequest(db, a, req);
       const { matchId } = await S.createRequest(db, b, req);
       assert.ok(matchId);
@@ -110,7 +127,7 @@ for (const [name, open] of Object.entries(DRIVERS)) {
       })).user.id;
       const a = await join('a@test.dev');
       const b = await join('b@test.dev');
-      const req = { days: [1], location: ROOM, styles: ['check'] };
+      const req = { days: [1], location: CHAT, styles: ['check'] };
       await S.createRequest(db, a, req);
       const { matchId } = await S.createRequest(db, b, req);
       const appt = await db.get('SELECT * FROM appointments WHERE match_id = ?', matchId);

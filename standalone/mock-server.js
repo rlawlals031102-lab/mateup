@@ -9,7 +9,7 @@ import QRCode from 'qrcode';
 import { openSqlite } from '../server/db.js';
 import { seedBots, retireOldBots } from '../server/seed.js';
 import * as S from '../server/service.js';
-import { LOCATIONS, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE_RULE, PRIVACY_POLICY } from '../server/options.js';
+import { LOCATIONS, ROOMS_BY_DATE, NO_ROOM_DATES, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE_RULE, PRIVACY_POLICY } from '../server/options.js';
 import { consentState, recordConsent, deleteAccount, exportMyData } from '../server/privacy.js';
 import { reportChat, REPORT_REASONS } from '../server/reports.js';
 import { persist, clearSaved } from './shims/sqlite.js';
@@ -89,7 +89,7 @@ const needUser = (ctx) => {
 };
 
 const routes = [
-  ['GET', '/options', async () => ({ locations: LOCATIONS, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, demoLogin: true, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD, promiseRule: PROMISE_RULE,
+  ['GET', '/options', async () => ({ locations: LOCATIONS, roomsByDate: ROOMS_BY_DATE, noRoomDates: NO_ROOM_DATES, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, demoLogin: true, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD, promiseRule: PROMISE_RULE,
     privacyVersion: PRIVACY_POLICY.version, reportReasons: REPORT_REASONS })],
 
   ['POST', '/auth/signup', async ({ db, body }) => {

@@ -909,3 +909,10 @@ body { font-variant-numeric: tabular-nums; }
 .tt-edit-btns .btn { height: 34px; padding: 0 12px; }
 .input.tt-title { height: 38px; }
 .tt-help { margin-top: 4px; }
+
+/* 날짜를 고르기 전에는 지정 강의실 호실을 숨긴다 */
+#room-sub[hidden] { display: none; }
+
+/* 리포트 도착 카드(연초록) 안 버튼: 흰 바탕 + 진한 초록 글씨 */
+.card.lime .btn.primary { background: #fff; border-color: #fff; color: #15803d; }
+.card.lime .btn.primary:hover:not(:disabled) { background: #f0fdf4; }

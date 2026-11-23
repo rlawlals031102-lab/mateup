@@ -184,7 +184,7 @@ async function apply(page) {
   await page.goto(`${BASE}/#/apply`);
   await page.waitForSelector('#days .tt-cell:not([disabled])');
   await page.click('#days .tt-cell:not([disabled]) >> nth=0');
-  await page.click('#loc button >> nth=1');
+  await page.click('#loc button >> nth=0'); // 채팅으로 정하기 (11/23·24는 지정 강의실을 못 고름)
   await page.click('#styles button >> nth=0');
   await page.click('#submit');
 }
