@@ -38,19 +38,33 @@ test('신청 검증: 월~일 어느 요일이든, 시간은 17~22시 칸만', ()
   setNow(null);
 });
 
-test('지정 강의실: 날짜마다 다른 강의실, 없는 날은 기본', () => {
+test('지정 강의실: 날짜마다 다른 강의실, 11/23·24는 채팅, 11/30부터는 아직 없음', () => {
   assert.equal(roomLocation(ROOM, '2026-11-25'), '지정 강의실 (공학관 B119호)');
   assert.equal(roomLocation(ROOM, '2026-11-27'), '지정 강의실 (미래관 320호)');
-  assert.equal(roomLocation(ROOM, '2026-11-24'), ROOM);
-  assert.equal(roomLocation('채팅으로 정하기', '2026-11-25'), '채팅으로 정하기');
+  assert.equal(roomLocation(ROOM, '2026-11-24'), CHAT);
+  assert.equal(roomLocation(ROOM, '2026-11-30'), '지정 강의실 (아직 배정된 강의실이 없어요)');
+  assert.equal(roomLocation(ROOM, '2026-11-20'), ROOM);
+  assert.equal(roomLocation(CHAT, '2026-11-25'), CHAT);
 });
 
-test('11/23·24는 지정 강의실을 고를 수 없음 (채팅으로 정하기는 됨)', () => {
+test('11/23·24만 고르면 지정 강의실 불가, 다른 날과 같이 고르면 가능', () => {
   setNow(kst(2026, 11, 22, 10, 0));
-  assert.throws(() => S.validateRequest({ days: [1, 3], locations: [ROOM], styles: ['check'] }), /11\/23은 지정 강의실/);
-  assert.throws(() => S.validateRequest({ days: [2], locations: [ROOM, CHAT], styles: ['check'] }), /지정 강의실/);
+  assert.throws(() => S.validateRequest({ days: [1], locations: [ROOM], styles: ['check'] }), /11\/23은 지정 강의실/);
+  assert.throws(() => S.validateRequest({ days: [1, 2], locations: [ROOM, CHAT], styles: ['check'] }), /지정 강의실/);
+  assert.ok(S.validateRequest({ days: [1, 3], locations: [ROOM], styles: ['check'] }));
   assert.ok(S.validateRequest({ days: [1], locations: [CHAT], styles: ['check'] }));
-  assert.ok(S.validateRequest({ days: [3], locations: [ROOM], styles: ['check'] }));
+  setNow(null);
+});
+
+test('매칭: 11/23은 채팅으로 정하기, 다른 날은 지정 강의실', () => {
+  setNow(kst(2026, 11, 22, 10, 0));
+  const room = { days: [1, 3], cells: ['1-10', '3-10'], locations: [ROOM], styles: ['check'] };
+  // 둘 다 지정 강의실: 두 날 모두 약속, 매칭 장소는 지정 강의실 (23일 약속은 채팅으로 정하기로 보임)
+  const c = S.compatibility(room, room);
+  assert.deepEqual([c.days, c.location], [[1, 3], ROOM]);
+  // 한 사람은 채팅으로 정하기만: 23일만 겹쳐서 채팅으로 정하기
+  const chat = S.compatibility(room, { ...room, locations: [CHAT] });
+  assert.deepEqual([chat.days, chat.location], [[1], CHAT]);
   setNow(null);
 });
 

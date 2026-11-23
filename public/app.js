@@ -60,7 +60,8 @@ const fmtRange = (a, b) => `${fmtTime(a)}–${fmtTime(b)}`;
 // 지정 강의실은 날짜마다 다를 수 있다 (OPTIONS.roomsByDate). 그날의 강의실 이름, 없으면 기본 강의실.
 const isRoom = (loc) => String(loc ?? '').startsWith('지정 강의실');
 const defaultRoom = () => (OPTIONS.locations.find(isRoom)?.match(/\((.*)\)/) ?? [])[1] ?? '';
-const roomOf = (date) => OPTIONS.roomsByDate?.[date] ?? defaultRoom();
+const roomOf = (date) => OPTIONS.roomsByDate?.[date]
+  ?? (OPTIONS.roomsUnassignedFrom && date >= OPTIONS.roomsUnassignedFrom ? OPTIONS.unassignedRoom : defaultRoom());
 const roomName = (loc) => (String(loc ?? '').match(/\((.*)\)/) ?? [])[1] ?? loc; // "지정 강의실 (공학관 …)" → "공학관 …"
 // 스터디 날짜·시간 한 줄 (매일) → "매일 17:00–22:00"
 function periodText() {
@@ -1110,26 +1111,33 @@ async function renderApply(alive) {
     if (!sub) return;
     const picked = studyDays.filter((d) => [...form.cells].some((c) => Number(c.split('-')[0]) === d.day));
     const md = (d) => `${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8))}(${WD[d.day]})`;
-    // 지정 강의실을 쓸 수 없는 날(OPTIONS.noRoomDates)을 고르면 지정 강의실은 못 고른다
+    // 지정 강의실이 없는 날(OPTIONS.noRoomDates)만 고르면 지정 강의실은 못 고른다.
+    // 다른 날과 같이 고르면 고를 수 있고, 그날은 채팅으로 정한다는 안내를 띄운다 (그날 약속만 채팅으로 정하기).
     const noRoom = picked.filter((d) => OPTIONS.noRoomDates?.includes(d.date));
+    const others = picked.filter((d) => !noRoom.includes(d));
     const roomBtn = sub.closest('button');
-    roomBtn.disabled = noRoom.length > 0;
-    if (noRoom.length) {
+    roomBtn.disabled = noRoom.length > 0 && !others.length;
+    if (roomBtn.disabled) {
       form.locations.delete(roomBtn.dataset.loc);
       roomBtn.setAttribute('aria-pressed', false);
       sub.innerHTML = `${esc(noRoom.map(md).join('·'))}은 지정 강의실을 고를 수 없어요`;
       sub.hidden = false;
       return;
     }
-    const groups = new Map();
+    // 날짜 순으로 묶는다 (강의실 없는 날은 '채팅으로 정해 주세요' 줄로)
+    const CHAT_LINE = '\u0000chat';
+    // 이어진 날짜끼리 같은 강의실이면 한 줄로 (예: 11/25·11/26 공학관 / 11/27 미래관 / 11/28 공학관)
+    const groups = [];
     for (const d of picked) {
-      const room = roomOf(d.date);
-      groups.set(room, [...(groups.get(room) ?? []), md(d)]);
+      const room = noRoom.includes(d) ? CHAT_LINE : roomOf(d.date);
+      if (groups.at(-1)?.[0] === room) groups.at(-1)[1].push(md(d));
+      else groups.push([room, [md(d)]]);
     }
-    sub.hidden = !groups.size; // 날짜를 고르기 전에는 호실을 보여 주지 않는다
-    sub.innerHTML = !groups.size ? ''
-      : groups.size === 1 ? esc([...groups.keys()][0])
-        : [...groups].map(([room, days]) => `${esc(days.join('·'))} ${esc(room)}`).join('<br>');
+    const lines = groups.length === 1 && !noRoom.length ? [esc(groups[0][0])]
+      : groups.map(([room, days]) => (room === CHAT_LINE
+        ? `${esc(days.join('·'))}은 채팅으로 정해 주세요` : `${esc(days.join('·'))} ${esc(room)}`));
+    sub.hidden = !lines.length; // 날짜를 고르기 전에는 호실을 보여 주지 않는다
+    sub.innerHTML = lines.join('<br>');
   }
   // 장소는 여러 개 고를 수 있다
   $('#loc').addEventListener('click', (e) => {

@@ -4,7 +4,7 @@ import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
   EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS, PROMISE_RULE,
-  PRIVACY_POLICY, PRIOR_TEAMS, roomLocation, NO_ROOM_DATES,
+  PRIVACY_POLICY, PRIOR_TEAMS, roomLocation, NO_ROOM_DATES, isRoomLocation,
 } from './options.js';
 import { createSession, sessionUser, endSession, endAllSessions } from './sessions.js';
 // 전화번호는 운영 결정(2026-11-06)으로 암호화하지 않고 그대로 저장한다. 예전에 암호화된 값이 있으면 읽을 때만 풀어 준다.
@@ -501,8 +501,10 @@ export function validateRequest(input) {
     throw new AppError(400, '공부 스타일을 하나 이상 골라 주세요.');
   }
   const runs = runsOf(cells);
-  const noRoom = [...new Set(runs.map((r) => studyDateOfDay(r.day)))].filter((d) => NO_ROOM_DATES.includes(d));
-  if (noRoom.length && locations.some((l) => l.startsWith('지정 강의실'))) {
+  // 지정 강의실이 없는 날만 골랐는데 지정 강의실을 고르면 거절 (다른 날과 같이 고르면 그날만 채팅으로 정하기)
+  const pickedDates = [...new Set(runs.map((r) => studyDateOfDay(r.day)))];
+  const noRoom = pickedDates.filter((d) => NO_ROOM_DATES.includes(d));
+  if (noRoom.length === pickedDates.length && locations.some(isRoomLocation)) {
     const md = noRoom.map((d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8))}`).join('·');
     throw new AppError(400, `${md}은 지정 강의실을 고를 수 없어요. '채팅으로 정하기'를 골라 주세요.`);
   }
@@ -519,20 +521,28 @@ export function validateRequest(input) {
 // 겹치는 장소가 여럿이면 잡힌 교류 수준으로 고른다: 체크형이면 정해진 장소(강의실 등),
 // 대화형·사교형이면 '채팅으로 정하기'를 먼저.
 export function compatibility(a, b) {
+  const CHAT = '채팅으로 정하기';
+  const locsA = locationsOf(a);
   const locsB = locationsOf(b);
-  const commonLocs = LOCATIONS.filter((l) => locationsOf(a).includes(l) && locsB.includes(l));
-  if (!commonLocs.length) return null;
-  // 시간표에서 둘 다 고른 칸 → 요일마다 가장 길게 이어진 시간이 그날 약속 (1시간 이상)
+  // 지정 강의실이 없는 날(NO_ROOM_DATES)에는 '지정 강의실'을 '채팅으로 정하기'로 본다
+  const noRoomDay = (day) => NO_ROOM_DATES.includes(studyDateOfDay(day));
+  const locsOn = (locs, day) => (noRoomDay(day) && locs.some(isRoomLocation)
+    ? [...new Set([...locs.filter((l) => !isRoomLocation(l)), CHAT])] : locs);
+  const meetOn = (day) => locsOn(locsA, day).some((l) => locsOn(locsB, day).includes(l));
+  // 시간표에서 둘 다 고른 칸(그날 장소도 맞는 칸) → 요일마다 가장 길게 이어진 시간이 그날 약속 (1시간 이상)
   const cellsA = a.cells ?? cellsFromRange(a.days, a.start_time ?? a.startTime, a.end_time ?? a.endTime);
   const cellsB = new Set(b.cells ?? cellsFromRange(b.days, b.start_time ?? b.startTime, b.end_time ?? b.endTime));
-  const common = cellsA.filter((c) => cellsB.has(c));
+  const common = cellsA.filter((c) => cellsB.has(c) && meetOn(Number(c.split('-')[0])));
   const schedule = scheduleFromCells(common);
   if (!schedule.length) return null;
+  // 매칭 장소는 강의실이 있는 날 기준으로 정한다. 강의실 없는 날만 겹치면 채팅으로 정하기.
+  const normalDays = schedule.some((r) => !noRoomDay(r.day));
+  const commonLocs = normalDays ? LOCATIONS.filter((l) => locsA.includes(l) && locsB.includes(l)) : [CHAT];
+  if (!commonLocs.length) return null;
   // 겹치는 교류 수준이 여럿이면 가장 사교적인 하나로 잡는다 (체크형 < 대화형 < 사교형, STYLES 순서)
   const commonStyles = Object.keys(STYLES).filter((s) => a.styles.includes(s) && b.styles.includes(s));
   if (!commonStyles.length) return null;
   const styles = [commonStyles.at(-1)];
-  const CHAT = '채팅으로 정하기';
   const location = styles[0] === 'check'
     ? commonLocs.find((l) => l !== CHAT) ?? commonLocs[0]
     : commonLocs.find((l) => l === CHAT) ?? commonLocs[0];
