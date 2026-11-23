@@ -257,6 +257,7 @@ function styleLabels(keys) {
 const routes = {
   login: renderLogin,
   signup: renderSignup,
+  'login-email': renderLoginEmail,
   reset: renderReset,
   home: renderHome,
   apply: renderApply,
@@ -446,7 +447,84 @@ function bindSendCode(form, purpose) {
   });
 }
 
+// 로그인/가입 화면은 가입 방식(OPTIONS.authMode)에 따라 전화번호 화면 또는 기존 이메일 화면을 보여 준다.
+// 기본은 전화번호(무인증·4자리 PIN). 기존 국민대 메일 가입자는 '#/login-email' 로 메일 로그인.
 async function renderLogin() {
+  return OPTIONS.authMode === 'phone' ? renderLoginPhone() : renderLoginEmail();
+}
+async function renderSignup() {
+  return OPTIONS.authMode === 'phone' ? renderSignupPhone() : renderSignupEmail();
+}
+
+const consentSummaryPhone = () => `
+      <dl class="consent-sum">
+        <dt>받는 정보</dt><dd>닉네임, 전화번호, 비밀번호(암호화해서 저장)</dd>
+        <dt>쓰는 곳</dt><dd>매칭·출석 관리, 운영 연락(보증금·안내). 메이트에게는 닉네임·소개만 보여요</dd>
+        <dt>보관</dt><dd>탈퇴하면 바로 지워요 (자세한 기간은 처리방침)</dd>
+      </dl>`;
+
+// 전화번호 로그인: 전화번호 + 4자리 PIN (인증 없음)
+async function renderLoginPhone() {
+  authShell(`
+    <h2>같은 시간에 만나<br>함께 공부해요</h2>
+    <p class="lead">전화번호와 4자리 비밀번호로 바로 시작해요.</p>
+    <form id="f" class="card">
+      <label class="field"><span>전화번호</span><input class="input" name="phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="010-1234-5678" required></label>
+      <label class="field"><span>비밀번호 (숫자 4자리)</span><input class="input" name="pin" type="password" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="current-password" placeholder="••••" required></label>
+      <button class="btn primary block mt-lg">로그인</button>
+    </form>
+    <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a></p>
+    <p class="switch-link tiny muted">국민대 메일로 가입한 기존 회원은 <a href="#/login-email">메일로 로그인</a></p>
+    <p class="legal-link"><a href="privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a></p>
+    ${OPTIONS.demoLogin ? `
+      <div class="demo-login">
+        <button type="button" class="btn block" id="demo-login">데모 계정으로 로그인</button>
+        <p class="tiny muted center">가입 없이 둘러볼 수 있는 체험용 계정이에요.</p>
+      </div>` : ''}`);
+  showIntro();
+  $('#demo-login')?.addEventListener('click', async () => {
+    try { await api('/auth/demo', { method: 'POST' }); location.hash = '#/home'; } catch (err) { toast(err.message, true); }
+  });
+  $('#f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    try {
+      await api('/auth/phone/login', { method: 'POST', body: fd });
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+// 전화번호 가입: 닉네임 + 전화번호 + 4자리 PIN (인증 없음)
+async function renderSignupPhone() {
+  authShell(`
+    <h2>회원가입</h2>
+    <p class="lead">닉네임, 전화번호, 4자리 비밀번호만 있으면 돼요.</p>
+    <form id="f" class="card">
+      <label class="field"><span>닉네임</span><input class="input" name="name" maxlength="20" autocomplete="nickname" required></label>
+      <label class="field"><span>전화번호</span><input class="input" name="phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="010-1234-5678" required></label>
+      <p class="tiny muted">전화번호는 운영진 연락(보증금·안내)용으로만 쓰고, 메이트에게는 보이지 않아요.</p>
+      <label class="field"><span>비밀번호 (숫자 4자리)</span><input class="input" name="pin" type="password" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="new-password" placeholder="••••" required></label>
+      ${consentSummaryPhone()}
+      <label class="agree"><input type="checkbox" name="agree" required>
+        <span><b>[필수]</b> 개인정보 수집·이용에 동의해요 · <a class="link" href="privacy.html" target="_blank" rel="noopener">처리방침 보기</a></span></label>
+      <button class="btn primary block mt">가입하고 시작하기</button>
+    </form>
+    <p class="switch-link">이미 계정이 있나요? <a href="#/login">로그인</a></p>`);
+  const form = $('#f');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(form));
+    fd.agree = fd.agree === 'on';
+    try {
+      await withLoading('', '가입하는 중이에요', () => api('/auth/phone/signup', { method: 'POST', body: fd }));
+      toast('가입을 마쳤어요.');
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+async function renderLoginEmail() {
   authShell(`
     <h2>같은 시간에 만나<br>함께 공부해요</h2>
     <p class="lead">매주 새로운 ${OPTIONS.emailDomain ? '국민대 ' : ''}메이트와 약속을 잡고, 함께 공부하며 더 넓은 캠퍼스를 만나요.</p>
@@ -480,7 +558,7 @@ async function renderLogin() {
   });
 }
 
-async function renderSignup() {
+async function renderSignupEmail() {
   authShell(`
     <h2>회원가입</h2>
     <p class="lead">${OPTIONS.emailDomain ? '국민대학교 메일로 가입할 수 있어요.' : ''}</p>
@@ -1221,6 +1299,40 @@ const mateTabsHTML = (matches, current, base) => (matches.length < 2 ? '' : `
     <a href="#/${base}/${m.id}" class="${m.id === current ? 'on' : ''}">${esc(m.mate.name)}${base === 'chat' && m.id !== current && unread.byMatch[m.id] ? `<span class="badge inline">${unread.byMatch[m.id]}</span>` : ''}<small>${esc(scheduleText(m.schedule))}</small></a>`).join('')}
   </div>`);
 
+// 보증금(계좌이체) 안내 카드. 결제 대상자(매칭된 실제 사용자)에게만 /me/deposit 로 받아 매칭 화면 맨 위에 넣는다.
+function depositCardHTML(d) {
+  const won = d.amount.toLocaleString();
+  const status = d.status === 'paid'
+    ? `<p class="dc-status paid">입금 확인됨 — 약속을 지키면 끝난 뒤 ${d.refundMinutes}분 안에 환불해 드려요.</p>`
+    : d.status === 'refunded' ? '<p class="dc-status">환불 완료</p>'
+      : d.status === 'forfeited' ? '<p class="dc-status">보증금이 몰수되었어요.</p>'
+        : `<p class="dc-note">입금 확인은 운영진이 직접 해요. <b>${won}원</b>을 ${d.refundMinutes}분 안에 입금해 주세요.</p>`;
+  return `<div class="deposit-card card">
+    <div class="dc-head">보증금 ${won}원 · 계좌이체</div>
+    <p class="dc-sub">약속을 지키면 환불받고, 안 나오면 돌려받지 못해요.</p>
+    <div class="dc-acct">
+      <div class="dc-no">${esc(d.bank)} ${esc(d.account)}</div>
+      <div class="dc-holder">예금주 ${esc(d.holder)}</div>
+    </div>
+    <button type="button" class="btn dc-copy" data-acct="${esc(d.account)}">계좌번호 복사</button>
+    ${status}
+  </div>`;
+}
+async function insertDepositCard(alive, matchId) {
+  let info;
+  try { info = await api('/me/deposit'); } catch { return; }
+  if (!alive() || !info?.required || !info.account || info.matchId !== matchId) return;
+  const host = document.createElement('div');
+  host.innerHTML = depositCardHTML(info);
+  const card = host.firstElementChild;
+  if (!card) return;
+  view.insertAdjacentElement('afterbegin', card);
+  card.querySelector('.dc-copy')?.addEventListener('click', () => {
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(info.account).then(() => toast('계좌번호를 복사했어요')).catch(() => toast(info.account));
+    else toast(info.account);
+  });
+}
+
 async function renderMatch(alive, id) {
   // 매칭 화면은 위쪽 띠 없이 바로 출석 카드부터 (빈 여백도 없앤다)
   setTop({});
@@ -1246,6 +1358,7 @@ async function renderMatch(alive, id) {
   }
   if (match.status === 'reported') return renderReport(match, alive);
   drawMatch(match, alive);
+  insertDepositCard(alive, match.id); // 보증금 안내(결제 대상자에게만) — 화면을 늦추지 않게 뒤에서 채운다
   // 메이트가 여러 명이면: 화면을 왼쪽으로 밀면 다음 메이트, 오른쪽으로 밀면 이전 메이트 (출석·프로필·약속이 한 번에 바뀜)
   const order = matches.map((m) => m.id);
   const at = order.indexOf(match.id);

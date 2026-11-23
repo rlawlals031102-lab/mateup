@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import * as S from './service.js';
-import { LOCATIONS, ROOMS_BY_DATE, NO_ROOM_DATES, ROOMS_UNASSIGNED_FROM, UNASSIGNED_ROOM, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE_RULE, PRIVACY_POLICY } from './options.js';
+import { LOCATIONS, ROOMS_BY_DATE, NO_ROOM_DATES, ROOMS_UNASSIGNED_FROM, UNASSIGNED_ROOM, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE_RULE, PRIVACY_POLICY, DEPOSIT } from './options.js';
 import { sessionUser } from './sessions.js';
 import { emailHash } from './fieldcrypt.js';
 import { LIMITS, limit, assertUnder, countHit, clearHits, ipKey, securityHeaders } from './security.js';
@@ -38,6 +38,7 @@ export function createApp({
   emailPolicy = { domain: null, verify: false }, mailer = null,
   demoLogin = demo, // '데모 계정으로 로그인' 버튼 허용 (공용 체험 계정, 데모 메이트와만 매칭)
   consentRequired = emailPolicy.verify,
+  authMode = 'phone', // 새 가입 방식: 'phone'(전화번호+닉네임+4자리 PIN, 무인증) | 'email'(기존 메일 가입자용)
 }) {
   const app = express();
   const opts = { demo };
@@ -79,6 +80,9 @@ export function createApp({
       locations: LOCATIONS, roomsByDate: ROOMS_BY_DATE, noRoomDates: NO_ROOM_DATES, roomsUnassignedFrom: ROOMS_UNASSIGNED_FROM, unassignedRoom: UNASSIGNED_ROOM, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD,
       emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, demoLogin, promiseRule: PROMISE_RULE,
       privacyVersion: PRIVACY_POLICY.version, reportReasons: REPORT_REASONS,
+      authMode,
+      // 보증금: 켜졌고 계좌가 설정된 경우에만 금액·환불시간만 알려 준다. 계좌번호는 여기 넣지 않는다(/me/deposit 전용).
+      deposit: DEPOSIT.enabled && DEPOSIT.account ? { enabled: true, amount: DEPOSIT.amount, refundMinutes: DEPOSIT.refundMinutes } : { enabled: false },
     });
   });
 
@@ -86,6 +90,18 @@ export function createApp({
   api.get('/health', async (req, res) => {
     const h = await health(db);
     res.status(h.ok ? 200 : 503).set('Cache-Control', 'no-store').json(h);
+  });
+
+  // 보증금(계좌이체): 결제 대상자(매칭된 실제 사용자)에게만 계좌 정보. 공개 옵션 API에는 계좌번호가 없다.
+  api.get('/me/deposit', member, async (req, res) => res.json(await S.depositInfo(db, req.user.id)));
+  // 운영자 수동 확인: 입금/환불/몰수 상태 변경 (운영자 계정만)
+  api.post('/admin/deposits/:matchId/:userId', member, async (req, res) => {
+    await S.assertAdmin(db, req.user.id);
+    res.json(await S.setDepositStatus(db, Number(req.params.matchId), Number(req.params.userId), req.body?.status));
+  });
+  api.get('/admin/deposits', member, async (req, res) => {
+    await S.assertAdmin(db, req.user.id);
+    res.json({ deposits: await S.depositOverview(db) });
   });
 
   // 개발자 화면 (운영자 계정만). 열람은 기록으로 남긴다 (server/admin.js)
@@ -180,6 +196,30 @@ export function createApp({
     setSession(res, result.token);
     res.json({ user: result.user });
   });
+  // 전화번호 가입·로그인 (무인증 · 닉네임 + 전화번호 + 4자리 PIN). 기존 이메일 가입자는 위 /auth/login 그대로.
+  api.post('/auth/phone/signup', async (req, res) => {
+    await limit(db, `psignup:ip:${ipKey(req)}`, LIMITS.signupIp);
+    const { user, token } = await S.signupPhone(db, req.body ?? {}, { consent: consentRequired });
+    setSession(res, token);
+    res.status(201).json({ user });
+  });
+  // 4자리 PIN 무차별 대입 방지: 한 전화번호로 연속 실패하면 잠그고, 한 IP의 시도 횟수도 제한한다.
+  api.post('/auth/phone/login', async (req, res) => {
+    await limit(db, `plogin:ip:${ipKey(req)}`, LIMITS.loginIp);
+    const failKey = `plogin:fail:${emailHash(String(req.body?.phone ?? '').replace(/\D/g, ''))}`;
+    await assertUnder(db, failKey, LIMITS.loginFail);
+    let result;
+    try {
+      result = await S.loginPhone(db, req.body ?? {});
+    } catch (err) {
+      if (err.status === 401) await countHit(db, failKey, LIMITS.loginFail);
+      throw err;
+    }
+    await clearHits(db, failKey);
+    setSession(res, result.token);
+    res.json({ user: result.user });
+  });
+
   // 데모 계정으로 바로 로그인 (개발·시연용, 실서비스에서는 막힘)
   api.post('/auth/demo', async (req, res) => {
     if (!demoLogin) return res.status(403).json({ error: '데모 계정을 사용할 수 없어요.' });

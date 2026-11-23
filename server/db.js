@@ -16,7 +16,7 @@ const ADDED_COLUMNS = [
   ['matches', 'schedule', 'TEXT'], // 요일별 약속 시간
   ['users', 'personal', 'TEXT'], // 내 개인 일정 [{ cell, title }]
   ['users', 'department', 'TEXT'], // 학과 (가입 때 수집, 본인·운영자만 봄)
-  ['users', 'phone', 'TEXT'], // 전화번호 (가입 때 수집, 본인·운영자만 봄)
+  ['users', 'phone', 'TEXT'], // 전화번호 (가입 때 수집·연락처용, 본인·운영자만 봄)
   ['users', 'suspended_until', 'TEXT'], // 매칭 정지가 끝나는 시각 (약속 지키기 규칙)
   ['users', 'strikes_since', 'TEXT'], // 이 시각 뒤의 그만두기·미참석만 센다 (정지가 끝나면 0번부터)
   ['users', 'agreed_at', 'TEXT'], // 개인정보 처리방침 동의 시각
@@ -243,6 +243,18 @@ CREATE TABLE IF NOT EXISTS email_codes (
   created_at TEXT NOT NULL
 );
 
+-- 보증금(계좌이체) 상태. 돈은 앱이 움직이지 않고 운영자가 문자로 수동 확인한다. 한 매칭·사람당 한 줄.
+CREATE TABLE IF NOT EXISTS deposits (
+  id         ${ID},
+  match_id   INTEGER NOT NULL,
+  user_id    INTEGER NOT NULL,
+  amount     INTEGER NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'pending', -- pending(결제대기) | paid(입금확인) | refunded(반환완료) | forfeited(몰수) | cancelled(취소)
+  created_at TEXT NOT NULL,
+  updated_at TEXT,
+  UNIQUE (match_id, user_id)
+);
+
 -- 사이트 방문 (사이트를 열 때마다 한 줄. visitor_id는 브라우저마다 만든 무작위 id, day는 한국 날짜)
 CREATE TABLE IF NOT EXISTS visits (
   id         ${ID},
@@ -258,6 +270,7 @@ CREATE INDEX IF NOT EXISTS idx_appointments_match ON appointments(match_id);
 CREATE INDEX IF NOT EXISTS idx_messages_match ON messages(match_id);
 CREATE INDEX IF NOT EXISTS idx_tokens_user ON auth_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_email_codes ON email_codes(email, purpose);
+CREATE INDEX IF NOT EXISTS idx_deposits_match ON deposits(match_id);
 CREATE INDEX IF NOT EXISTS idx_visits_day ON visits(day);
 CREATE INDEX IF NOT EXISTS idx_strikes_user ON strikes(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
@@ -269,7 +282,7 @@ ${dialect === 'pg' ? RLS : ''}`;
 
 // PostgreSQL(Supabase)에서는 모든 테이블에 RLS를 켜 둔다. 정책이 없으므로 Supabase 공개 API(anon 키)로는
 // 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
-const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'reviews', 'email_codes', 'attendance_codes', 'visits', 'chat_reads', 'strikes', 'sent_reminders',
+const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'reviews', 'email_codes', 'deposits', 'attendance_codes', 'visits', 'chat_reads', 'strikes', 'sent_reminders',
   'sessions', 'rate_limits', 'reports', 'admin_logs', 'blocked_emails', 'ops_heartbeats', 'schema_migrations']
   .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
   .join('\n');

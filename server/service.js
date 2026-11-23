@@ -5,6 +5,7 @@ import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
   EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS, PROMISE_RULE,
   PRIVACY_POLICY, PRIOR_TEAMS, roomLocation, NO_ROOM_DATES, isRoomLocation,
+  DEPOSIT, depositConfigured,
 } from './options.js';
 import { createSession, sessionUser, endSession, endAllSessions } from './sessions.js';
 // 전화번호는 운영 결정(2026-11-06)으로 암호화하지 않고 그대로 저장한다. 예전에 암호화된 값이 있으면 읽을 때만 풀어 준다.
@@ -322,6 +323,106 @@ export async function resetPassword(db, { email, code, password }, policy = NO_P
   });
 }
 
+// ─────────────────────── 전화번호 가입 (무인증 · 4자리 PIN) ───────────────────────
+// 새 가입은 닉네임 + 전화번호 + 4자리 비밀번호(PIN)만 받는다. 문자·메일 인증은 없다.
+// 전화번호는 인증용이 아니라 '연락처'로만 저장한다(운영진이 보증금·문자 연락에 쓴다).
+// users.email 에 합성 이메일(p_<숫자>@phone.studybuddy)을 넣어 기존 스키마(email NOT NULL UNIQUE)를 그대로 쓰고,
+// 이 합성 이메일이 전화번호 가입 계정의 식별자다. ADMIN_EMAILS 에 없으므로 전화번호만으로는 관리자 권한을 얻을 수 없다.
+// 기존 국민대 메일 가입자는 그대로 유지된다(이메일 로그인 계속 동작 — 이미 인증된 사람들).
+const phoneSyntheticEmail = (p) => `p_${String(p).replace(/\D/g, '')}@phone.studybuddy`;
+const checkPin = (pin) => {
+  if (!/^\d{4}$/.test(String(pin ?? ''))) throw new AppError(400, '비밀번호는 숫자 4자리로 입력해 주세요.');
+};
+
+// 전화번호 가입: 닉네임 + 전화번호 + 4자리 PIN. 인증 없음. (pin 또는 password 어느 키로 와도 받는다)
+export async function signupPhone(db, { phone, pin, password, name, department, age, agree }, policy = {}) {
+  const p = normalizePhone(phone);
+  const secret = pin ?? password;
+  checkPin(secret);
+  const n = String(name ?? '').trim();
+  if (n.length < 1 || n.length > 20) throw new AppError(400, '닉네임은 1~20자로 입력해 주세요.');
+  if (policy.consent && agree !== true) throw new AppError(400, '개인정보 수집·이용에 동의해 주세요.');
+
+  const email = phoneSyntheticEmail(p);
+  const dup = await db.get('SELECT id FROM users WHERE email = ? AND is_bot = 0', email);
+  if (dup) throw new AppError(409, '이미 가입된 전화번호입니다. 로그인해 주세요.');
+
+  const passwordHash = await hashPassword(String(secret));
+  const dept = String(department ?? '').trim();
+  const a = age !== undefined && age !== null && age !== '' ? Number(age) : null;
+  return db.tx(async (t) => {
+    const { rows } = await t.run(
+      `INSERT INTO users (email, password_hash, name, age, department, phone, created_at, agreed_at, privacy_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (email) DO NOTHING RETURNING id`,
+      email, passwordHash, n, Number.isInteger(a) ? a : null, dept, p, iso(),
+      agree === true ? iso() : null, agree === true ? PRIVACY_POLICY.version : null,
+    );
+    if (!rows.length) throw new AppError(409, '이미 가입된 전화번호입니다.');
+    return { user: privateUser(await getUser(t, rows[0].id)), token: await issueToken(t, rows[0].id) };
+  });
+}
+
+// 전화번호 로그인: 전화번호 + 4자리 PIN. (무차별 대입은 app.js 의 IP·실패 잠금으로 막는다)
+export async function loginPhone(db, { phone, pin, password }) {
+  const p = normalizePhone(phone);
+  const u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', phoneSyntheticEmail(p));
+  const ok = await passwordMatches(String(pin ?? password ?? ''), u?.password_hash ?? DUMMY_HASH);
+  if (!u || !ok) throw new AppError(401, '전화번호 또는 비밀번호가 올바르지 않습니다.');
+  return { user: privateUser(u), token: await issueToken(db, u.id) };
+}
+
+// ───────────────────────── 보증금(계좌이체) ─────────────────────────
+// 앱은 돈을 움직이지 않는다. 결제 대상자(현재 확정 매칭이 있는 실제 사용자)에게만 계좌 정보를 보여 주고,
+// 실제 입금/환불 확인은 운영자가 문자로 수동으로 한 뒤 상태(setDepositStatus)를 바꾼다.
+// 데모 메이트(봇)와의 매칭·운영자 미설정(계좌 없음)에서는 보증금을 요구하지 않는다(required:false).
+const DEPOSIT_STATUS = ['pending', 'paid', 'refunded', 'forfeited', 'cancelled'];
+
+export async function depositInfo(db, userId) {
+  if (!depositConfigured()) return { required: false };
+  const m = await db.get(
+    "SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status IN ('active', 'reported') ORDER BY id DESC LIMIT 1",
+    userId, userId,
+  );
+  if (!m) return { required: false };
+  const mateId = m.user_a === userId ? m.user_b : m.user_a;
+  const mate = await db.get('SELECT is_bot FROM users WHERE id = ?', mateId);
+  if (mate?.is_bot) return { required: false }; // 데모 메이트와는 보증금 없음
+
+  let row = await db.get('SELECT * FROM deposits WHERE match_id = ? AND user_id = ?', m.id, userId);
+  if (!row) {
+    await db.run(
+      'INSERT INTO deposits (match_id, user_id, amount, status, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (match_id, user_id) DO NOTHING',
+      m.id, userId, DEPOSIT.amount, 'pending', iso(),
+    );
+    row = await db.get('SELECT * FROM deposits WHERE match_id = ? AND user_id = ?', m.id, userId);
+  }
+  return {
+    required: true, matchId: m.id, status: row.status, amount: DEPOSIT.amount, refundMinutes: DEPOSIT.refundMinutes,
+    bank: DEPOSIT.bank, account: DEPOSIT.account, holder: DEPOSIT.holder,
+  };
+}
+
+// 운영자가 입금/환불/몰수를 수동 확인하고 상태를 바꾼다. (중복 입금·중복 반환·중복 몰수는 상태 하나로 관리해 막는다)
+export async function setDepositStatus(db, matchId, userId, status) {
+  if (!DEPOSIT_STATUS.includes(status)) throw new AppError(400, '보증금 상태가 올바르지 않습니다.');
+  await db.run(
+    `INSERT INTO deposits (match_id, user_id, amount, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (match_id, user_id) DO UPDATE SET status = EXCLUDED.status, updated_at = EXCLUDED.updated_at`,
+    matchId, userId, DEPOSIT.amount, status, iso(), iso(),
+  );
+  return { ok: true, status };
+}
+
+// 운영자 화면용: 보증금 현황 (결제 대기·입금 확인 등)
+export async function depositOverview(db) {
+  return db.all(
+    `SELECT d.match_id AS "matchId", d.user_id AS "userId", d.amount, d.status, d.updated_at AS "updatedAt", u.name
+     FROM deposits d JOIN users u ON u.id = d.user_id ORDER BY d.id DESC LIMIT 200`,
+  );
+}
+
 // 데모 계정 로그인 (데모 모드 전용). 계정이 없으면 만든다.
 export const DEMO_ACCOUNT = { email: 'demo@studybuddy.local', name: '데모 사용자', department: '경영정보학부', phone: '010-0000-0000' };
 
@@ -448,21 +549,8 @@ export async function setPersonalSchedule(db, userId, entries) {
 
 // ───────────────────────── 포인트 ─────────────────────────
 
-// 잔액 확인과 차감을 한 문장으로 처리해 동시에 요청이 와도 음수가 되지 않는다.
-// 데모 메이트(봇)의 포인트는 바뀌지 않는다. (보증금 예치·반환·보상 모두 없음)
-export async function adjustPoints(db, userId, amount, reason, matchId = null) {
-  if (!amount) return;
-  const { rows } = await db.run(
-    'UPDATE users SET points = points + ? WHERE id = ? AND is_bot = 0 AND points + ? >= 0 RETURNING points',
-    amount, userId, amount,
-  );
-  if (!rows.length && (await getUser(db, userId))?.is_bot) return;
-  if (!rows.length) throw new AppError(400, '포인트가 부족합니다.');
-  await db.run(
-    'INSERT INTO point_logs (user_id, amount, balance, reason, match_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    userId, amount, rows[0].points, reason, matchId, iso(),
-  );
-}
+// 포인트 제도 삭제됨: 보증금이 계좌이체로 바뀌어 포인트 적립·차감·보증금 예치/반환/보상이 모두 사라졌다.
+// (users.points · point_logs 는 기존 데이터 보존을 위해 남겨 두지만 더 이상 쓰지 않는다 — 항상 0.)
 
 // ───────────────────────── 매칭 신청 ─────────────────────────
 
@@ -666,7 +754,6 @@ export async function cancelRequest(db, userId, requestId = null) {
       target, userId,
     );
     if (!rows.length) throw new AppError(404, '대기 중인 매칭 신청이 없어요.');
-    if (rows[0].deposit) await adjustPoints(t, userId, rows[0].deposit, '매칭 취소 보증금 반환');
   });
 }
 
@@ -762,9 +849,6 @@ async function createMatch(db, { userA, userB, stakeA, stakeB, terms, prevMatchI
     JSON.stringify(terms.styles), stake, weekStart, weekEnd, prevMatchId, JSON.stringify(schedule), iso(),
   );
   const matchId = rows[0].id;
-
-  if (stakeA > stake) await adjustPoints(db, userA, stakeA - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
-  if (stakeB > stake) await adjustPoints(db, userB, stakeB - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
 
   for (const { date, start, end } of dates) {
     const { rows: ap } = await db.run(
@@ -1413,23 +1497,10 @@ async function settleMatchTx(db, matchId) {
       [m.user_b]: await attendanceStats(t, appts, m.user_b),
     };
 
-    for (const [uid, mid] of [[m.user_a, m.user_b], [m.user_b, m.user_a]]) {
-      const me = users[uid];
-      const mate = users[mid];
-      if (!m.stake) {
-        me.deposit = { result: 'none', amount: 0 };
-      } else if (me.kept) {
-        await adjustPoints(t, uid, m.stake, '약속 이행 · 보증금 반환', m.id);
-        me.deposit = { result: 'refunded', amount: m.stake };
-      } else if (mate.kept) {
-        await adjustPoints(t, mid, m.stake, '메이트 약속 미이행 보상', m.id);
-        me.deposit = { result: 'to_mate', amount: m.stake };
-      } else {
-        me.deposit = { result: 'forfeited', amount: m.stake };
-      }
-    }
-    for (const [uid, mid] of [[m.user_a, m.user_b], [m.user_b, m.user_a]]) {
-      users[uid].reward = users[mid].deposit.result === 'to_mate' ? m.stake : 0;
+    // 보증금(포인트) 제도 삭제됨 — 정산은 출석 기록만 남긴다. deposit/reward 는 화면 호환을 위해 none/0 으로 둔다.
+    for (const uid of [m.user_a, m.user_b]) {
+      users[uid].deposit = { result: 'none', amount: 0 };
+      users[uid].reward = 0;
     }
 
     const report = { generatedAt: iso(), users };
@@ -1482,22 +1553,11 @@ async function leaveMatchTx(db, userId, m, appts, policy) {
     };
     const mateIsBot = !!(await getUser(t, mateId)).is_bot;
     const none = { result: 'none', amount: 0 };
-    if (!m.stake) {
-      users[userId].deposit = none;
-      users[mateId].deposit = none;
-    } else {
-      await adjustPoints(t, mateId, m.stake * 2, '메이트 중도 종료 · 보증금 반환 + 보상', m.id); // 데모 메이트면 변화 없음
-      // 그만둔 사람: 보증금은 이미 예치 때 빠졌으므로 잔액 변화 없이 내역만 남긴다
-      const { points } = await getUser(t, userId);
-      await t.run(
-        'INSERT INTO point_logs (user_id, amount, balance, reason, match_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        userId, 0, points, mateIsBot ? `중도 종료 · 보증금 ${m.stake.toLocaleString()}P 소멸` : `중도 종료 · 보증금 ${m.stake.toLocaleString()}P 메이트에게 보상`, m.id, iso(),
-      );
-      users[userId].deposit = { result: mateIsBot ? 'forfeited' : 'to_mate', amount: m.stake };
-      users[mateId].deposit = { result: 'refunded', amount: m.stake };
-    }
+    // 보증금(포인트) 제도 삭제됨 — 그만두기 제재는 '약속 지키기' 스트라이크로만 (leaveMatch → addStrike). deposit/reward 는 none/0.
+    users[userId].deposit = none;
+    users[mateId].deposit = none;
     users[userId].reward = 0;
-    users[mateId].reward = m.stake && !mateIsBot ? m.stake : 0;
+    users[mateId].reward = 0;
 
     const col = m.user_a === userId ? 'choice_a' : 'choice_b';
     const report = { generatedAt: iso(), leftBy: userId, leavePolicy: policy, users };
@@ -1541,19 +1601,12 @@ export async function chooseNext(db, userId, matchId, choice) {
 }
 
 async function continueMatch(db, m) {
-  // 이전 주와 같은 보증금을 다시 건다. 둘 중 한 명이라도 포인트가 부족하면 보증금 없이 진행.
-  let stake = m.stake;
-  const canPay = async (uid) => (await getUser(db, uid)).points >= stake;
-  if (stake && (!(await canPay(m.user_a)) || !(await canPay(m.user_b)))) stake = 0;
-  if (stake) {
-    await adjustPoints(db, m.user_a, -stake, '보증금 예치 (재매칭)', m.id);
-    await adjustPoints(db, m.user_b, -stake, '보증금 예치 (재매칭)', m.id);
-  }
+  // 보증금(포인트) 제도 삭제됨 — 예치 없이 다음 주 매칭을 이어 간다.
   return createMatch(db, {
     userA: m.user_a,
     userB: m.user_b,
-    stakeA: stake,
-    stakeB: stake,
+    stakeA: 0,
+    stakeB: 0,
     prevMatchId: m.id,
     terms: { schedule: m.schedule, startTime: m.start_time, endTime: m.end_time, location: m.location, styles: m.styles },
   });

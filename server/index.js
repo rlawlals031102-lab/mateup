@@ -9,7 +9,7 @@ import { seedBots, retireOldBots } from './seed.js';
 import { autoSettle } from './service.js';
 import { createApp } from './app.js';
 import { createGmailMailer } from './mailer.js';
-import { EMAIL_DOMAIN } from './options.js';
+import { EMAIL_DOMAIN, AUTH_MODE } from './options.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const demo = process.argv.includes('--demo') || process.env.DEMO_MODE === '1';
@@ -45,6 +45,6 @@ setInterval(() => autoSettle(db).catch(console.error), 10 * 60 * 1000).unref();
 const mailer = await createGmailMailer({ user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD });
 const emailPolicy = demo ? { domain: null, verify: false } : { domain: EMAIL_DOMAIN, verify: true };
 
-createApp({ db, demo, emailPolicy, mailer, consentRequired }).listen(port, () => {
+createApp({ db, demo, emailPolicy, mailer, consentRequired, authMode: AUTH_MODE }).listen(port, () => {
   console.log(`스터디버디 서버 실행 중 → http://localhost:${port}${demo ? '  (데모 모드)' : ''}`);
 });
