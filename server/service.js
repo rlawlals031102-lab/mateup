@@ -108,11 +108,13 @@ export const publicUser = (u) => u && {
   tags: JSON.parse(u.tags),
   bio: u.bio,
   avatar: u.avatar,
+  studyStyle: u.study_style ?? null, // 선호 교류 스타일 (공개·선택): check | talk | social
   isBot: !!u.is_bot && !!u.bot_template, // 체험용 데모 메이트 (화면에 "가상 인물"로 표시)
 };
 
 export const privateUser = (u) => u && {
   ...publicUser(u), email: u.email, department: u.department ?? null, phone: decryptField(u.phone),
+  realName: u.real_name ?? null, // 실명 (선택·비공개, 본인만)
   isAdmin: ADMIN_EMAILS.includes(u.email), notifyOptOut: !!u.notify_opt_out,
 };
 
@@ -157,7 +159,7 @@ function normalizePhone(phone) {
   return d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
 }
 
-function validateProfile({ name, age, tags, bio, avatar, department, phone }, partial = false) {
+function validateProfile({ name, age, tags, bio, avatar, department, phone, realName, studyStyle }, partial = false) {
   const out = {};
   if (name !== undefined || !partial) {
     const n = String(name ?? '').trim();
@@ -167,10 +169,15 @@ function validateProfile({ name, age, tags, bio, avatar, department, phone }, pa
   // 학과·전화번호: 가입 때 꼭 받고, 본인과 운영자만 본다 (메이트에게는 보이지 않음)
   if (department !== undefined || !partial) {
     const d = String(department ?? '').trim();
-    if (d.length < 1 || d.length > 30) throw new AppError(400, '학과를 입력해 주세요.');
-    out.department = d;
+    if (!d && partial) out.department = null; // 프로필 수정에서 비우면 지움 (전화번호 가입자는 학과가 없다)
+    else if (d.length < 1 || d.length > 30) throw new AppError(400, '학과를 입력해 주세요.');
+    else out.department = d;
   }
-  if (phone !== undefined || !partial) out.phone = normalizePhone(phone);
+  if (phone !== undefined || !partial) {
+    const raw = String(phone ?? '').trim();
+    if (!raw && partial) out.phone = null; // 프로필 수정에서 비우면 지움
+    else out.phone = normalizePhone(phone); // 가입(필수)이거나 값이 있으면 형식 검사
+  }
   if (age !== undefined && age !== null && age !== '') {
     const a = Number(age);
     if (!Number.isInteger(a) || a < 14 || a > 100) throw new AppError(400, '나이를 올바르게 입력해 주세요.');
@@ -190,6 +197,18 @@ function validateProfile({ name, age, tags, bio, avatar, department, phone }, pa
     const a = String(avatar).trim();
     if (!a || [...a].length > 4) throw new AppError(400, '아바타를 다시 골라 주세요.');
     out.avatar = a;
+  }
+  // 실명: 선택 입력, 비공개(본인·운영자만). 비우면 지운다.
+  if (realName !== undefined) {
+    const r = String(realName ?? '').trim();
+    if (r.length > 20) throw new AppError(400, '실명은 20자 이내로 입력해 주세요.');
+    out.real_name = r || null;
+  }
+  // 선호 교류 스타일: 선택 입력, 공개. check | talk | social 중 하나거나 비움.
+  if (studyStyle !== undefined) {
+    const s = String(studyStyle ?? '').trim();
+    if (s && !STYLES[s]) throw new AppError(400, '선호 스타일을 다시 골라 주세요.');
+    out.study_style = s || null;
   }
   return out;
 }
@@ -525,6 +544,33 @@ export async function updateProfile(db, userId, input) {
       ...keys.map((k) => fields[k]), userId);
   }
   return privateUser(await getUser(db, userId));
+}
+
+// 공개 프로필: 로그인한 아무 사용자가 볼 수 있는 상대 프로필.
+// 닉네임·나이·태그·소개·아바타·선호 스타일 + 긍정 지표만. 실명·학과·전화·이메일은 넣지 않는다.
+export async function publicProfile(db, targetId) {
+  const id = Number(targetId);
+  if (!Number.isInteger(id) || id < 1) throw new AppError(404, '프로필을 찾을 수 없어요.');
+  const u = await getUser(db, id);
+  if (!u || u.deleted_at) throw new AppError(404, '프로필을 찾을 수 없어요.');
+  return { ...publicUser(u), stats: await profileStats(db, id) };
+}
+
+// 프로필에 보이는 긍정 지표만 (노쇼·이행률 같은 부정 지표는 넣지 않는다).
+export async function profileStats(db, userId) {
+  const a = await db.get(
+    'SELECT COUNT(*) AS kept, COALESCE(SUM(minutes), 0) AS minutes FROM attendance WHERE user_id = ?',
+    userId,
+  );
+  const m = await db.get(
+    'SELECT COUNT(DISTINCT CASE WHEN user_a = ? THEN user_b ELSE user_a END) AS mates FROM matches WHERE user_a = ? OR user_b = ?',
+    userId, userId, userId,
+  );
+  return {
+    kept: Number(a?.kept ?? 0), // 약속 지킨 횟수 (출석한 약속 수)
+    minutes: Number(a?.minutes ?? 0), // 누적 공부시간(분)
+    mates: Number(m?.mates ?? 0), // 함께한 메이트 수
+  };
 }
 
 // ───────────────────────── 개인 일정 ─────────────────────────

@@ -276,10 +276,12 @@ async function router() {
   const name = location.hash.replace(/^#\/?/, '') || 'home';
   scroller().scrollTo(0, 0);
   const pastId = name.match(/^history\/(\d+)$/)?.[1];
+  const profileId = name.match(/^u\/(\d+)$/)?.[1];
   const [, sub, subId] = name.match(/^(match|chat)\/(\d+)$/) ?? [];
   const [, adminMatchId, adminSide] = name.match(/^admin\/match\/(\d+)(?:\/(a|b))?$/) ?? [];
   const render = adminMatchId ? (alive) => renderAdminMatch(alive, Number(adminMatchId), adminSide ?? 'a')
     : pastId ? (alive) => renderPast(alive, Number(pastId))
+    : profileId ? (alive) => renderUserProfile(alive, Number(profileId))
     : sub === 'match' ? (alive) => renderMatch(alive, Number(subId))
       : sub === 'chat' ? (alive) => renderChat(alive, Number(subId))
         : routes[name] ?? renderHome;
@@ -1470,7 +1472,7 @@ function drawMatch(m, alive, { admin = false } = {}) {
   view.innerHTML = `${tabs}
     ${checkinCard}
     <section class="card">
-      <div class="card-head"><h2>메이트 프로필</h2><span class="hint">${m.round}주차</span></div>
+      <div class="card-head"><h2>메이트 프로필</h2><span class="row" style="gap:10px"><a class="link" href="#/u/${m.mate.id}">프로필 ›</a><span class="hint">${m.round}주차</span></span></div>
       <div class="profile">
         ${avatarHTML(m.mate, 'lg')}
         <div>
@@ -2041,6 +2043,9 @@ async function renderMe(alive) {
   const [{ user, strikes }, { matches, record }] = await Promise.all([api('/me'), api('/me/history')]);
   if (!alive()) return;
   const st = strikes ?? { count: 0, limit: rule().strikeLimit };
+  // 전화번호 가입자는 합성 이메일(p_...@phone.studybuddy)을 가진다 — 화면엔 안 보인다
+  const realEmail = user.email && !user.email.endsWith('@phone.studybuddy') ? user.email : null;
+  const myStyle = user.studyStyle && OPTIONS.styles[user.studyStyle] ? OPTIONS.styles[user.studyStyle].label : null;
 
   view.innerHTML = `
     <section class="card">
@@ -2049,12 +2054,15 @@ async function renderMe(alive) {
         ${avatarHTML(user, 'lg')}
         <div>
           <div class="name">${esc(user.name)}</div>
-          <div class="small muted">${esc(user.email)}</div>
+          ${realEmail ? `<div class="small muted">${esc(realEmail)}</div>` : ''}
           ${user.department || user.phone ? `<div class="small muted">${esc([user.department, user.phone].filter(Boolean).join(' · '))}</div>` : ''}
+          ${user.realName ? `<div class="tiny muted">실명 ${esc(user.realName)} · 나만 보여요</div>` : ''}
+          ${myStyle ? `<div class="small mt">선호 <b>${esc(myStyle)}</b></div>` : ''}
           ${user.bio ? `<div class="small mt">${esc(user.bio)}</div>` : ''}
           ${tagsHTML(user.tags)}
         </div>
       </div>
+      <a class="link small" href="#/u/${user.id}" style="display:block;margin-top:10px">메이트에게 보이는 내 프로필 ›</a>
     </section>
 
     ${record && record.weeks ? `
@@ -2091,13 +2099,14 @@ async function renderMe(alive) {
         </a>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
     </section>
 
+    ${realEmail ? `
     <section class="section">
       <h2 class="section-title">알림</h2>
       <button type="button" class="list-item" id="notify-toggle" aria-pressed="${!user.notifyOptOut}" style="width:100%;background:none;border:0;border-bottom:1px solid var(--soft);cursor:pointer">
         <span class="small">매칭·약속 이메일 알림</span><span class="switch"></span>
       </button>
-      <p class="tiny muted mt">매칭이 되거나 약속·리포트가 생기면 ${esc(user.email)}로 알려 드려요.</p>
-    </section>
+      <p class="tiny muted mt">매칭이 되거나 약속·리포트가 생기면 ${esc(realEmail)}로 알려 드려요.</p>
+    </section>` : ''}
 
     ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">관리자 화면</a>' : ''}
     <nav class="me-links" aria-label="계정">
@@ -2121,7 +2130,7 @@ async function renderMe(alive) {
   });
   $('#delete-account').addEventListener('click', openDeleteAccount);
   $('#export-data').addEventListener('click', downloadMyData);
-  $('#notify-toggle').addEventListener('click', async (e) => {
+  $('#notify-toggle')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     const on = btn.getAttribute('aria-pressed') === 'true'; // 지금 켜져 있나
     btn.setAttribute('aria-pressed', String(!on));
@@ -2396,6 +2405,10 @@ async function renderEditProfile(alive) {
   loading();
   const { user } = await api('/me');
   if (!alive()) return;
+  const styleOptions = ['<option value="">선택 안 함</option>']
+    .concat(Object.entries(OPTIONS.styles ?? {}).map(([k, v]) =>
+      `<option value="${k}"${user.studyStyle === k ? ' selected' : ''}>${esc(v.label)} · ${esc(v.desc)}</option>`))
+    .join('');
 
   view.innerHTML = `
     <form id="f" class="card">
@@ -2404,8 +2417,10 @@ async function renderEditProfile(alive) {
         <p class="tiny muted">프로필 동그라미에는 이름 글자가 보여요.</p>
       </div>
       <label class="field"><span>이름 (닉네임)</span><input class="input" name="name" maxlength="20" value="${esc(user.name)}" required></label>
-      <label class="field"><span>학과</span><input class="input" name="department" maxlength="30" value="${esc(user.department ?? '')}" placeholder="예: 경영정보학부" required></label>
-      <label class="field"><span>전화번호 (메이트에게는 보이지 않아요)</span><input class="input" name="phone" type="tel" inputmode="numeric" value="${esc(user.phone ?? '')}" placeholder="010-1234-5678" required></label>
+      <label class="field"><span>실명 (선택 · 메이트에게는 보이지 않아요)</span><input class="input" name="realName" maxlength="20" value="${esc(user.realName ?? '')}" placeholder="예: 홍길동"></label>
+      <label class="field"><span>학과 (선택)</span><input class="input" name="department" maxlength="30" value="${esc(user.department ?? '')}" placeholder="예: 경영정보학부"></label>
+      <label class="field"><span>전화번호 (선택 · 메이트에게는 보이지 않아요)</span><input class="input" name="phone" type="tel" inputmode="numeric" value="${esc(user.phone ?? '')}" placeholder="010-1234-5678"></label>
+      <label class="field"><span>선호 교류 스타일 (선택 · 프로필에 표시)</span><select class="input" name="studyStyle">${styleOptions}</select></label>
       <label class="field"><span>태그 (쉼표로 구분, 최대 5개)</span><input class="input" name="tags" value="${esc(user.tags.join(', '))}" placeholder="#카페공부, #자격증준비, #ENFJ"></label>
       <label class="field"><span>한 줄 소개</span><textarea class="input" name="bio" maxlength="200" placeholder="메이트에게 나를 소개해 주세요">${esc(user.bio)}</textarea></label>
       <button class="btn primary block mt-lg">저장하기</button>
@@ -2423,4 +2438,49 @@ async function renderEditProfile(alive) {
       history.back();
     } catch (err) { toast(err.message, true); }
   });
+}
+
+// 공개 프로필 보기 (#/u/:id) — 다른 사람(또는 내) 공개 프로필. 긍정 지표만 보인다.
+async function renderUserProfile(alive, id) {
+  setTop({ title: '프로필', back: '#' });
+  setTabs(null);
+  $('.icon-btn', topbar)?.addEventListener('click', (e) => { e.preventDefault(); history.back(); });
+  loading();
+  let data;
+  try {
+    data = await api(`/users/${id}`);
+  } catch (err) {
+    if (!alive()) return;
+    view.innerHTML = `<section class="card"><p class="small muted">${esc(err.message || '프로필을 찾을 수 없어요.')}</p><a class="btn ghost block mt" href="#/home">홈으로</a></section>`;
+    return;
+  }
+  if (!alive()) return;
+  const u = data.user;
+  const s = u.stats ?? { kept: 0, minutes: 0, mates: 0 };
+  const style = u.studyStyle && OPTIONS.styles?.[u.studyStyle] ? OPTIONS.styles[u.studyStyle] : null;
+
+  view.innerHTML = `
+    <section class="card">
+      <div class="profile">
+        ${avatarHTML(u, 'lg')}
+        <div>
+          <div class="name">${esc(u.name)}${botBadge(u)}</div>
+          ${u.age ? `<div class="small muted">${u.age}세</div>` : ''}
+          ${style ? `<div class="small mt">선호 <b>${esc(style.label)}</b> · ${esc(style.desc)}</div>` : ''}
+          ${u.bio ? `<div class="small mt">${esc(u.bio)}</div>` : ''}
+          ${tagsHTML(u.tags)}
+        </div>
+      </div>
+      ${u.isBot ? '<div class="notice">체험용 <b>가상 메이트</b>예요. 실제로 약속 장소에 나오지 않아요.</div>' : ''}
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">공부 기록</h2>
+      <div class="record-grid">
+        <div class="record"><b>${s.kept}</b><span>지킨 약속</span></div>
+        <div class="record"><b>${fmtMinutes(s.minutes)}</b><span>함께 공부</span></div>
+        <div class="record"><b>${s.mates}</b><span>함께한 메이트</span></div>
+      </div>
+      <p class="tiny muted mt">약속을 지키고 함께 공부한 긍정 기록만 보여줘요.</p>
+    </section>`;
 }

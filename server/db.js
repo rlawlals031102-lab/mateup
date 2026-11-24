@@ -17,6 +17,8 @@ const ADDED_COLUMNS = [
   ['users', 'personal', 'TEXT'], // 내 개인 일정 [{ cell, title }]
   ['users', 'department', 'TEXT'], // 학과 (가입 때 수집, 본인·운영자만 봄)
   ['users', 'phone', 'TEXT'], // 전화번호 (가입 때 수집·연락처용, 본인·운영자만 봄)
+  ['users', 'real_name', 'TEXT'], // 실명 (선택·비공개, 본인·운영자만 봄 — 메이트에게는 닉네임만)
+  ['users', 'study_style', 'TEXT'], // 선호 교류 스타일 (체크형·대화형·사교형, 프로필 공개·선택)
   ['users', 'suspended_until', 'TEXT'], // 매칭 정지가 끝나는 시각 (약속 지키기 규칙)
   ['users', 'strikes_since', 'TEXT'], // 이 시각 뒤의 그만두기·미참석만 센다 (정지가 끝나면 0번부터)
   ['users', 'agreed_at', 'TEXT'], // 개인정보 처리방침 동의 시각

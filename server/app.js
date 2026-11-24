@@ -262,6 +262,12 @@ export function createApp({
     record: await S.studyRecord(db, req.user.id), // 내 공부 기록 (누적·스트릭)
   }));
 
+  // 공개 프로필 보기 (로그인 사용자) — 아무 사용자의 공개 프로필 + 긍정 지표.
+  // 실명·학과·전화·이메일은 빠진다 (server/service.js publicProfile)
+  api.get('/users/:id', member, async (req, res) => res.json({
+    user: await S.publicProfile(db, Number(req.params.id)),
+  }));
+
   // 매칭 신청
   api.post('/requests', member, async (req, res) => {
     await limit(db, `request:user:${req.user.id}`, LIMITS.request);
