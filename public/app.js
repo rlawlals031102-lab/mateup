@@ -123,6 +123,7 @@ async function api(path, { method = 'GET', body } = {}) {
     headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
+    cache: 'no-store', // API 응답은 캐시하지 않는다 (알림·소셜 등 최신 데이터 보장)
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -257,6 +258,7 @@ function styleLabels(keys) {
 const routes = {
   login: renderLogin,
   signup: renderSignup,
+  'login-email': renderLoginEmail,
   reset: renderReset,
   home: renderHome,
   apply: renderApply,
@@ -264,6 +266,7 @@ const routes = {
   chat: renderChat,
   me: renderMe,
   'me/edit': renderEditProfile,
+  friends: renderFriends,
   admin: renderAdmin,
 };
 
@@ -275,10 +278,12 @@ async function router() {
   const name = location.hash.replace(/^#\/?/, '') || 'home';
   scroller().scrollTo(0, 0);
   const pastId = name.match(/^history\/(\d+)$/)?.[1];
+  const profileId = name.match(/^u\/(\d+)$/)?.[1];
   const [, sub, subId] = name.match(/^(match|chat)\/(\d+)$/) ?? [];
   const [, adminMatchId, adminSide] = name.match(/^admin\/match\/(\d+)(?:\/(a|b))?$/) ?? [];
   const render = adminMatchId ? (alive) => renderAdminMatch(alive, Number(adminMatchId), adminSide ?? 'a')
     : pastId ? (alive) => renderPast(alive, Number(pastId))
+    : profileId ? (alive) => renderUserProfile(alive, Number(profileId))
     : sub === 'match' ? (alive) => renderMatch(alive, Number(subId))
       : sub === 'chat' ? (alive) => renderChat(alive, Number(subId))
         : routes[name] ?? renderHome;
@@ -286,6 +291,7 @@ async function router() {
     if (!OPTIONS) OPTIONS = await api('/options');
     await render(() => token === routeToken);
     refreshUnread();
+    refreshSocial();
   } catch (err) {
     if (err.status === 401 && !['login', 'signup', 'reset'].includes(name)) {
       location.hash = '#/login';
@@ -323,7 +329,27 @@ async function refreshUnread() {
   tab.setAttribute('aria-label', `채팅, 안 읽은 메시지 ${unread.total}개`);
 }
 setInterval(refreshUnread, 15000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshUnread(); });
+
+// 메이트 탭에 소셜 배지 (읽지 않은 알림 = 받은 친구요청·수락 등). 친구 허브를 열면 읽음 처리되어 사라진다.
+async function refreshSocial() {
+  if (tabbar.hidden || document.hidden) return;
+  let unreadN = 0;
+  try { unreadN = (await api('/notifications')).unread ?? 0; } catch { return; }
+  const tab = $('a[data-tab="match"]', tabbar);
+  if (!tab) return;
+  let badge = $('.badge', tab);
+  if (!unreadN) { badge?.remove(); tab.removeAttribute('aria-label'); return; }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.setAttribute('aria-hidden', 'true');
+    $('.ti', tab).append(badge);
+  }
+  badge.textContent = unreadN > 99 ? '99+' : String(unreadN);
+  tab.setAttribute('aria-label', `메이트, 새 알림 ${unreadN}개`);
+}
+setInterval(refreshSocial, 20000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { refreshUnread(); refreshSocial(); } });
 
 window.addEventListener('hashchange', router);
 router();
@@ -446,7 +472,84 @@ function bindSendCode(form, purpose) {
   });
 }
 
+// 로그인/가입 화면은 가입 방식(OPTIONS.authMode)에 따라 전화번호 화면 또는 기존 이메일 화면을 보여 준다.
+// 기본은 전화번호(무인증·4자리 PIN). 기존 국민대 메일 가입자는 '#/login-email' 로 메일 로그인.
 async function renderLogin() {
+  return OPTIONS.authMode === 'phone' ? renderLoginPhone() : renderLoginEmail();
+}
+async function renderSignup() {
+  return OPTIONS.authMode === 'phone' ? renderSignupPhone() : renderSignupEmail();
+}
+
+const consentSummaryPhone = () => `
+      <dl class="consent-sum">
+        <dt>받는 정보</dt><dd>닉네임, 전화번호, 비밀번호(암호화해서 저장)</dd>
+        <dt>쓰는 곳</dt><dd>매칭·출석 관리, 운영 연락(보증금·안내). 메이트에게는 닉네임·소개만 보여요</dd>
+        <dt>보관</dt><dd>탈퇴하면 바로 지워요 (자세한 기간은 처리방침)</dd>
+      </dl>`;
+
+// 전화번호 로그인: 전화번호 + 4자리 PIN (인증 없음)
+async function renderLoginPhone() {
+  authShell(`
+    <h2>같은 시간에 만나<br>함께 공부해요</h2>
+    <p class="lead">전화번호와 4자리 비밀번호로 바로 시작해요.</p>
+    <form id="f" class="card">
+      <label class="field"><span>전화번호</span><input class="input" name="phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="010-1234-5678" required></label>
+      <label class="field"><span>비밀번호 (숫자 4자리)</span><input class="input" name="pin" type="password" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="current-password" placeholder="••••" required></label>
+      <button class="btn primary block mt-lg">로그인</button>
+    </form>
+    <p class="switch-link">처음이신가요? <a href="#/signup">회원가입</a></p>
+    <p class="switch-link tiny muted">국민대 메일로 가입한 기존 회원은 <a href="#/login-email">메일로 로그인</a></p>
+    <p class="legal-link"><a href="privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a></p>
+    ${OPTIONS.demoLogin ? `
+      <div class="demo-login">
+        <button type="button" class="btn block" id="demo-login">데모 계정으로 로그인</button>
+        <p class="tiny muted center">가입 없이 둘러볼 수 있는 체험용 계정이에요.</p>
+      </div>` : ''}`);
+  showIntro();
+  $('#demo-login')?.addEventListener('click', async () => {
+    try { await api('/auth/demo', { method: 'POST' }); location.hash = '#/home'; } catch (err) { toast(err.message, true); }
+  });
+  $('#f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    try {
+      await api('/auth/phone/login', { method: 'POST', body: fd });
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+// 전화번호 가입: 닉네임 + 전화번호 + 4자리 PIN (인증 없음)
+async function renderSignupPhone() {
+  authShell(`
+    <h2>회원가입</h2>
+    <p class="lead">닉네임, 전화번호, 4자리 비밀번호만 있으면 돼요.</p>
+    <form id="f" class="card">
+      <label class="field"><span>닉네임</span><input class="input" name="name" maxlength="20" autocomplete="nickname" required></label>
+      <label class="field"><span>전화번호</span><input class="input" name="phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="010-1234-5678" required></label>
+      <p class="tiny muted">전화번호는 운영진 연락(보증금·안내)용으로만 쓰고, 메이트에게는 보이지 않아요.</p>
+      <label class="field"><span>비밀번호 (숫자 4자리)</span><input class="input" name="pin" type="password" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="new-password" placeholder="••••" required></label>
+      ${consentSummaryPhone()}
+      <label class="agree"><input type="checkbox" name="agree" required>
+        <span><b>[필수]</b> 개인정보 수집·이용에 동의해요 · <a class="link" href="privacy.html" target="_blank" rel="noopener">처리방침 보기</a></span></label>
+      <button class="btn primary block mt">가입하고 시작하기</button>
+    </form>
+    <p class="switch-link">이미 계정이 있나요? <a href="#/login">로그인</a></p>`);
+  const form = $('#f');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(form));
+    fd.agree = fd.agree === 'on';
+    try {
+      await withLoading('', '가입하는 중이에요', () => api('/auth/phone/signup', { method: 'POST', body: fd }));
+      toast('가입을 마쳤어요.');
+      location.hash = '#/home';
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+async function renderLoginEmail() {
   authShell(`
     <h2>같은 시간에 만나<br>함께 공부해요</h2>
     <p class="lead">매주 새로운 ${OPTIONS.emailDomain ? '국민대 ' : ''}메이트와 약속을 잡고, 함께 공부하며 더 넓은 캠퍼스를 만나요.</p>
@@ -480,7 +583,7 @@ async function renderLogin() {
   });
 }
 
-async function renderSignup() {
+async function renderSignupEmail() {
   authShell(`
     <h2>회원가입</h2>
     <p class="lead">${OPTIONS.emailDomain ? '국민대학교 메일로 가입할 수 있어요.' : ''}</p>
@@ -1221,6 +1324,40 @@ const mateTabsHTML = (matches, current, base) => (matches.length < 2 ? '' : `
     <a href="#/${base}/${m.id}" class="${m.id === current ? 'on' : ''}">${esc(m.mate.name)}${base === 'chat' && m.id !== current && unread.byMatch[m.id] ? `<span class="badge inline">${unread.byMatch[m.id]}</span>` : ''}<small>${esc(scheduleText(m.schedule))}</small></a>`).join('')}
   </div>`);
 
+// 보증금(계좌이체) 안내 카드. 결제 대상자(매칭된 실제 사용자)에게만 /me/deposit 로 받아 매칭 화면 맨 위에 넣는다.
+function depositCardHTML(d) {
+  const won = d.amount.toLocaleString();
+  const status = d.status === 'paid'
+    ? `<p class="dc-status paid">입금 확인됨 — 약속을 지키면 끝난 뒤 ${d.refundMinutes}분 안에 환불해 드려요.</p>`
+    : d.status === 'refunded' ? '<p class="dc-status">환불 완료</p>'
+      : d.status === 'forfeited' ? '<p class="dc-status">보증금이 몰수되었어요.</p>'
+        : `<p class="dc-note">입금 확인은 운영진이 직접 해요. <b>${won}원</b>을 ${d.refundMinutes}분 안에 입금해 주세요.</p>`;
+  return `<div class="deposit-card card">
+    <div class="dc-head">보증금 ${won}원 · 계좌이체</div>
+    <p class="dc-sub">약속을 지키면 환불받고, 안 나오면 돌려받지 못해요.</p>
+    <div class="dc-acct">
+      <div class="dc-no">${esc(d.bank)} ${esc(d.account)}</div>
+      <div class="dc-holder">예금주 ${esc(d.holder)}</div>
+    </div>
+    <button type="button" class="btn dc-copy" data-acct="${esc(d.account)}">계좌번호 복사</button>
+    ${status}
+  </div>`;
+}
+async function insertDepositCard(alive, matchId) {
+  let info;
+  try { info = await api('/me/deposit'); } catch { return; }
+  if (!alive() || !info?.required || !info.account || info.matchId !== matchId) return;
+  const host = document.createElement('div');
+  host.innerHTML = depositCardHTML(info);
+  const card = host.firstElementChild;
+  if (!card) return;
+  view.insertAdjacentElement('afterbegin', card);
+  card.querySelector('.dc-copy')?.addEventListener('click', () => {
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(info.account).then(() => toast('계좌번호를 복사했어요')).catch(() => toast(info.account));
+    else toast(info.account);
+  });
+}
+
 async function renderMatch(alive, id) {
   // 매칭 화면은 위쪽 띠 없이 바로 출석 카드부터 (빈 여백도 없앤다)
   setTop({});
@@ -1241,11 +1378,13 @@ async function renderMatch(alive, id) {
         <h3>이번 주 메이트가 아직 없어요</h3>
         <p>매칭을 신청하면 1주일 동안 함께할 메이트를 찾아드려요.</p>
         <a class="btn primary mt-lg" href="#/home">홈으로</a>
+        <a class="btn ghost mt" href="#/friends">친구 · 지난 메이트</a>
       </div>`;
     return;
   }
   if (match.status === 'reported') return renderReport(match, alive);
   drawMatch(match, alive);
+  insertDepositCard(alive, match.id); // 보증금 안내(결제 대상자에게만) — 화면을 늦추지 않게 뒤에서 채운다
   // 메이트가 여러 명이면: 화면을 왼쪽으로 밀면 다음 메이트, 오른쪽으로 밀면 이전 메이트 (출석·프로필·약속이 한 번에 바뀜)
   const order = matches.map((m) => m.id);
   const at = order.indexOf(match.id);
@@ -1355,9 +1494,10 @@ function drawMatch(m, alive, { admin = false } = {}) {
   }
 
   view.innerHTML = `${tabs}
+    <a class="card" href="#/friends" style="display:flex;align-items:center;justify-content:space-between;margin:0 0 10px;text-decoration:none;color:inherit"><b>친구 · 지난 메이트</b><span class="chev">${icon('caret-right')}</span></a>
     ${checkinCard}
     <section class="card">
-      <div class="card-head"><h2>메이트 프로필</h2><span class="hint">${m.round}주차</span></div>
+      <div class="card-head"><h2>메이트 프로필</h2><span class="row" style="gap:10px"><a class="link" href="#/u/${m.mate.id}">프로필 ›</a><span class="hint">${m.round}주차</span></span></div>
       <div class="profile">
         ${avatarHTML(m.mate, 'lg')}
         <div>
@@ -1778,7 +1918,7 @@ async function renderChat(alive, id) {
   setTop({ title: '채팅' });
   setTabs('chat');
   loading();
-  const [{ matches }, { user }, u] = await Promise.all([api('/matches/active'), api('/me'), api('/chat/unread').catch(() => null)]);
+  const [{ matches }, { user }, u] = await Promise.all([api('/chat/threads'), api('/me'), api('/chat/unread').catch(() => null)]);
   if (!alive()) return;
   if (u) unread = u;
   const match = matches.find((m) => m.id === id) ?? matches[0];
@@ -1928,6 +2068,9 @@ async function renderMe(alive) {
   const [{ user, strikes }, { matches, record }] = await Promise.all([api('/me'), api('/me/history')]);
   if (!alive()) return;
   const st = strikes ?? { count: 0, limit: rule().strikeLimit };
+  // 전화번호 가입자는 합성 이메일(p_...@phone.studybuddy)을 가진다 — 화면엔 안 보인다
+  const realEmail = user.email && !user.email.endsWith('@phone.studybuddy') ? user.email : null;
+  const myStyle = user.studyStyle && OPTIONS.styles[user.studyStyle] ? OPTIONS.styles[user.studyStyle].label : null;
 
   view.innerHTML = `
     <section class="card">
@@ -1936,13 +2079,18 @@ async function renderMe(alive) {
         ${avatarHTML(user, 'lg')}
         <div>
           <div class="name">${esc(user.name)}</div>
-          <div class="small muted">${esc(user.email)}</div>
+          ${realEmail ? `<div class="small muted">${esc(realEmail)}</div>` : ''}
           ${user.department || user.phone ? `<div class="small muted">${esc([user.department, user.phone].filter(Boolean).join(' · '))}</div>` : ''}
+          ${user.realName ? `<div class="tiny muted">실명 ${esc(user.realName)} · 나만 보여요</div>` : ''}
+          ${myStyle ? `<div class="small mt">선호 <b>${esc(myStyle)}</b></div>` : ''}
           ${user.bio ? `<div class="small mt">${esc(user.bio)}</div>` : ''}
           ${tagsHTML(user.tags)}
         </div>
       </div>
+      <a class="link small" href="#/u/${user.id}" style="display:block;margin-top:10px">메이트에게 보이는 내 프로필 ›</a>
     </section>
+
+    <a class="card" href="#/friends" style="display:flex;align-items:center;justify-content:space-between;text-decoration:none;color:inherit"><b>친구 · 지난 메이트</b><span class="chev">${icon('caret-right')}</span></a>
 
     ${record && record.weeks ? `
     <section class="section">
@@ -1978,13 +2126,14 @@ async function renderMe(alive) {
         </a>`).join('') : '<p class="small muted">첫 주를 마치면 여기에 기록이 쌓여요.</p>'}
     </section>
 
+    ${realEmail ? `
     <section class="section">
       <h2 class="section-title">알림</h2>
       <button type="button" class="list-item" id="notify-toggle" aria-pressed="${!user.notifyOptOut}" style="width:100%;background:none;border:0;border-bottom:1px solid var(--soft);cursor:pointer">
         <span class="small">매칭·약속 이메일 알림</span><span class="switch"></span>
       </button>
-      <p class="tiny muted mt">매칭이 되거나 약속·리포트가 생기면 ${esc(user.email)}로 알려 드려요.</p>
-    </section>
+      <p class="tiny muted mt">매칭이 되거나 약속·리포트가 생기면 ${esc(realEmail)}로 알려 드려요.</p>
+    </section>` : ''}
 
     ${user.isAdmin ? '<a class="btn block mt-lg" href="#/admin">관리자 화면</a>' : ''}
     <nav class="me-links" aria-label="계정">
@@ -2008,7 +2157,7 @@ async function renderMe(alive) {
   });
   $('#delete-account').addEventListener('click', openDeleteAccount);
   $('#export-data').addEventListener('click', downloadMyData);
-  $('#notify-toggle').addEventListener('click', async (e) => {
+  $('#notify-toggle')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     const on = btn.getAttribute('aria-pressed') === 'true'; // 지금 켜져 있나
     btn.setAttribute('aria-pressed', String(!on));
@@ -2283,6 +2432,10 @@ async function renderEditProfile(alive) {
   loading();
   const { user } = await api('/me');
   if (!alive()) return;
+  const styleOptions = ['<option value="">선택 안 함</option>']
+    .concat(Object.entries(OPTIONS.styles ?? {}).map(([k, v]) =>
+      `<option value="${k}"${user.studyStyle === k ? ' selected' : ''}>${esc(v.label)} · ${esc(v.desc)}</option>`))
+    .join('');
 
   view.innerHTML = `
     <form id="f" class="card">
@@ -2291,8 +2444,10 @@ async function renderEditProfile(alive) {
         <p class="tiny muted">프로필 동그라미에는 이름 글자가 보여요.</p>
       </div>
       <label class="field"><span>이름 (닉네임)</span><input class="input" name="name" maxlength="20" value="${esc(user.name)}" required></label>
-      <label class="field"><span>학과</span><input class="input" name="department" maxlength="30" value="${esc(user.department ?? '')}" placeholder="예: 경영정보학부" required></label>
-      <label class="field"><span>전화번호 (메이트에게는 보이지 않아요)</span><input class="input" name="phone" type="tel" inputmode="numeric" value="${esc(user.phone ?? '')}" placeholder="010-1234-5678" required></label>
+      <label class="field"><span>실명 (선택 · 메이트에게는 보이지 않아요)</span><input class="input" name="realName" maxlength="20" value="${esc(user.realName ?? '')}" placeholder="예: 홍길동"></label>
+      <label class="field"><span>학과 (선택)</span><input class="input" name="department" maxlength="30" value="${esc(user.department ?? '')}" placeholder="예: 경영정보학부"></label>
+      <label class="field"><span>전화번호 (선택 · 메이트에게는 보이지 않아요)</span><input class="input" name="phone" type="tel" inputmode="numeric" value="${esc(user.phone ?? '')}" placeholder="010-1234-5678"></label>
+      <label class="field"><span>선호 교류 스타일 (선택 · 프로필에 표시)</span><select class="input" name="studyStyle">${styleOptions}</select></label>
       <label class="field"><span>태그 (쉼표로 구분, 최대 5개)</span><input class="input" name="tags" value="${esc(user.tags.join(', '))}" placeholder="#카페공부, #자격증준비, #ENFJ"></label>
       <label class="field"><span>한 줄 소개</span><textarea class="input" name="bio" maxlength="200" placeholder="메이트에게 나를 소개해 주세요">${esc(user.bio)}</textarea></label>
       <button class="btn primary block mt-lg">저장하기</button>
@@ -2310,4 +2465,157 @@ async function renderEditProfile(alive) {
       history.back();
     } catch (err) { toast(err.message, true); }
   });
+}
+
+// 공개 프로필 보기 (#/u/:id) — 다른 사람(또는 내) 공개 프로필. 긍정 지표만 보인다.
+async function renderUserProfile(alive, id) {
+  setTop({ title: '프로필', back: '#' });
+  setTabs(null);
+  $('.icon-btn', topbar)?.addEventListener('click', (e) => { e.preventDefault(); history.back(); });
+  loading();
+  let data;
+  try {
+    data = await api(`/users/${id}`);
+  } catch (err) {
+    if (!alive()) return;
+    view.innerHTML = `<section class="card"><p class="small muted">${esc(err.message || '프로필을 찾을 수 없어요.')}</p><a class="btn ghost block mt" href="#/home">홈으로</a></section>`;
+    return;
+  }
+  if (!alive()) return;
+  const u = data.user;
+  const s = u.stats ?? { kept: 0, minutes: 0, mates: 0 };
+  const style = u.studyStyle && OPTIONS.styles?.[u.studyStyle] ? OPTIONS.styles[u.studyStyle] : null;
+
+  view.innerHTML = `
+    <section class="card">
+      <div class="profile">
+        ${avatarHTML(u, 'lg')}
+        <div>
+          <div class="name">${esc(u.name)}${botBadge(u)}</div>
+          ${u.age ? `<div class="small muted">${u.age}세</div>` : ''}
+          ${style ? `<div class="small mt">선호 <b>${esc(style.label)}</b> · ${esc(style.desc)}</div>` : ''}
+          ${u.bio ? `<div class="small mt">${esc(u.bio)}</div>` : ''}
+          ${tagsHTML(u.tags)}
+        </div>
+      </div>
+      ${u.isBot ? '<div class="notice">체험용 <b>가상 메이트</b>예요. 실제로 약속 장소에 나오지 않아요.</div>' : ''}
+      ${profileActions(u)}
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">공부 기록</h2>
+      <div class="record-grid">
+        <div class="record"><b>${s.kept}</b><span>지킨 약속</span></div>
+        <div class="record"><b>${fmtMinutes(s.minutes)}</b><span>함께 공부</span></div>
+        <div class="record"><b>${s.mates}</b><span>함께한 메이트</span></div>
+      </div>
+      <p class="tiny muted mt">약속을 지키고 함께 공부한 긍정 기록만 보여줘요.</p>
+    </section>`;
+
+  bindSocialButtons(view, () => renderUserProfile(alive, id));
+}
+
+// 프로필 관계 버튼 (u.rel: self|friends|sent|received|none|blocked, u.canRequest)
+function profileActions(u) {
+  if (u.rel === 'self' || u.isBot) return '';
+  const wrap = (inner) => `<div class="row" style="gap:8px;margin-top:14px;flex-wrap:wrap">${inner}</div>`;
+  if (u.rel === 'blocked') return wrap(`<button class="btn ghost block" data-social="unblock" data-id="${u.id}">차단 해제</button>`);
+  const parts = [];
+  if (u.rel === 'friends') {
+    parts.push(`<button class="btn primary" data-social="poke" data-id="${u.id}">콕 찌르기</button>`);
+    if (u.chatMatchId) parts.push(`<a class="btn ghost" href="#/chat/${u.chatMatchId}">채팅</a>`);
+    parts.push(`<button class="btn ghost" data-social="remove" data-id="${u.id}" data-confirm="${esc(u.name)}님과 친구를 끊을까요?">친구 끊기</button>`);
+  } else if (u.rel === 'sent') parts.push(`<button class="btn ghost" data-social="remove" data-id="${u.id}">친구 요청 취소</button>`);
+  else if (u.rel === 'received') parts.push(`<button class="btn primary" data-social="accept" data-id="${u.id}">친구 수락</button>`, `<button class="btn ghost" data-social="decline" data-id="${u.id}">거절</button>`);
+  else if (u.canRequest) parts.push(`<button class="btn primary" data-social="add" data-id="${u.id}">친구 추가</button>`);
+  // 저장 토글 (함께 공부한 메이트)
+  if (u.canSave) parts.push(u.saved
+    ? `<button class="btn ghost" data-social="unsave" data-id="${u.id}">저장됨 ✓</button>`
+    : `<button class="btn ghost" data-social="save" data-id="${u.id}">저장</button>`);
+  if (!parts.length) parts.push('<p class="tiny muted" style="margin:0;align-self:center">함께 공부한 뒤에 친구·저장을 할 수 있어요.</p>');
+  parts.push(`<button class="btn ghost" style="color:var(--red);margin-left:auto" data-social="block" data-id="${u.id}" data-confirm="${esc(u.name)}님을 차단할까요? 친구·요청이 해제돼요.">차단</button>`);
+  return wrap(parts.join(''));
+}
+
+// 소셜 버튼 공통 처리: data-social(add|remove|accept|decline|block|unblock) + data-id, 끝나면 refresh()
+function bindSocialButtons(root, refresh) {
+  root.querySelectorAll('[data-social]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const id = Number(btn.dataset.id);
+      const act = btn.dataset.social;
+      if (btn.dataset.confirm && !confirm(btn.dataset.confirm)) return;
+      const call = {
+        add: () => api(`/friends/${id}/request`, { method: 'POST' }),
+        remove: () => api(`/friends/${id}/remove`, { method: 'POST' }),
+        accept: () => api(`/friends/${id}/respond`, { method: 'POST', body: { accept: true } }),
+        decline: () => api(`/friends/${id}/respond`, { method: 'POST', body: { accept: false } }),
+        block: () => api(`/users/${id}/block`, { method: 'POST' }),
+        unblock: () => api(`/users/${id}/unblock`, { method: 'POST' }),
+        poke: () => api(`/friends/${id}/poke`, { method: 'POST' }),
+        save: () => api(`/users/${id}/save`, { method: 'POST' }),
+        unsave: () => api(`/users/${id}/unsave`, { method: 'POST' }),
+      }[act];
+      if (!call) return;
+      btn.disabled = true;
+      try {
+        const r = await call();
+        if (act === 'poke') { toast('콕 찔렀어요!'); btn.textContent = '콕 완료'; return; } // 성공 시 버튼은 잠근 채로 둔다
+        const byAct = { save: '저장했어요.', unsave: '저장을 해제했어요.' };
+        toast(byAct[act] ?? { friends: '친구가 됐어요!', sent: '친구 요청을 보냈어요.', none: '처리했어요.', blocked: '차단했어요.' }[r?.state] ?? '처리했어요.');
+        await refresh();
+      } catch (err) { btn.disabled = false; toast(err.message, true); }
+    });
+  });
+}
+
+// 친구 허브 (#/friends) — 메이트 탭 안. 받은 요청·내 친구·지난 메이트(후보)·차단 + 알림.
+async function renderFriends(alive) {
+  setTop({ title: '친구', back: '#' });
+  setTabs('match'); // 메이트 탭 유지
+  $('.icon-btn', topbar)?.addEventListener('click', (e) => { e.preventDefault(); history.back(); });
+  loading();
+  let d; let notis = { items: [], unread: 0 };
+  try {
+    [d, notis] = await Promise.all([api('/social'), api('/notifications').catch(() => ({ items: [], unread: 0 }))]);
+  } catch (err) {
+    if (!alive()) return;
+    view.innerHTML = `<section class="card"><p class="small muted">${esc(err.message)}</p></section>`;
+    return;
+  }
+  if (!alive()) return;
+  api('/notifications/read', { method: 'POST' }).then(() => refreshSocial()).catch(() => {}); // 열면 읽음 → 배지 갱신
+
+  const styleTag = (u) => (u.studyStyle && OPTIONS.styles?.[u.studyStyle] ? `<span class="tiny muted"> · ${esc(OPTIONS.styles[u.studyStyle].label)}</span>` : '');
+  const nameRow = (u, actions) => `<div class="list-item"><a class="row" href="#/u/${u.id}" style="gap:10px;flex:1;min-width:0;text-decoration:none;color:inherit">${avatarHTML(u, 'sm')}<span style="min-width:0"><b>${esc(u.name)}</b>${styleTag(u)}</span></a><span class="row" style="gap:6px;flex-shrink:0">${actions}</span></div>`;
+  const section = (title, body, hint) => (body ? `<section class="section"><div class="section-head"><h2 class="section-title">${title}</h2>${hint ?? ''}</div>${body}</section>` : '');
+
+  const incoming = d.incoming.map((u) => nameRow(u, `<button class="btn sm primary" data-social="accept" data-id="${u.id}">수락</button><button class="btn sm ghost" data-social="decline" data-id="${u.id}">거절</button>`)).join('');
+  const friends = d.friends.map((u) => nameRow(u, `<button class="btn sm primary" data-social="poke" data-id="${u.id}">콕</button>`)).join('');
+  const saved = (d.saved ?? []).map((u) => nameRow(u, `<button class="btn sm ghost" data-social="unsave" data-id="${u.id}">저장 해제</button>`)).join('');
+  const mates = d.pastMates.map((u) => nameRow(u,
+    u.rel === 'sent' ? `<button class="btn sm ghost" data-social="remove" data-id="${u.id}">요청 취소</button>`
+      : u.rel === 'received' ? `<button class="btn sm primary" data-social="accept" data-id="${u.id}">수락</button>`
+        : `<button class="btn sm primary" data-social="add" data-id="${u.id}">친구 추가</button>`)).join('');
+  const blocked = d.blocked.map((u) => nameRow(u, `<button class="btn sm ghost" data-social="unblock" data-id="${u.id}">차단 해제</button>`)).join('');
+
+  const notiText = (n) => (n.type === 'friend_request' ? `${esc(n.actor?.name ?? '누군가')}님이 친구 요청을 보냈어요`
+    : n.type === 'friend_accepted' ? `${esc(n.actor?.name ?? '누군가')}님이 친구 요청을 수락했어요`
+      : n.type === 'poke' ? `${esc(n.actor?.name ?? '누군가')}님이 콕 찔렀어요` : '새 알림');
+  const notiAction = (n) => (n.type === 'poke' && n.actor ? `<button class="btn sm ghost" data-social="poke" data-id="${n.actor.id}">되찌르기</button>` : `<span class="tiny muted">${fmtAt(n.at)}</span>`);
+  const alerts = notis.items.length
+    ? `<section class="section"><h2 class="section-title">알림</h2>${notis.items.slice(0, 8).map((n) => `<div class="list-item"><span class="small">${notiText(n)}</span>${notiAction(n)}</div>`).join('')}</section>`
+    : '';
+
+  const empty = !incoming && !friends && !saved && !mates && !blocked && !alerts;
+  view.innerHTML = `
+    ${alerts}
+    ${section(`받은 요청 ${d.incoming.length ? `<span class="badge inline">${d.incoming.length}</span>` : ''}`, incoming)}
+    ${section('내 친구', friends)}
+    ${section('저장한 메이트', saved)}
+    ${section('지난 메이트', mates, '<span class="hint">함께 공부했던 사람</span>')}
+    ${section('차단', blocked)}
+    ${empty ? '<div class="empty"><h3>아직 친구가 없어요</h3><p>함께 공부한 메이트의 프로필에서 \'친구 추가\'를 눌러 보세요. 지난 메이트가 여기에 모여요.</p><a class="btn primary mt-lg" href="#/match">메이트로</a></div>' : ''}`;
+
+  bindSocialButtons(view, () => renderFriends(alive));
 }

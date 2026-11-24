@@ -96,6 +96,18 @@ a { color: inherit; }
 .card.hero .muted { color: rgba(255, 255, 255, .78); }
 .card.lime { background: var(--lime); border-color: var(--lime-line); }
 
+/* 보증금(계좌이체) 안내 카드 — 매칭 화면 맨 위 */
+.deposit-card { border-color: var(--green); }
+.deposit-card .dc-head { font-size: 16px; font-weight: 800; color: var(--green); letter-spacing: -.02em; }
+.deposit-card .dc-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.deposit-card .dc-acct { margin-top: 12px; background: rgba(69, 110, 42, .06); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 12px 14px; }
+.deposit-card .dc-no { font-size: 18px; font-weight: 800; color: var(--ink); -webkit-user-select: all; user-select: all; }
+.deposit-card .dc-holder { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.deposit-card .dc-copy { height: 42px; margin-top: 10px; width: 100%; }
+.deposit-card .dc-note { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+.deposit-card .dc-status { font-size: 13px; font-weight: 700; margin-top: 10px; }
+.deposit-card .dc-status.paid { color: var(--green); }
+
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .tiny { font-size: 12px; }

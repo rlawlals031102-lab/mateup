@@ -5,6 +5,7 @@ import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
   EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS, PROMISE_RULE,
   PRIVACY_POLICY, PRIOR_TEAMS, roomLocation, NO_ROOM_DATES, isRoomLocation,
+  DEPOSIT, depositConfigured,
 } from './options.js';
 import { createSession, sessionUser, endSession, endAllSessions } from './sessions.js';
 // 전화번호는 운영 결정(2026-11-06)으로 암호화하지 않고 그대로 저장한다. 예전에 암호화된 값이 있으면 읽을 때만 풀어 준다.
@@ -107,11 +108,13 @@ export const publicUser = (u) => u && {
   tags: JSON.parse(u.tags),
   bio: u.bio,
   avatar: u.avatar,
+  studyStyle: u.study_style ?? null, // 선호 교류 스타일 (공개·선택): check | talk | social
   isBot: !!u.is_bot && !!u.bot_template, // 체험용 데모 메이트 (화면에 "가상 인물"로 표시)
 };
 
 export const privateUser = (u) => u && {
   ...publicUser(u), email: u.email, department: u.department ?? null, phone: decryptField(u.phone),
+  realName: u.real_name ?? null, // 실명 (선택·비공개, 본인만)
   isAdmin: ADMIN_EMAILS.includes(u.email), notifyOptOut: !!u.notify_opt_out,
 };
 
@@ -156,7 +159,7 @@ function normalizePhone(phone) {
   return d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
 }
 
-function validateProfile({ name, age, tags, bio, avatar, department, phone }, partial = false) {
+function validateProfile({ name, age, tags, bio, avatar, department, phone, realName, studyStyle }, partial = false) {
   const out = {};
   if (name !== undefined || !partial) {
     const n = String(name ?? '').trim();
@@ -166,10 +169,15 @@ function validateProfile({ name, age, tags, bio, avatar, department, phone }, pa
   // 학과·전화번호: 가입 때 꼭 받고, 본인과 운영자만 본다 (메이트에게는 보이지 않음)
   if (department !== undefined || !partial) {
     const d = String(department ?? '').trim();
-    if (d.length < 1 || d.length > 30) throw new AppError(400, '학과를 입력해 주세요.');
-    out.department = d;
+    if (!d && partial) out.department = null; // 프로필 수정에서 비우면 지움 (전화번호 가입자는 학과가 없다)
+    else if (d.length < 1 || d.length > 30) throw new AppError(400, '학과를 입력해 주세요.');
+    else out.department = d;
   }
-  if (phone !== undefined || !partial) out.phone = normalizePhone(phone);
+  if (phone !== undefined || !partial) {
+    const raw = String(phone ?? '').trim();
+    if (!raw && partial) out.phone = null; // 프로필 수정에서 비우면 지움
+    else out.phone = normalizePhone(phone); // 가입(필수)이거나 값이 있으면 형식 검사
+  }
   if (age !== undefined && age !== null && age !== '') {
     const a = Number(age);
     if (!Number.isInteger(a) || a < 14 || a > 100) throw new AppError(400, '나이를 올바르게 입력해 주세요.');
@@ -189,6 +197,18 @@ function validateProfile({ name, age, tags, bio, avatar, department, phone }, pa
     const a = String(avatar).trim();
     if (!a || [...a].length > 4) throw new AppError(400, '아바타를 다시 골라 주세요.');
     out.avatar = a;
+  }
+  // 실명: 선택 입력, 비공개(본인·운영자만). 비우면 지운다.
+  if (realName !== undefined) {
+    const r = String(realName ?? '').trim();
+    if (r.length > 20) throw new AppError(400, '실명은 20자 이내로 입력해 주세요.');
+    out.real_name = r || null;
+  }
+  // 선호 교류 스타일: 선택 입력, 공개. check | talk | social 중 하나거나 비움.
+  if (studyStyle !== undefined) {
+    const s = String(studyStyle ?? '').trim();
+    if (s && !STYLES[s]) throw new AppError(400, '선호 스타일을 다시 골라 주세요.');
+    out.study_style = s || null;
   }
   return out;
 }
@@ -322,6 +342,106 @@ export async function resetPassword(db, { email, code, password }, policy = NO_P
   });
 }
 
+// ─────────────────────── 전화번호 가입 (무인증 · 4자리 PIN) ───────────────────────
+// 새 가입은 닉네임 + 전화번호 + 4자리 비밀번호(PIN)만 받는다. 문자·메일 인증은 없다.
+// 전화번호는 인증용이 아니라 '연락처'로만 저장한다(운영진이 보증금·문자 연락에 쓴다).
+// users.email 에 합성 이메일(p_<숫자>@phone.studybuddy)을 넣어 기존 스키마(email NOT NULL UNIQUE)를 그대로 쓰고,
+// 이 합성 이메일이 전화번호 가입 계정의 식별자다. ADMIN_EMAILS 에 없으므로 전화번호만으로는 관리자 권한을 얻을 수 없다.
+// 기존 국민대 메일 가입자는 그대로 유지된다(이메일 로그인 계속 동작 — 이미 인증된 사람들).
+const phoneSyntheticEmail = (p) => `p_${String(p).replace(/\D/g, '')}@phone.studybuddy`;
+const checkPin = (pin) => {
+  if (!/^\d{4}$/.test(String(pin ?? ''))) throw new AppError(400, '비밀번호는 숫자 4자리로 입력해 주세요.');
+};
+
+// 전화번호 가입: 닉네임 + 전화번호 + 4자리 PIN. 인증 없음. (pin 또는 password 어느 키로 와도 받는다)
+export async function signupPhone(db, { phone, pin, password, name, department, age, agree }, policy = {}) {
+  const p = normalizePhone(phone);
+  const secret = pin ?? password;
+  checkPin(secret);
+  const n = String(name ?? '').trim();
+  if (n.length < 1 || n.length > 20) throw new AppError(400, '닉네임은 1~20자로 입력해 주세요.');
+  if (policy.consent && agree !== true) throw new AppError(400, '개인정보 수집·이용에 동의해 주세요.');
+
+  const email = phoneSyntheticEmail(p);
+  const dup = await db.get('SELECT id FROM users WHERE email = ? AND is_bot = 0', email);
+  if (dup) throw new AppError(409, '이미 가입된 전화번호입니다. 로그인해 주세요.');
+
+  const passwordHash = await hashPassword(String(secret));
+  const dept = String(department ?? '').trim();
+  const a = age !== undefined && age !== null && age !== '' ? Number(age) : null;
+  return db.tx(async (t) => {
+    const { rows } = await t.run(
+      `INSERT INTO users (email, password_hash, name, age, department, phone, created_at, agreed_at, privacy_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (email) DO NOTHING RETURNING id`,
+      email, passwordHash, n, Number.isInteger(a) ? a : null, dept, p, iso(),
+      agree === true ? iso() : null, agree === true ? PRIVACY_POLICY.version : null,
+    );
+    if (!rows.length) throw new AppError(409, '이미 가입된 전화번호입니다.');
+    return { user: privateUser(await getUser(t, rows[0].id)), token: await issueToken(t, rows[0].id) };
+  });
+}
+
+// 전화번호 로그인: 전화번호 + 4자리 PIN. (무차별 대입은 app.js 의 IP·실패 잠금으로 막는다)
+export async function loginPhone(db, { phone, pin, password }) {
+  const p = normalizePhone(phone);
+  const u = await db.get('SELECT * FROM users WHERE email = ? AND is_bot = 0', phoneSyntheticEmail(p));
+  const ok = await passwordMatches(String(pin ?? password ?? ''), u?.password_hash ?? DUMMY_HASH);
+  if (!u || !ok) throw new AppError(401, '전화번호 또는 비밀번호가 올바르지 않습니다.');
+  return { user: privateUser(u), token: await issueToken(db, u.id) };
+}
+
+// ───────────────────────── 보증금(계좌이체) ─────────────────────────
+// 앱은 돈을 움직이지 않는다. 결제 대상자(현재 확정 매칭이 있는 실제 사용자)에게만 계좌 정보를 보여 주고,
+// 실제 입금/환불 확인은 운영자가 문자로 수동으로 한 뒤 상태(setDepositStatus)를 바꾼다.
+// 데모 메이트(봇)와의 매칭·운영자 미설정(계좌 없음)에서는 보증금을 요구하지 않는다(required:false).
+const DEPOSIT_STATUS = ['pending', 'paid', 'refunded', 'forfeited', 'cancelled'];
+
+export async function depositInfo(db, userId) {
+  if (!depositConfigured()) return { required: false };
+  const m = await db.get(
+    "SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status IN ('active', 'reported') ORDER BY id DESC LIMIT 1",
+    userId, userId,
+  );
+  if (!m) return { required: false };
+  const mateId = m.user_a === userId ? m.user_b : m.user_a;
+  const mate = await db.get('SELECT is_bot FROM users WHERE id = ?', mateId);
+  if (mate?.is_bot) return { required: false }; // 데모 메이트와는 보증금 없음
+
+  let row = await db.get('SELECT * FROM deposits WHERE match_id = ? AND user_id = ?', m.id, userId);
+  if (!row) {
+    await db.run(
+      'INSERT INTO deposits (match_id, user_id, amount, status, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (match_id, user_id) DO NOTHING',
+      m.id, userId, DEPOSIT.amount, 'pending', iso(),
+    );
+    row = await db.get('SELECT * FROM deposits WHERE match_id = ? AND user_id = ?', m.id, userId);
+  }
+  return {
+    required: true, matchId: m.id, status: row.status, amount: DEPOSIT.amount, refundMinutes: DEPOSIT.refundMinutes,
+    bank: DEPOSIT.bank, account: DEPOSIT.account, holder: DEPOSIT.holder,
+  };
+}
+
+// 운영자가 입금/환불/몰수를 수동 확인하고 상태를 바꾼다. (중복 입금·중복 반환·중복 몰수는 상태 하나로 관리해 막는다)
+export async function setDepositStatus(db, matchId, userId, status) {
+  if (!DEPOSIT_STATUS.includes(status)) throw new AppError(400, '보증금 상태가 올바르지 않습니다.');
+  await db.run(
+    `INSERT INTO deposits (match_id, user_id, amount, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (match_id, user_id) DO UPDATE SET status = EXCLUDED.status, updated_at = EXCLUDED.updated_at`,
+    matchId, userId, DEPOSIT.amount, status, iso(), iso(),
+  );
+  return { ok: true, status };
+}
+
+// 운영자 화면용: 보증금 현황 (결제 대기·입금 확인 등)
+export async function depositOverview(db) {
+  return db.all(
+    `SELECT d.match_id AS "matchId", d.user_id AS "userId", d.amount, d.status, d.updated_at AS "updatedAt", u.name
+     FROM deposits d JOIN users u ON u.id = d.user_id ORDER BY d.id DESC LIMIT 200`,
+  );
+}
+
 // 데모 계정 로그인 (데모 모드 전용). 계정이 없으면 만든다.
 export const DEMO_ACCOUNT = { email: 'demo@studybuddy.local', name: '데모 사용자', department: '경영정보학부', phone: '010-0000-0000' };
 
@@ -426,6 +546,309 @@ export async function updateProfile(db, userId, input) {
   return privateUser(await getUser(db, userId));
 }
 
+// 공개 프로필: 로그인한 아무 사용자가 볼 수 있는 상대 프로필.
+// 닉네임·나이·태그·소개·아바타·선호 스타일 + 긍정 지표만. 실명·학과·전화·이메일은 넣지 않는다.
+export async function publicProfile(db, targetId, viewerId = null) {
+  const id = Number(targetId);
+  if (!Number.isInteger(id) || id < 1) throw new AppError(404, '프로필을 찾을 수 없어요.');
+  const u = await getUser(db, id);
+  if (!u || u.deleted_at) throw new AppError(404, '프로필을 찾을 수 없어요.');
+  const base = { ...publicUser(u), stats: await profileStats(db, id) };
+  if (viewerId && viewerId === id) { base.rel = 'self'; return base; }
+  if (viewerId) {
+    const rel = await relation(db, viewerId, id);
+    if (rel.blockedMe) throw new AppError(404, '프로필을 찾을 수 없어요.'); // 상대가 나를 차단함 → 숨김
+    base.rel = rel.iBlocked ? 'blocked' : rel.state; // self|friends|sent|received|none|blocked
+    const matched = !u.is_bot && await haveMatched(db, viewerId, id);
+    base.canRequest = rel.state === 'none' && !rel.iBlocked && matched;
+    base.canSave = !rel.iBlocked && matched; // 함께 공부한 메이트면 저장 가능
+    base.saved = base.canSave ? await isSaved(db, viewerId, id) : false;
+    if (base.rel === 'friends') base.chatMatchId = await sharedMatchId(db, viewerId, id); // 친구 채팅방
+  }
+  return base;
+}
+
+// 프로필에 보이는 긍정 지표만 (노쇼·이행률 같은 부정 지표는 넣지 않는다).
+export async function profileStats(db, userId) {
+  const a = await db.get(
+    'SELECT COUNT(*) AS kept, COALESCE(SUM(minutes), 0) AS minutes FROM attendance WHERE user_id = ?',
+    userId,
+  );
+  const m = await db.get(
+    'SELECT COUNT(DISTINCT CASE WHEN user_a = ? THEN user_b ELSE user_a END) AS mates FROM matches WHERE user_a = ? OR user_b = ?',
+    userId, userId, userId,
+  );
+  return {
+    kept: Number(a?.kept ?? 0), // 약속 지킨 횟수 (출석한 약속 수)
+    minutes: Number(a?.minutes ?? 0), // 누적 공부시간(분)
+    mates: Number(m?.mates ?? 0), // 함께한 메이트 수
+  };
+}
+
+// ───────────────────────── 소셜 (친구·차단·알림) ─────────────────────────
+// 친구는 "함께 매칭했던 메이트"끼리만. 한쪽이라도 차단하면 서로 안 보이고 요청 불가.
+
+const pair = (a, b) => (a < b ? [a, b] : [b, a]); // friendships 저장용 (user_low, user_high)
+
+// 두 사람이 함께 매칭된 적이 있는가 (친구가 될 수 있는 조건)
+export async function haveMatched(db, a, b) {
+  if (a === b) return false;
+  const r = await db.get(
+    'SELECT 1 AS x FROM matches WHERE (user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?) LIMIT 1',
+    a, b, b, a);
+  return !!r;
+}
+
+async function areFriends(db, a, b) {
+  const [lo, hi] = pair(a, b);
+  return !!(await db.get('SELECT 1 AS x FROM friendships WHERE user_low = ? AND user_high = ?', lo, hi));
+}
+
+// 한쪽이라도 상대를 차단했으면 차단한 사람 id, 없으면 null
+async function blockedBetween(db, a, b) {
+  const r = await db.get(
+    'SELECT blocker FROM user_blocks WHERE (blocker = ? AND blocked = ?) OR (blocker = ? AND blocked = ?)',
+    a, b, b, a);
+  return r ? r.blocker : null;
+}
+
+// me 가 본 other 와의 관계: self | friends | sent | received | none  (+ iBlocked/blockedMe)
+async function relation(db, me, other) {
+  if (me === other) return { state: 'self' };
+  const blocker = await blockedBetween(db, me, other);
+  if (blocker) return { state: 'none', iBlocked: blocker === me, blockedMe: blocker === other };
+  if (await areFriends(db, me, other)) return { state: 'friends' };
+  const req = await db.get(
+    "SELECT from_user FROM friend_requests WHERE status = 'pending' AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
+    me, other, other, me);
+  if (req) return { state: req.from_user === me ? 'sent' : 'received' };
+  return { state: 'none' };
+}
+
+async function addFriendship(db, a, b) {
+  const [lo, hi] = pair(a, b);
+  const exists = await db.get('SELECT 1 AS x FROM friendships WHERE user_low = ? AND user_high = ?', lo, hi);
+  if (!exists) await db.run('INSERT INTO friendships (user_low, user_high, created_at) VALUES (?, ?, ?)', lo, hi, iso());
+}
+
+async function notify(db, userId, type, actorId) {
+  if (userId === actorId) return;
+  await db.run('INSERT INTO notifications (user_id, type, actor_id, created_at) VALUES (?, ?, ?, ?)', userId, type, actorId, iso());
+}
+
+// 친구 요청 보내기 — 함께 매칭했던 사람에게만. 상대가 나에게 보낸 게 있으면 바로 친구가 된다.
+export async function sendFriendRequest(db, me, targetId) {
+  const target = Number(targetId);
+  if (!Number.isInteger(target) || target === me) throw new AppError(400, '잘못된 요청이에요.');
+  const u = await getUser(db, target);
+  if (!u || u.deleted_at) throw new AppError(404, '사용자를 찾을 수 없어요.');
+  if (u.is_bot) throw new AppError(400, '체험용 메이트에게는 보낼 수 없어요.');
+  const blocker = await blockedBetween(db, me, target);
+  if (blocker) throw new AppError(403, blocker === me ? '차단한 사용자예요. 차단을 풀고 다시 시도해 주세요.' : '요청을 보낼 수 없어요.');
+  if (await areFriends(db, me, target)) return { state: 'friends' };
+  if (!(await haveMatched(db, me, target))) throw new AppError(403, '함께 공부한 메이트에게만 친구 요청을 보낼 수 있어요.');
+
+  return db.tx(async (t) => {
+    const incoming = await t.get("SELECT id FROM friend_requests WHERE from_user = ? AND to_user = ? AND status = 'pending'", target, me);
+    if (incoming) { // 상대가 이미 나에게 보냈으면 바로 수락
+      await t.run("UPDATE friend_requests SET status = 'accepted', responded_at = ? WHERE id = ?", iso(), incoming.id);
+      await addFriendship(t, me, target);
+      await notify(t, target, 'friend_accepted', me);
+      return { state: 'friends' };
+    }
+    const mine = await t.get('SELECT id FROM friend_requests WHERE from_user = ? AND to_user = ?', me, target);
+    if (mine) await t.run("UPDATE friend_requests SET status = 'pending', created_at = ?, responded_at = NULL WHERE id = ?", iso(), mine.id);
+    else await t.run("INSERT INTO friend_requests (from_user, to_user, status, created_at) VALUES (?, ?, 'pending', ?)", me, target, iso());
+    await notify(t, target, 'friend_request', me);
+    return { state: 'sent' };
+  });
+}
+
+// 받은 친구 요청에 응답 (requesterId 가 나에게 보낸 것). accept=true 면 친구가 된다.
+export async function respondFriendRequest(db, me, requesterId, accept) {
+  const from = Number(requesterId);
+  return db.tx(async (t) => {
+    const req = await t.get("SELECT id FROM friend_requests WHERE from_user = ? AND to_user = ? AND status = 'pending'", from, me);
+    if (!req) throw new AppError(404, '받은 요청이 없어요.');
+    await t.run('UPDATE friend_requests SET status = ?, responded_at = ? WHERE id = ?', accept ? 'accepted' : 'declined', iso(), req.id);
+    if (accept) { await addFriendship(t, me, from); await notify(t, from, 'friend_accepted', me); }
+    return { state: accept ? 'friends' : 'none' };
+  });
+}
+
+// 내가 보낸 요청 취소 / 친구 끊기 (있는 것을 정리)
+export async function removeFriendLink(db, me, otherId) {
+  const other = Number(otherId);
+  const [lo, hi] = pair(me, other);
+  await db.run('DELETE FROM friendships WHERE user_low = ? AND user_high = ?', lo, hi);
+  await db.run("UPDATE friend_requests SET status = 'cancelled', responded_at = ? WHERE from_user = ? AND to_user = ? AND status = 'pending'", iso(), me, other);
+  return { state: 'none' };
+}
+
+// 차단: 친구·대기 요청을 모두 정리하고 차단 기록을 남긴다.
+export async function blockUser(db, me, targetId) {
+  const target = Number(targetId);
+  if (!Number.isInteger(target) || target === me) throw new AppError(400, '잘못된 요청이에요.');
+  const u = await getUser(db, target);
+  if (!u || u.deleted_at) throw new AppError(404, '사용자를 찾을 수 없어요.');
+  return db.tx(async (t) => {
+    const [lo, hi] = pair(me, target);
+    await t.run('DELETE FROM friendships WHERE user_low = ? AND user_high = ?', lo, hi);
+    await t.run("UPDATE friend_requests SET status = 'cancelled', responded_at = ? WHERE status = 'pending' AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))", iso(), me, target, target, me);
+    const exists = await t.get('SELECT 1 AS x FROM user_blocks WHERE blocker = ? AND blocked = ?', me, target);
+    if (!exists) await t.run('INSERT INTO user_blocks (blocker, blocked, created_at) VALUES (?, ?, ?)', me, target, iso());
+    return { state: 'blocked' };
+  });
+}
+
+export async function unblockUser(db, me, targetId) {
+  await db.run('DELETE FROM user_blocks WHERE blocker = ? AND blocked = ?', me, Number(targetId));
+  return { state: 'none' };
+}
+
+async function usersByIds(db, ids) {
+  const map = new Map();
+  for (const id of ids) { const u = await getUser(db, id); if (u && !u.deleted_at) map.set(id, publicUser(u)); }
+  return map;
+}
+
+export async function listFriends(db, me) {
+  const rows = await db.all(
+    'SELECT CASE WHEN user_low = ? THEN user_high ELSE user_low END AS other, created_at FROM friendships WHERE user_low = ? OR user_high = ? ORDER BY created_at DESC',
+    me, me, me);
+  const map = await usersByIds(db, rows.map((r) => r.other));
+  return rows.map((r) => map.get(r.other)).filter(Boolean);
+}
+
+export async function listIncomingRequests(db, me) {
+  const rows = await db.all("SELECT from_user FROM friend_requests WHERE to_user = ? AND status = 'pending' ORDER BY created_at DESC", me);
+  const map = await usersByIds(db, rows.map((r) => r.from_user));
+  return rows.map((r) => map.get(r.from_user)).filter(Boolean);
+}
+
+// 지난(또는 현재) 메이트 중 친구도 차단도 아닌 사람 — 탐색/친구추가 후보. 관계상태(none|sent|received)를 붙인다.
+export async function listPastMates(db, me) {
+  const rows = await db.all(
+    'SELECT DISTINCT CASE WHEN user_a = ? THEN user_b ELSE user_a END AS other FROM matches WHERE user_a = ? OR user_b = ?',
+    me, me, me);
+  const out = [];
+  for (const { other } of rows) {
+    const u = await getUser(db, other);
+    if (!u || u.deleted_at) continue;
+    const rel = await relation(db, me, other);
+    if (rel.state === 'friends' || rel.iBlocked || rel.blockedMe) continue;
+    out.push({ ...publicUser(u), rel: rel.state }); // none | sent | received
+  }
+  return out;
+}
+
+export async function listBlocked(db, me) {
+  const rows = await db.all('SELECT blocked FROM user_blocks WHERE blocker = ? ORDER BY created_at DESC', me);
+  const map = await usersByIds(db, rows.map((r) => r.blocked));
+  return rows.map((r) => map.get(r.blocked)).filter(Boolean);
+}
+
+// 소셜 허브 한 번에: 내 친구 · 받은 요청 · 지난 메이트(후보) · 차단 목록
+export async function socialOverview(db, me) {
+  return {
+    friends: await listFriends(db, me),
+    incoming: await listIncomingRequests(db, me),
+    pastMates: await listPastMates(db, me),
+    saved: await listSavedMates(db, me),
+    blocked: await listBlocked(db, me),
+  };
+}
+
+export async function listNotifications(db, me) {
+  const rows = await db.all(
+    'SELECT id, type, actor_id, created_at, read_at FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 50', me);
+  const map = await usersByIds(db, rows.filter((r) => r.actor_id).map((r) => r.actor_id));
+  return rows.map((r) => ({ id: r.id, type: r.type, at: r.created_at, read: !!r.read_at, actor: r.actor_id ? (map.get(r.actor_id) ?? null) : null }));
+}
+
+export async function unreadNotificationCount(db, me) {
+  const r = await db.get('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL', me);
+  return Number(r?.n ?? 0);
+}
+
+export async function markNotificationsRead(db, me) {
+  await db.run('UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL', iso(), me);
+  return { ok: true };
+}
+
+// ───────── 콕 찌르기 (poke) — 친구끼리만, 하루 10번, 미응답 24시간 쿨다운 ─────────
+const POKE_DAILY_CAP = 10;
+const POKE_COOLDOWN_MS = 24 * 3600 * 1000;
+
+export async function pokeUser(db, me, targetId) {
+  const target = Number(targetId);
+  if (!Number.isInteger(target) || target === me) throw new AppError(400, '잘못된 요청이에요.');
+  const u = await getUser(db, target);
+  if (!u || u.deleted_at) throw new AppError(404, '사용자를 찾을 수 없어요.');
+  if (await blockedBetween(db, me, target)) throw new AppError(403, '콕 찌를 수 없어요.');
+  if (!(await areFriends(db, me, target))) throw new AppError(403, '친구끼리만 콕 찌를 수 있어요.');
+
+  // 하루 10번 (KST 기준)
+  const used = await db.get('SELECT COUNT(*) AS n FROM pokes WHERE from_user = ? AND day = ?', me, T.today());
+  if (Number(used?.n ?? 0) >= POKE_DAILY_CAP) throw new AppError(429, `오늘은 콕 찌르기를 다 썼어요. 하루 ${POKE_DAILY_CAP}번까지예요.`);
+
+  // 미응답 24시간 쿨다운 — 내가 마지막으로 찌른 뒤 상대가 안 찔렀고 24시간이 안 지났으면 막는다
+  const last = await db.get('SELECT id, created_at FROM pokes WHERE from_user = ? AND to_user = ? ORDER BY id DESC LIMIT 1', me, target);
+  if (last) {
+    const since = T.now().getTime() - new Date(last.created_at).getTime();
+    if (since < POKE_COOLDOWN_MS) {
+      // 상대가 내 마지막 콕 이후에 되찔렀나 (삽입 순서 id 기준 — 같은 시각이어도 정확)
+      const answered = await db.get('SELECT 1 AS x FROM pokes WHERE from_user = ? AND to_user = ? AND id > ?', target, me, last.id);
+      if (!answered) {
+        const hrs = Math.max(1, Math.ceil((POKE_COOLDOWN_MS - since) / 3600000));
+        throw new AppError(429, `아직 답이 없어요. ${hrs}시간 뒤에 다시 콕 찌를 수 있어요.`);
+      }
+    }
+  }
+
+  await db.tx(async (t) => {
+    await t.run('INSERT INTO pokes (from_user, to_user, day, created_at) VALUES (?, ?, ?, ?)', me, target, T.today(), iso());
+    await notify(t, target, 'poke', me);
+  });
+  return { ok: true };
+}
+
+// ───────── 메이트 저장 (즐겨찾기) — 함께 공부했던 메이트만 ─────────
+export async function saveMate(db, me, targetId) {
+  const target = Number(targetId);
+  if (!Number.isInteger(target) || target === me) throw new AppError(400, '잘못된 요청이에요.');
+  const u = await getUser(db, target);
+  if (!u || u.deleted_at) throw new AppError(404, '사용자를 찾을 수 없어요.');
+  if (await blockedBetween(db, me, target)) throw new AppError(403, '저장할 수 없어요.');
+  if (!(await haveMatched(db, me, target))) throw new AppError(403, '함께 공부한 메이트만 저장할 수 있어요.');
+  const exists = await db.get('SELECT 1 AS x FROM saved_mates WHERE user_id = ? AND saved_id = ?', me, target);
+  if (!exists) await db.run('INSERT INTO saved_mates (user_id, saved_id, created_at) VALUES (?, ?, ?)', me, target, iso());
+  return { saved: true };
+}
+
+export async function unsaveMate(db, me, targetId) {
+  await db.run('DELETE FROM saved_mates WHERE user_id = ? AND saved_id = ?', me, Number(targetId));
+  return { saved: false };
+}
+
+async function isSaved(db, me, target) {
+  return !!(await db.get('SELECT 1 AS x FROM saved_mates WHERE user_id = ? AND saved_id = ?', me, target));
+}
+
+export async function listSavedMates(db, me) {
+  const rows = await db.all('SELECT saved_id FROM saved_mates WHERE user_id = ? ORDER BY created_at DESC', me);
+  const map = await usersByIds(db, rows.map((r) => r.saved_id));
+  return rows.map((r) => map.get(r.saved_id)).filter(Boolean);
+}
+
+// 두 사람의 가장 최근 매칭 id (친구 채팅방 = 이 매칭 스레드)
+async function sharedMatchId(db, a, b) {
+  const r = await db.get(
+    'SELECT id FROM matches WHERE (user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?) ORDER BY id DESC LIMIT 1',
+    a, b, b, a);
+  return r ? r.id : null;
+}
+
 // ───────────────────────── 개인 일정 ─────────────────────────
 
 // 홈 시간표에 보이는 내 개인 일정 (수업 등). [{ cell: "요일-시간대번호", title }]
@@ -448,21 +871,8 @@ export async function setPersonalSchedule(db, userId, entries) {
 
 // ───────────────────────── 포인트 ─────────────────────────
 
-// 잔액 확인과 차감을 한 문장으로 처리해 동시에 요청이 와도 음수가 되지 않는다.
-// 데모 메이트(봇)의 포인트는 바뀌지 않는다. (보증금 예치·반환·보상 모두 없음)
-export async function adjustPoints(db, userId, amount, reason, matchId = null) {
-  if (!amount) return;
-  const { rows } = await db.run(
-    'UPDATE users SET points = points + ? WHERE id = ? AND is_bot = 0 AND points + ? >= 0 RETURNING points',
-    amount, userId, amount,
-  );
-  if (!rows.length && (await getUser(db, userId))?.is_bot) return;
-  if (!rows.length) throw new AppError(400, '포인트가 부족합니다.');
-  await db.run(
-    'INSERT INTO point_logs (user_id, amount, balance, reason, match_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    userId, amount, rows[0].points, reason, matchId, iso(),
-  );
-}
+// 포인트 제도 삭제됨: 보증금이 계좌이체로 바뀌어 포인트 적립·차감·보증금 예치/반환/보상이 모두 사라졌다.
+// (users.points · point_logs 는 기존 데이터 보존을 위해 남겨 두지만 더 이상 쓰지 않는다 — 항상 0.)
 
 // ───────────────────────── 매칭 신청 ─────────────────────────
 
@@ -666,7 +1076,6 @@ export async function cancelRequest(db, userId, requestId = null) {
       target, userId,
     );
     if (!rows.length) throw new AppError(404, '대기 중인 매칭 신청이 없어요.');
-    if (rows[0].deposit) await adjustPoints(t, userId, rows[0].deposit, '매칭 취소 보증금 반환');
   });
 }
 
@@ -763,9 +1172,6 @@ async function createMatch(db, { userA, userB, stakeA, stakeB, terms, prevMatchI
   );
   const matchId = rows[0].id;
 
-  if (stakeA > stake) await adjustPoints(db, userA, stakeA - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
-  if (stakeB > stake) await adjustPoints(db, userB, stakeB - stake, '보증금 차액 반환 (메이트 금액에 맞춤)', matchId);
-
   for (const { date, start, end } of dates) {
     const { rows: ap } = await db.run(
       'INSERT INTO appointments (match_id, date, start_time, end_time, code) VALUES (?, ?, ?, ?, ?) RETURNING id',
@@ -804,6 +1210,25 @@ export async function activeMatches(db, userId, opts) {
   await autoSettle(db);
   const out = [];
   for (const m of await activeMatchRows(db, userId)) out.push(await matchDetail(db, userId, m, opts));
+  return out;
+}
+
+// 채팅 탭 대화 목록: 진행 중 매칭 + (친구인 경우) 끝난 매칭도. 상대별로 가장 최근 하나만.
+export async function chatThreads(db, userId, opts) {
+  await autoSettle(db);
+  const rows = await db.all(
+    "SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status IN ('active', 'reported', 'closed') ORDER BY id DESC",
+    userId, userId);
+  const seen = new Set();
+  const out = [];
+  for (const raw of rows) {
+    const m = parseMatch(raw);
+    const mate = mateOf(m, userId);
+    if (seen.has(mate)) continue;
+    seen.add(mate); // 상대별 가장 최근 매칭으로만 판단
+    if (m.status === 'closed' && !(await areFriends(db, userId, mate))) continue; // 끝난 매칭은 친구일 때만 채팅 유지
+    out.push(await matchDetail(db, userId, m, opts));
+  }
   return out;
 }
 
@@ -1413,23 +1838,10 @@ async function settleMatchTx(db, matchId) {
       [m.user_b]: await attendanceStats(t, appts, m.user_b),
     };
 
-    for (const [uid, mid] of [[m.user_a, m.user_b], [m.user_b, m.user_a]]) {
-      const me = users[uid];
-      const mate = users[mid];
-      if (!m.stake) {
-        me.deposit = { result: 'none', amount: 0 };
-      } else if (me.kept) {
-        await adjustPoints(t, uid, m.stake, '약속 이행 · 보증금 반환', m.id);
-        me.deposit = { result: 'refunded', amount: m.stake };
-      } else if (mate.kept) {
-        await adjustPoints(t, mid, m.stake, '메이트 약속 미이행 보상', m.id);
-        me.deposit = { result: 'to_mate', amount: m.stake };
-      } else {
-        me.deposit = { result: 'forfeited', amount: m.stake };
-      }
-    }
-    for (const [uid, mid] of [[m.user_a, m.user_b], [m.user_b, m.user_a]]) {
-      users[uid].reward = users[mid].deposit.result === 'to_mate' ? m.stake : 0;
+    // 보증금(포인트) 제도 삭제됨 — 정산은 출석 기록만 남긴다. deposit/reward 는 화면 호환을 위해 none/0 으로 둔다.
+    for (const uid of [m.user_a, m.user_b]) {
+      users[uid].deposit = { result: 'none', amount: 0 };
+      users[uid].reward = 0;
     }
 
     const report = { generatedAt: iso(), users };
@@ -1482,22 +1894,11 @@ async function leaveMatchTx(db, userId, m, appts, policy) {
     };
     const mateIsBot = !!(await getUser(t, mateId)).is_bot;
     const none = { result: 'none', amount: 0 };
-    if (!m.stake) {
-      users[userId].deposit = none;
-      users[mateId].deposit = none;
-    } else {
-      await adjustPoints(t, mateId, m.stake * 2, '메이트 중도 종료 · 보증금 반환 + 보상', m.id); // 데모 메이트면 변화 없음
-      // 그만둔 사람: 보증금은 이미 예치 때 빠졌으므로 잔액 변화 없이 내역만 남긴다
-      const { points } = await getUser(t, userId);
-      await t.run(
-        'INSERT INTO point_logs (user_id, amount, balance, reason, match_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        userId, 0, points, mateIsBot ? `중도 종료 · 보증금 ${m.stake.toLocaleString()}P 소멸` : `중도 종료 · 보증금 ${m.stake.toLocaleString()}P 메이트에게 보상`, m.id, iso(),
-      );
-      users[userId].deposit = { result: mateIsBot ? 'forfeited' : 'to_mate', amount: m.stake };
-      users[mateId].deposit = { result: 'refunded', amount: m.stake };
-    }
+    // 보증금(포인트) 제도 삭제됨 — 그만두기 제재는 '약속 지키기' 스트라이크로만 (leaveMatch → addStrike). deposit/reward 는 none/0.
+    users[userId].deposit = none;
+    users[mateId].deposit = none;
     users[userId].reward = 0;
-    users[mateId].reward = m.stake && !mateIsBot ? m.stake : 0;
+    users[mateId].reward = 0;
 
     const col = m.user_a === userId ? 'choice_a' : 'choice_b';
     const report = { generatedAt: iso(), leftBy: userId, leavePolicy: policy, users };
@@ -1541,19 +1942,12 @@ export async function chooseNext(db, userId, matchId, choice) {
 }
 
 async function continueMatch(db, m) {
-  // 이전 주와 같은 보증금을 다시 건다. 둘 중 한 명이라도 포인트가 부족하면 보증금 없이 진행.
-  let stake = m.stake;
-  const canPay = async (uid) => (await getUser(db, uid)).points >= stake;
-  if (stake && (!(await canPay(m.user_a)) || !(await canPay(m.user_b)))) stake = 0;
-  if (stake) {
-    await adjustPoints(db, m.user_a, -stake, '보증금 예치 (재매칭)', m.id);
-    await adjustPoints(db, m.user_b, -stake, '보증금 예치 (재매칭)', m.id);
-  }
+  // 보증금(포인트) 제도 삭제됨 — 예치 없이 다음 주 매칭을 이어 간다.
   return createMatch(db, {
     userA: m.user_a,
     userB: m.user_b,
-    stakeA: stake,
-    stakeB: stake,
+    stakeA: 0,
+    stakeB: 0,
     prevMatchId: m.id,
     terms: { schedule: m.schedule, startTime: m.start_time, endTime: m.end_time, location: m.location, styles: m.styles },
   });
@@ -1645,7 +2039,9 @@ export async function unreadCounts(db, userId) {
        FROM matches m
        JOIN messages msg ON msg.match_id = m.id AND msg.user_id <> ?
        LEFT JOIN chat_reads r ON r.match_id = m.id AND r.user_id = ?
-      WHERE (m.user_a = ? OR m.user_b = ?) AND m.status IN ('active', 'reported')
+      WHERE (m.user_a = ? OR m.user_b = ?)
+        AND (m.status IN ('active', 'reported') OR (m.status = 'closed' AND EXISTS (
+          SELECT 1 FROM friendships f WHERE (f.user_low = m.user_a AND f.user_high = m.user_b) OR (f.user_low = m.user_b AND f.user_high = m.user_a))))
         AND msg.id > COALESCE(r.last_read_id, 0)
       GROUP BY m.id`,
     userId, userId, userId, userId,
@@ -1684,7 +2080,8 @@ export async function sendMessage(db, userId, matchId, body) {
   if (text.length > 500) throw new AppError(400, '메시지는 500자까지 보낼 수 있어요.');
   return db.tx(async (t) => {
     const m = await loadMatchForUser(t, userId, matchId);
-    if (m.status === 'closed') throw new AppError(400, '종료된 매칭이에요.');
+    // 끝난 매칭은 원래 채팅을 닫지만, 친구끼리는 계속 쓸 수 있다
+    if (m.status === 'closed' && !(await areFriends(t, userId, mateOf(m, userId)))) throw new AppError(400, '종료된 매칭이에요.');
     const insert = (uid, msg) => t.run(
       'INSERT INTO messages (match_id, user_id, body, created_at) VALUES (?, ?, ?, ?)', m.id, uid, msg, iso(),
     );

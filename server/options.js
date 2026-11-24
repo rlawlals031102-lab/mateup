@@ -59,6 +59,23 @@ export const EMAIL_DOMAIN = 'kookmin.ac.kr';
 // from 이전의 약속·그만두기는 세지 않는다 (규칙을 알린 다음 회차부터 적용).
 export const PROMISE_RULE = { strikeLimit: 2, suspendDays: 30, from: '2026-11-06' };
 
+// 보증금(계좌이체): 매칭된 사람은 아래 계좌로 입금하고, 약속을 지키면 끝난 뒤 환불받는다.
+// 앱은 돈을 직접 움직이지 않는다 — 운영자가 문자로 입금/환불을 수동 확인한다.
+// 계좌번호는 결제 대상자(매칭된 실제 사용자)에게만 /me/deposit 로만 보인다. /api/options·공개 빌드에는 넣지 않는다.
+// 계좌 정보는 반드시 환경변수로만 받는다(소스·공개 데모 빌드 유출 방지). 운영자가 Vercel 환경변수에 설정:
+//   DEPOSIT_BANK, DEPOSIT_ACCOUNT, DEPOSIT_HOLDER  (안 넣으면 보증금 기능은 꺼진 것으로 본다)
+//   끄기: DEPOSIT_ENABLED=0
+export const DEPOSIT = {
+  enabled: process.env.DEPOSIT_ENABLED !== '0',
+  amount: Number(process.env.DEPOSIT_AMOUNT) || 5000,
+  refundMinutes: Number(process.env.DEPOSIT_REFUND_MIN) || 10,
+  bank: process.env.DEPOSIT_BANK ?? '',
+  account: process.env.DEPOSIT_ACCOUNT ?? '',
+  holder: process.env.DEPOSIT_HOLDER ?? '',
+};
+// 계좌가 실제로 설정됐고 기능이 켜져 있어야 보증금을 요구한다.
+export const depositConfigured = () => DEPOSIT.enabled && !!DEPOSIT.account;
+
 // 개인정보 처리방침 (public/privacy.html). 내용을 바꾸면 version 을 바꾸고 → 모든 회원에게 다시 동의를 받는다.
 // 책임자·담당자는 처리방침에 적힌 사람과 같아야 한다.
 export const PRIVACY_POLICY = {
@@ -79,6 +96,10 @@ export const ADMIN_EMAILS = [ADMIN_EMAIL, 'yunbinna6@kookmin.ac.kr', 'rmsdud06@k
 export const EMAIL_CODE_TTL_MIN = 10;
 export const EMAIL_CODE_MAX_ATTEMPTS = 5;
 export const EMAIL_CODE_RESEND_SEC = 60;
+
+// 새 가입 방식: 'phone'(전화번호 + 닉네임 + 4자리 PIN, 무인증) | 'email'(기존 국민대 메일, 이미 가입된 사람용).
+// 기본 'phone' — 새 가입은 전화번호로. 기존 메일 가입자는 그대로 이메일 로그인 유지(이미 인증된 사람들이라 인증 불필요).
+export const AUTH_MODE = process.env.AUTH_MODE === 'email' ? 'email' : 'phone';
 
 // 홈 화면 시험 디데이 (지나면 자동으로 숨김)
 export const EXAM = { name: '기말고사', date: '2026-12-08' };
