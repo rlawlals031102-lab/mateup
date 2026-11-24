@@ -265,6 +265,7 @@ const routes = {
   chat: renderChat,
   me: renderMe,
   'me/edit': renderEditProfile,
+  friends: renderFriends,
   admin: renderAdmin,
 };
 
@@ -289,6 +290,7 @@ async function router() {
     if (!OPTIONS) OPTIONS = await api('/options');
     await render(() => token === routeToken);
     refreshUnread();
+    refreshSocial();
   } catch (err) {
     if (err.status === 401 && !['login', 'signup', 'reset'].includes(name)) {
       location.hash = '#/login';
@@ -326,7 +328,27 @@ async function refreshUnread() {
   tab.setAttribute('aria-label', `채팅, 안 읽은 메시지 ${unread.total}개`);
 }
 setInterval(refreshUnread, 15000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshUnread(); });
+
+// 메이트 탭에 소셜 배지 (읽지 않은 알림 = 받은 친구요청·수락 등). 친구 허브를 열면 읽음 처리되어 사라진다.
+async function refreshSocial() {
+  if (tabbar.hidden || document.hidden) return;
+  let unreadN = 0;
+  try { unreadN = (await api('/notifications')).unread ?? 0; } catch { return; }
+  const tab = $('a[data-tab="match"]', tabbar);
+  if (!tab) return;
+  let badge = $('.badge', tab);
+  if (!unreadN) { badge?.remove(); tab.removeAttribute('aria-label'); return; }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.setAttribute('aria-hidden', 'true');
+    $('.ti', tab).append(badge);
+  }
+  badge.textContent = unreadN > 99 ? '99+' : String(unreadN);
+  tab.setAttribute('aria-label', `메이트, 새 알림 ${unreadN}개`);
+}
+setInterval(refreshSocial, 20000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { refreshUnread(); refreshSocial(); } });
 
 window.addEventListener('hashchange', router);
 router();
@@ -1355,6 +1377,7 @@ async function renderMatch(alive, id) {
         <h3>이번 주 메이트가 아직 없어요</h3>
         <p>매칭을 신청하면 1주일 동안 함께할 메이트를 찾아드려요.</p>
         <a class="btn primary mt-lg" href="#/home">홈으로</a>
+        <a class="btn ghost mt" href="#/friends">친구 · 지난 메이트</a>
       </div>`;
     return;
   }
@@ -1470,6 +1493,7 @@ function drawMatch(m, alive, { admin = false } = {}) {
   }
 
   view.innerHTML = `${tabs}
+    <a class="card" href="#/friends" style="display:flex;align-items:center;justify-content:space-between;margin:0 0 10px;text-decoration:none;color:inherit"><b>친구 · 지난 메이트</b><span class="chev">${icon('caret-right')}</span></a>
     ${checkinCard}
     <section class="card">
       <div class="card-head"><h2>메이트 프로필</h2><span class="row" style="gap:10px"><a class="link" href="#/u/${m.mate.id}">프로필 ›</a><span class="hint">${m.round}주차</span></span></div>
@@ -2065,6 +2089,8 @@ async function renderMe(alive) {
       <a class="link small" href="#/u/${user.id}" style="display:block;margin-top:10px">메이트에게 보이는 내 프로필 ›</a>
     </section>
 
+    <a class="card" href="#/friends" style="display:flex;align-items:center;justify-content:space-between;text-decoration:none;color:inherit"><b>친구 · 지난 메이트</b><span class="chev">${icon('caret-right')}</span></a>
+
     ${record && record.weeks ? `
     <section class="section">
       <h2 class="section-title">내 공부 기록</h2>
@@ -2472,6 +2498,7 @@ async function renderUserProfile(alive, id) {
         </div>
       </div>
       ${u.isBot ? '<div class="notice">체험용 <b>가상 메이트</b>예요. 실제로 약속 장소에 나오지 않아요.</div>' : ''}
+      ${profileActions(u)}
     </section>
 
     <section class="section">
@@ -2483,4 +2510,94 @@ async function renderUserProfile(alive, id) {
       </div>
       <p class="tiny muted mt">약속을 지키고 함께 공부한 긍정 기록만 보여줘요.</p>
     </section>`;
+
+  bindSocialButtons(view, () => renderUserProfile(alive, id));
+}
+
+// 프로필 관계 버튼 (u.rel: self|friends|sent|received|none|blocked, u.canRequest)
+function profileActions(u) {
+  if (u.rel === 'self' || u.isBot) return '';
+  const wrap = (inner) => `<div class="row" style="gap:8px;margin-top:14px;flex-wrap:wrap">${inner}</div>`;
+  if (u.rel === 'blocked') return wrap(`<button class="btn ghost block" data-social="unblock" data-id="${u.id}">차단 해제</button>`);
+  let main = '';
+  if (u.rel === 'friends') main = `<span class="small" style="color:var(--green);font-weight:700;align-self:center">✓ 친구</span><button class="btn ghost" data-social="remove" data-id="${u.id}" data-confirm="${esc(u.name)}님과 친구를 끊을까요?">친구 끊기</button>`;
+  else if (u.rel === 'sent') main = `<button class="btn ghost" data-social="remove" data-id="${u.id}">친구 요청 취소</button>`;
+  else if (u.rel === 'received') main = `<button class="btn primary" data-social="accept" data-id="${u.id}">친구 수락</button><button class="btn ghost" data-social="decline" data-id="${u.id}">거절</button>`;
+  else if (u.canRequest) main = `<button class="btn primary" data-social="add" data-id="${u.id}">친구 추가</button>`;
+  else main = '<p class="tiny muted" style="margin:0;align-self:center">함께 공부한 뒤에 친구를 추가할 수 있어요.</p>';
+  return wrap(`${main}<button class="btn ghost" style="color:var(--red);margin-left:auto" data-social="block" data-id="${u.id}" data-confirm="${esc(u.name)}님을 차단할까요? 친구·요청이 해제돼요.">차단</button>`);
+}
+
+// 소셜 버튼 공통 처리: data-social(add|remove|accept|decline|block|unblock) + data-id, 끝나면 refresh()
+function bindSocialButtons(root, refresh) {
+  root.querySelectorAll('[data-social]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const id = Number(btn.dataset.id);
+      const act = btn.dataset.social;
+      if (btn.dataset.confirm && !confirm(btn.dataset.confirm)) return;
+      const call = {
+        add: () => api(`/friends/${id}/request`, { method: 'POST' }),
+        remove: () => api(`/friends/${id}/remove`, { method: 'POST' }),
+        accept: () => api(`/friends/${id}/respond`, { method: 'POST', body: { accept: true } }),
+        decline: () => api(`/friends/${id}/respond`, { method: 'POST', body: { accept: false } }),
+        block: () => api(`/users/${id}/block`, { method: 'POST' }),
+        unblock: () => api(`/users/${id}/unblock`, { method: 'POST' }),
+      }[act];
+      if (!call) return;
+      btn.disabled = true;
+      try {
+        const r = await call();
+        toast({ friends: '친구가 됐어요!', sent: '친구 요청을 보냈어요.', none: '처리했어요.', blocked: '차단했어요.' }[r?.state] ?? '처리했어요.');
+        await refresh();
+      } catch (err) { btn.disabled = false; toast(err.message, true); }
+    });
+  });
+}
+
+// 친구 허브 (#/friends) — 메이트 탭 안. 받은 요청·내 친구·지난 메이트(후보)·차단 + 알림.
+async function renderFriends(alive) {
+  setTop({ title: '친구', back: '#' });
+  setTabs('match'); // 메이트 탭 유지
+  $('.icon-btn', topbar)?.addEventListener('click', (e) => { e.preventDefault(); history.back(); });
+  loading();
+  let d; let notis = { items: [], unread: 0 };
+  try {
+    [d, notis] = await Promise.all([api('/social'), api('/notifications').catch(() => ({ items: [], unread: 0 }))]);
+  } catch (err) {
+    if (!alive()) return;
+    view.innerHTML = `<section class="card"><p class="small muted">${esc(err.message)}</p></section>`;
+    return;
+  }
+  if (!alive()) return;
+  api('/notifications/read', { method: 'POST' }).then(() => refreshSocial()).catch(() => {}); // 열면 읽음 → 배지 갱신
+
+  const styleTag = (u) => (u.studyStyle && OPTIONS.styles?.[u.studyStyle] ? `<span class="tiny muted"> · ${esc(OPTIONS.styles[u.studyStyle].label)}</span>` : '');
+  const nameRow = (u, actions) => `<div class="list-item"><a class="row" href="#/u/${u.id}" style="gap:10px;flex:1;min-width:0;text-decoration:none;color:inherit">${avatarHTML(u, 'sm')}<span style="min-width:0"><b>${esc(u.name)}</b>${styleTag(u)}</span></a><span class="row" style="gap:6px;flex-shrink:0">${actions}</span></div>`;
+  const section = (title, body, hint) => (body ? `<section class="section"><div class="section-head"><h2 class="section-title">${title}</h2>${hint ?? ''}</div>${body}</section>` : '');
+
+  const incoming = d.incoming.map((u) => nameRow(u, `<button class="btn sm primary" data-social="accept" data-id="${u.id}">수락</button><button class="btn sm ghost" data-social="decline" data-id="${u.id}">거절</button>`)).join('');
+  const friends = d.friends.map((u) => nameRow(u, `<span class="chev">${icon('caret-right')}</span>`)).join('');
+  const mates = d.pastMates.map((u) => nameRow(u,
+    u.rel === 'sent' ? `<button class="btn sm ghost" data-social="remove" data-id="${u.id}">요청 취소</button>`
+      : u.rel === 'received' ? `<button class="btn sm primary" data-social="accept" data-id="${u.id}">수락</button>`
+        : `<button class="btn sm primary" data-social="add" data-id="${u.id}">친구 추가</button>`)).join('');
+  const blocked = d.blocked.map((u) => nameRow(u, `<button class="btn sm ghost" data-social="unblock" data-id="${u.id}">차단 해제</button>`)).join('');
+
+  const notiText = (n) => (n.type === 'friend_request' ? `${esc(n.actor?.name ?? '누군가')}님이 친구 요청을 보냈어요`
+    : n.type === 'friend_accepted' ? `${esc(n.actor?.name ?? '누군가')}님이 친구 요청을 수락했어요` : '새 알림');
+  const alerts = notis.items.length
+    ? `<section class="section"><h2 class="section-title">알림</h2>${notis.items.slice(0, 8).map((n) => `<div class="list-item"><span class="small">${notiText(n)}</span><span class="tiny muted">${fmtAt(n.at)}</span></div>`).join('')}</section>`
+    : '';
+
+  const empty = !incoming && !friends && !mates && !blocked && !alerts;
+  view.innerHTML = `
+    ${alerts}
+    ${section(`받은 요청 ${d.incoming.length ? `<span class="badge inline">${d.incoming.length}</span>` : ''}`, incoming)}
+    ${section('내 친구', friends)}
+    ${section('지난 메이트', mates, '<span class="hint">함께 공부했던 사람</span>')}
+    ${section('차단', blocked)}
+    ${empty ? '<div class="empty"><h3>아직 친구가 없어요</h3><p>함께 공부한 메이트의 프로필에서 \'친구 추가\'를 눌러 보세요. 지난 메이트가 여기에 모여요.</p><a class="btn primary mt-lg" href="#/match">메이트로</a></div>' : ''}`;
+
+  bindSocialButtons(view, () => renderFriends(alive));
 }

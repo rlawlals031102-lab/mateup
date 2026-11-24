@@ -548,12 +548,20 @@ export async function updateProfile(db, userId, input) {
 
 // 공개 프로필: 로그인한 아무 사용자가 볼 수 있는 상대 프로필.
 // 닉네임·나이·태그·소개·아바타·선호 스타일 + 긍정 지표만. 실명·학과·전화·이메일은 넣지 않는다.
-export async function publicProfile(db, targetId) {
+export async function publicProfile(db, targetId, viewerId = null) {
   const id = Number(targetId);
   if (!Number.isInteger(id) || id < 1) throw new AppError(404, '프로필을 찾을 수 없어요.');
   const u = await getUser(db, id);
   if (!u || u.deleted_at) throw new AppError(404, '프로필을 찾을 수 없어요.');
-  return { ...publicUser(u), stats: await profileStats(db, id) };
+  const base = { ...publicUser(u), stats: await profileStats(db, id) };
+  if (viewerId && viewerId === id) { base.rel = 'self'; return base; }
+  if (viewerId) {
+    const rel = await relation(db, viewerId, id);
+    if (rel.blockedMe) throw new AppError(404, '프로필을 찾을 수 없어요.'); // 상대가 나를 차단함 → 숨김
+    base.rel = rel.iBlocked ? 'blocked' : rel.state; // self|friends|sent|received|none|blocked
+    base.canRequest = rel.state === 'none' && !rel.iBlocked && !u.is_bot && await haveMatched(db, viewerId, id);
+  }
+  return base;
 }
 
 // 프로필에 보이는 긍정 지표만 (노쇼·이행률 같은 부정 지표는 넣지 않는다).
@@ -571,6 +579,196 @@ export async function profileStats(db, userId) {
     minutes: Number(a?.minutes ?? 0), // 누적 공부시간(분)
     mates: Number(m?.mates ?? 0), // 함께한 메이트 수
   };
+}
+
+// ───────────────────────── 소셜 (친구·차단·알림) ─────────────────────────
+// 친구는 "함께 매칭했던 메이트"끼리만. 한쪽이라도 차단하면 서로 안 보이고 요청 불가.
+
+const pair = (a, b) => (a < b ? [a, b] : [b, a]); // friendships 저장용 (user_low, user_high)
+
+// 두 사람이 함께 매칭된 적이 있는가 (친구가 될 수 있는 조건)
+export async function haveMatched(db, a, b) {
+  if (a === b) return false;
+  const r = await db.get(
+    'SELECT 1 AS x FROM matches WHERE (user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?) LIMIT 1',
+    a, b, b, a);
+  return !!r;
+}
+
+async function areFriends(db, a, b) {
+  const [lo, hi] = pair(a, b);
+  return !!(await db.get('SELECT 1 AS x FROM friendships WHERE user_low = ? AND user_high = ?', lo, hi));
+}
+
+// 한쪽이라도 상대를 차단했으면 차단한 사람 id, 없으면 null
+async function blockedBetween(db, a, b) {
+  const r = await db.get(
+    'SELECT blocker FROM user_blocks WHERE (blocker = ? AND blocked = ?) OR (blocker = ? AND blocked = ?)',
+    a, b, b, a);
+  return r ? r.blocker : null;
+}
+
+// me 가 본 other 와의 관계: self | friends | sent | received | none  (+ iBlocked/blockedMe)
+async function relation(db, me, other) {
+  if (me === other) return { state: 'self' };
+  const blocker = await blockedBetween(db, me, other);
+  if (blocker) return { state: 'none', iBlocked: blocker === me, blockedMe: blocker === other };
+  if (await areFriends(db, me, other)) return { state: 'friends' };
+  const req = await db.get(
+    "SELECT from_user FROM friend_requests WHERE status = 'pending' AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
+    me, other, other, me);
+  if (req) return { state: req.from_user === me ? 'sent' : 'received' };
+  return { state: 'none' };
+}
+
+async function addFriendship(db, a, b) {
+  const [lo, hi] = pair(a, b);
+  const exists = await db.get('SELECT 1 AS x FROM friendships WHERE user_low = ? AND user_high = ?', lo, hi);
+  if (!exists) await db.run('INSERT INTO friendships (user_low, user_high, created_at) VALUES (?, ?, ?)', lo, hi, iso());
+}
+
+async function notify(db, userId, type, actorId) {
+  if (userId === actorId) return;
+  await db.run('INSERT INTO notifications (user_id, type, actor_id, created_at) VALUES (?, ?, ?, ?)', userId, type, actorId, iso());
+}
+
+// 친구 요청 보내기 — 함께 매칭했던 사람에게만. 상대가 나에게 보낸 게 있으면 바로 친구가 된다.
+export async function sendFriendRequest(db, me, targetId) {
+  const target = Number(targetId);
+  if (!Number.isInteger(target) || target === me) throw new AppError(400, '잘못된 요청이에요.');
+  const u = await getUser(db, target);
+  if (!u || u.deleted_at) throw new AppError(404, '사용자를 찾을 수 없어요.');
+  if (u.is_bot) throw new AppError(400, '체험용 메이트에게는 보낼 수 없어요.');
+  const blocker = await blockedBetween(db, me, target);
+  if (blocker) throw new AppError(403, blocker === me ? '차단한 사용자예요. 차단을 풀고 다시 시도해 주세요.' : '요청을 보낼 수 없어요.');
+  if (await areFriends(db, me, target)) return { state: 'friends' };
+  if (!(await haveMatched(db, me, target))) throw new AppError(403, '함께 공부한 메이트에게만 친구 요청을 보낼 수 있어요.');
+
+  return db.tx(async (t) => {
+    const incoming = await t.get("SELECT id FROM friend_requests WHERE from_user = ? AND to_user = ? AND status = 'pending'", target, me);
+    if (incoming) { // 상대가 이미 나에게 보냈으면 바로 수락
+      await t.run("UPDATE friend_requests SET status = 'accepted', responded_at = ? WHERE id = ?", iso(), incoming.id);
+      await addFriendship(t, me, target);
+      await notify(t, target, 'friend_accepted', me);
+      return { state: 'friends' };
+    }
+    const mine = await t.get('SELECT id FROM friend_requests WHERE from_user = ? AND to_user = ?', me, target);
+    if (mine) await t.run("UPDATE friend_requests SET status = 'pending', created_at = ?, responded_at = NULL WHERE id = ?", iso(), mine.id);
+    else await t.run("INSERT INTO friend_requests (from_user, to_user, status, created_at) VALUES (?, ?, 'pending', ?)", me, target, iso());
+    await notify(t, target, 'friend_request', me);
+    return { state: 'sent' };
+  });
+}
+
+// 받은 친구 요청에 응답 (requesterId 가 나에게 보낸 것). accept=true 면 친구가 된다.
+export async function respondFriendRequest(db, me, requesterId, accept) {
+  const from = Number(requesterId);
+  return db.tx(async (t) => {
+    const req = await t.get("SELECT id FROM friend_requests WHERE from_user = ? AND to_user = ? AND status = 'pending'", from, me);
+    if (!req) throw new AppError(404, '받은 요청이 없어요.');
+    await t.run('UPDATE friend_requests SET status = ?, responded_at = ? WHERE id = ?', accept ? 'accepted' : 'declined', iso(), req.id);
+    if (accept) { await addFriendship(t, me, from); await notify(t, from, 'friend_accepted', me); }
+    return { state: accept ? 'friends' : 'none' };
+  });
+}
+
+// 내가 보낸 요청 취소 / 친구 끊기 (있는 것을 정리)
+export async function removeFriendLink(db, me, otherId) {
+  const other = Number(otherId);
+  const [lo, hi] = pair(me, other);
+  await db.run('DELETE FROM friendships WHERE user_low = ? AND user_high = ?', lo, hi);
+  await db.run("UPDATE friend_requests SET status = 'cancelled', responded_at = ? WHERE from_user = ? AND to_user = ? AND status = 'pending'", iso(), me, other);
+  return { state: 'none' };
+}
+
+// 차단: 친구·대기 요청을 모두 정리하고 차단 기록을 남긴다.
+export async function blockUser(db, me, targetId) {
+  const target = Number(targetId);
+  if (!Number.isInteger(target) || target === me) throw new AppError(400, '잘못된 요청이에요.');
+  const u = await getUser(db, target);
+  if (!u || u.deleted_at) throw new AppError(404, '사용자를 찾을 수 없어요.');
+  return db.tx(async (t) => {
+    const [lo, hi] = pair(me, target);
+    await t.run('DELETE FROM friendships WHERE user_low = ? AND user_high = ?', lo, hi);
+    await t.run("UPDATE friend_requests SET status = 'cancelled', responded_at = ? WHERE status = 'pending' AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))", iso(), me, target, target, me);
+    const exists = await t.get('SELECT 1 AS x FROM user_blocks WHERE blocker = ? AND blocked = ?', me, target);
+    if (!exists) await t.run('INSERT INTO user_blocks (blocker, blocked, created_at) VALUES (?, ?, ?)', me, target, iso());
+    return { state: 'blocked' };
+  });
+}
+
+export async function unblockUser(db, me, targetId) {
+  await db.run('DELETE FROM user_blocks WHERE blocker = ? AND blocked = ?', me, Number(targetId));
+  return { state: 'none' };
+}
+
+async function usersByIds(db, ids) {
+  const map = new Map();
+  for (const id of ids) { const u = await getUser(db, id); if (u && !u.deleted_at) map.set(id, publicUser(u)); }
+  return map;
+}
+
+export async function listFriends(db, me) {
+  const rows = await db.all(
+    'SELECT CASE WHEN user_low = ? THEN user_high ELSE user_low END AS other, created_at FROM friendships WHERE user_low = ? OR user_high = ? ORDER BY created_at DESC',
+    me, me, me);
+  const map = await usersByIds(db, rows.map((r) => r.other));
+  return rows.map((r) => map.get(r.other)).filter(Boolean);
+}
+
+export async function listIncomingRequests(db, me) {
+  const rows = await db.all("SELECT from_user FROM friend_requests WHERE to_user = ? AND status = 'pending' ORDER BY created_at DESC", me);
+  const map = await usersByIds(db, rows.map((r) => r.from_user));
+  return rows.map((r) => map.get(r.from_user)).filter(Boolean);
+}
+
+// 지난(또는 현재) 메이트 중 친구도 차단도 아닌 사람 — 탐색/친구추가 후보. 관계상태(none|sent|received)를 붙인다.
+export async function listPastMates(db, me) {
+  const rows = await db.all(
+    'SELECT DISTINCT CASE WHEN user_a = ? THEN user_b ELSE user_a END AS other FROM matches WHERE user_a = ? OR user_b = ?',
+    me, me, me);
+  const out = [];
+  for (const { other } of rows) {
+    const u = await getUser(db, other);
+    if (!u || u.deleted_at) continue;
+    const rel = await relation(db, me, other);
+    if (rel.state === 'friends' || rel.iBlocked || rel.blockedMe) continue;
+    out.push({ ...publicUser(u), rel: rel.state }); // none | sent | received
+  }
+  return out;
+}
+
+export async function listBlocked(db, me) {
+  const rows = await db.all('SELECT blocked FROM user_blocks WHERE blocker = ? ORDER BY created_at DESC', me);
+  const map = await usersByIds(db, rows.map((r) => r.blocked));
+  return rows.map((r) => map.get(r.blocked)).filter(Boolean);
+}
+
+// 소셜 허브 한 번에: 내 친구 · 받은 요청 · 지난 메이트(후보) · 차단 목록
+export async function socialOverview(db, me) {
+  return {
+    friends: await listFriends(db, me),
+    incoming: await listIncomingRequests(db, me),
+    pastMates: await listPastMates(db, me),
+    blocked: await listBlocked(db, me),
+  };
+}
+
+export async function listNotifications(db, me) {
+  const rows = await db.all(
+    'SELECT id, type, actor_id, created_at, read_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50', me);
+  const map = await usersByIds(db, rows.filter((r) => r.actor_id).map((r) => r.actor_id));
+  return rows.map((r) => ({ id: r.id, type: r.type, at: r.created_at, read: !!r.read_at, actor: r.actor_id ? (map.get(r.actor_id) ?? null) : null }));
+}
+
+export async function unreadNotificationCount(db, me) {
+  const r = await db.get('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL', me);
+  return Number(r?.n ?? 0);
+}
+
+export async function markNotificationsRead(db, me) {
+  await db.run('UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL', iso(), me);
+  return { ok: true };
 }
 
 // ───────────────────────── 개인 일정 ─────────────────────────

@@ -265,6 +265,46 @@ CREATE TABLE IF NOT EXISTS visits (
   created_at TEXT NOT NULL
 );
 
+-- ───────── 소셜 (친구·차단·알림) — 함께 매칭했던 메이트끼리만 친구가 될 수 있다 ─────────
+-- 친구: 수락된 양방향 관계. 중복 방지로 user_low < user_high 로 저장한다.
+CREATE TABLE IF NOT EXISTS friendships (
+  id         ${ID},
+  user_low   INTEGER NOT NULL REFERENCES users(id),
+  user_high  INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  UNIQUE (user_low, user_high)
+);
+
+-- 친구 요청: 보낸 사람 → 받은 사람. 거절·취소 뒤 다시 보내면 같은 줄을 pending 으로 되돌린다.
+CREATE TABLE IF NOT EXISTS friend_requests (
+  id           ${ID},
+  from_user    INTEGER NOT NULL REFERENCES users(id),
+  to_user      INTEGER NOT NULL REFERENCES users(id),
+  status       TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | declined | cancelled
+  created_at   TEXT NOT NULL,
+  responded_at TEXT,
+  UNIQUE (from_user, to_user)
+);
+
+-- 차단: 차단한 사람 → 차단당한 사람. 한쪽이라도 차단하면 서로 안 보이고 요청·찌르기 불가.
+CREATE TABLE IF NOT EXISTS user_blocks (
+  id         ${ID},
+  blocker    INTEGER NOT NULL REFERENCES users(id),
+  blocked    INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  UNIQUE (blocker, blocked)
+);
+
+-- 알림: 친구요청 받음·수락됨 등. 후속 단계(찌르기 등)도 여기에 쌓는다.
+CREATE TABLE IF NOT EXISTS notifications (
+  id         ${ID},
+  user_id    INTEGER NOT NULL REFERENCES users(id), -- 알림을 받는 사람
+  type       TEXT NOT NULL,                          -- friend_request | friend_accepted
+  actor_id   INTEGER REFERENCES users(id),           -- 알림을 일으킨 사람
+  created_at TEXT NOT NULL,
+  read_at    TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_requests_status ON match_requests(status);
 CREATE INDEX IF NOT EXISTS idx_matches_users ON matches(user_a, user_b);
 CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
@@ -279,13 +319,20 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_reports_match ON reports(match_id);
 CREATE INDEX IF NOT EXISTS idx_admin_logs_at ON admin_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_reviews_created ON reviews(created_at);
+CREATE INDEX IF NOT EXISTS idx_friendships_low ON friendships(user_low);
+CREATE INDEX IF NOT EXISTS idx_friendships_high ON friendships(user_high);
+CREATE INDEX IF NOT EXISTS idx_freq_to ON friend_requests(to_user, status);
+CREATE INDEX IF NOT EXISTS idx_freq_from ON friend_requests(from_user, status);
+CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON user_blocks(blocker);
+CREATE INDEX IF NOT EXISTS idx_notifs_user ON notifications(user_id, read_at);
 ${dialect === 'pg' ? RLS : ''}`;
 }
 
 // PostgreSQL(Supabase)에서는 모든 테이블에 RLS를 켜 둔다. 정책이 없으므로 Supabase 공개 API(anon 키)로는
 // 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
 const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'reviews', 'email_codes', 'deposits', 'attendance_codes', 'visits', 'chat_reads', 'strikes', 'sent_reminders',
-  'sessions', 'rate_limits', 'reports', 'admin_logs', 'blocked_emails', 'ops_heartbeats', 'schema_migrations']
+  'sessions', 'rate_limits', 'reports', 'admin_logs', 'blocked_emails', 'ops_heartbeats', 'schema_migrations',
+  'friendships', 'friend_requests', 'user_blocks', 'notifications']
   .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
   .join('\n');
 

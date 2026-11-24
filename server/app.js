@@ -262,11 +262,24 @@ export function createApp({
     record: await S.studyRecord(db, req.user.id), // 내 공부 기록 (누적·스트릭)
   }));
 
-  // 공개 프로필 보기 (로그인 사용자) — 아무 사용자의 공개 프로필 + 긍정 지표.
+  // 공개 프로필 보기 (로그인 사용자) — 아무 사용자의 공개 프로필 + 긍정 지표 + 나와의 관계.
   // 실명·학과·전화·이메일은 빠진다 (server/service.js publicProfile)
   api.get('/users/:id', member, async (req, res) => res.json({
-    user: await S.publicProfile(db, Number(req.params.id)),
+    user: await S.publicProfile(db, Number(req.params.id), req.user.id),
   }));
+
+  // ───────── 소셜 (친구·차단·알림) — 친구는 함께 매칭했던 메이트끼리만 ─────────
+  api.get('/social', member, async (req, res) => res.json(await S.socialOverview(db, req.user.id)));
+  api.post('/friends/:id/request', member, async (req, res) => res.json(await S.sendFriendRequest(db, req.user.id, Number(req.params.id))));
+  api.post('/friends/:id/respond', member, async (req, res) => res.json(await S.respondFriendRequest(db, req.user.id, Number(req.params.id), req.body?.accept === true)));
+  api.post('/friends/:id/remove', member, async (req, res) => res.json(await S.removeFriendLink(db, req.user.id, Number(req.params.id))));
+  api.post('/users/:id/block', member, async (req, res) => res.json(await S.blockUser(db, req.user.id, Number(req.params.id))));
+  api.post('/users/:id/unblock', member, async (req, res) => res.json(await S.unblockUser(db, req.user.id, Number(req.params.id))));
+  api.get('/notifications', member, async (req, res) => res.json({
+    items: await S.listNotifications(db, req.user.id),
+    unread: await S.unreadNotificationCount(db, req.user.id),
+  }));
+  api.post('/notifications/read', member, async (req, res) => res.json(await S.markNotificationsRead(db, req.user.id)));
 
   // 매칭 신청
   api.post('/requests', member, async (req, res) => {
