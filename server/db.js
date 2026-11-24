@@ -314,6 +314,15 @@ CREATE TABLE IF NOT EXISTS pokes (
   created_at TEXT NOT NULL
 );
 
+-- 메이트 저장(즐겨찾기): 함께 공부했던 메이트를 저장해 둔다.
+CREATE TABLE IF NOT EXISTS saved_mates (
+  id         ${ID},
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  saved_id   INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  UNIQUE (user_id, saved_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_requests_status ON match_requests(status);
 CREATE INDEX IF NOT EXISTS idx_matches_users ON matches(user_a, user_b);
 CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
@@ -336,6 +345,7 @@ CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON user_blocks(blocker);
 CREATE INDEX IF NOT EXISTS idx_notifs_user ON notifications(user_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_pokes_from_day ON pokes(from_user, day);
 CREATE INDEX IF NOT EXISTS idx_pokes_pair ON pokes(from_user, to_user, created_at);
+CREATE INDEX IF NOT EXISTS idx_saved_user ON saved_mates(user_id);
 ${dialect === 'pg' ? RLS : ''}`;
 }
 
@@ -343,7 +353,7 @@ ${dialect === 'pg' ? RLS : ''}`;
 // 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
 const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'reviews', 'email_codes', 'deposits', 'attendance_codes', 'visits', 'chat_reads', 'strikes', 'sent_reminders',
   'sessions', 'rate_limits', 'reports', 'admin_logs', 'blocked_emails', 'ops_heartbeats', 'schema_migrations',
-  'friendships', 'friend_requests', 'user_blocks', 'notifications', 'pokes']
+  'friendships', 'friend_requests', 'user_blocks', 'notifications', 'pokes', 'saved_mates']
   .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
   .join('\n');
 

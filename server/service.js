@@ -559,7 +559,11 @@ export async function publicProfile(db, targetId, viewerId = null) {
     const rel = await relation(db, viewerId, id);
     if (rel.blockedMe) throw new AppError(404, '프로필을 찾을 수 없어요.'); // 상대가 나를 차단함 → 숨김
     base.rel = rel.iBlocked ? 'blocked' : rel.state; // self|friends|sent|received|none|blocked
-    base.canRequest = rel.state === 'none' && !rel.iBlocked && !u.is_bot && await haveMatched(db, viewerId, id);
+    const matched = !u.is_bot && await haveMatched(db, viewerId, id);
+    base.canRequest = rel.state === 'none' && !rel.iBlocked && matched;
+    base.canSave = !rel.iBlocked && matched; // 함께 공부한 메이트면 저장 가능
+    base.saved = base.canSave ? await isSaved(db, viewerId, id) : false;
+    if (base.rel === 'friends') base.chatMatchId = await sharedMatchId(db, viewerId, id); // 친구 채팅방
   }
   return base;
 }
@@ -750,6 +754,7 @@ export async function socialOverview(db, me) {
     friends: await listFriends(db, me),
     incoming: await listIncomingRequests(db, me),
     pastMates: await listPastMates(db, me),
+    saved: await listSavedMates(db, me),
     blocked: await listBlocked(db, me),
   };
 }
@@ -806,6 +811,42 @@ export async function pokeUser(db, me, targetId) {
     await notify(t, target, 'poke', me);
   });
   return { ok: true };
+}
+
+// ───────── 메이트 저장 (즐겨찾기) — 함께 공부했던 메이트만 ─────────
+export async function saveMate(db, me, targetId) {
+  const target = Number(targetId);
+  if (!Number.isInteger(target) || target === me) throw new AppError(400, '잘못된 요청이에요.');
+  const u = await getUser(db, target);
+  if (!u || u.deleted_at) throw new AppError(404, '사용자를 찾을 수 없어요.');
+  if (await blockedBetween(db, me, target)) throw new AppError(403, '저장할 수 없어요.');
+  if (!(await haveMatched(db, me, target))) throw new AppError(403, '함께 공부한 메이트만 저장할 수 있어요.');
+  const exists = await db.get('SELECT 1 AS x FROM saved_mates WHERE user_id = ? AND saved_id = ?', me, target);
+  if (!exists) await db.run('INSERT INTO saved_mates (user_id, saved_id, created_at) VALUES (?, ?, ?)', me, target, iso());
+  return { saved: true };
+}
+
+export async function unsaveMate(db, me, targetId) {
+  await db.run('DELETE FROM saved_mates WHERE user_id = ? AND saved_id = ?', me, Number(targetId));
+  return { saved: false };
+}
+
+async function isSaved(db, me, target) {
+  return !!(await db.get('SELECT 1 AS x FROM saved_mates WHERE user_id = ? AND saved_id = ?', me, target));
+}
+
+export async function listSavedMates(db, me) {
+  const rows = await db.all('SELECT saved_id FROM saved_mates WHERE user_id = ? ORDER BY created_at DESC', me);
+  const map = await usersByIds(db, rows.map((r) => r.saved_id));
+  return rows.map((r) => map.get(r.saved_id)).filter(Boolean);
+}
+
+// 두 사람의 가장 최근 매칭 id (친구 채팅방 = 이 매칭 스레드)
+async function sharedMatchId(db, a, b) {
+  const r = await db.get(
+    'SELECT id FROM matches WHERE (user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?) ORDER BY id DESC LIMIT 1',
+    a, b, b, a);
+  return r ? r.id : null;
 }
 
 // ───────────────────────── 개인 일정 ─────────────────────────
@@ -1169,6 +1210,25 @@ export async function activeMatches(db, userId, opts) {
   await autoSettle(db);
   const out = [];
   for (const m of await activeMatchRows(db, userId)) out.push(await matchDetail(db, userId, m, opts));
+  return out;
+}
+
+// 채팅 탭 대화 목록: 진행 중 매칭 + (친구인 경우) 끝난 매칭도. 상대별로 가장 최근 하나만.
+export async function chatThreads(db, userId, opts) {
+  await autoSettle(db);
+  const rows = await db.all(
+    "SELECT * FROM matches WHERE (user_a = ? OR user_b = ?) AND status IN ('active', 'reported', 'closed') ORDER BY id DESC",
+    userId, userId);
+  const seen = new Set();
+  const out = [];
+  for (const raw of rows) {
+    const m = parseMatch(raw);
+    const mate = mateOf(m, userId);
+    if (seen.has(mate)) continue;
+    seen.add(mate); // 상대별 가장 최근 매칭으로만 판단
+    if (m.status === 'closed' && !(await areFriends(db, userId, mate))) continue; // 끝난 매칭은 친구일 때만 채팅 유지
+    out.push(await matchDetail(db, userId, m, opts));
+  }
   return out;
 }
 
@@ -1979,7 +2039,9 @@ export async function unreadCounts(db, userId) {
        FROM matches m
        JOIN messages msg ON msg.match_id = m.id AND msg.user_id <> ?
        LEFT JOIN chat_reads r ON r.match_id = m.id AND r.user_id = ?
-      WHERE (m.user_a = ? OR m.user_b = ?) AND m.status IN ('active', 'reported')
+      WHERE (m.user_a = ? OR m.user_b = ?)
+        AND (m.status IN ('active', 'reported') OR (m.status = 'closed' AND EXISTS (
+          SELECT 1 FROM friendships f WHERE (f.user_low = m.user_a AND f.user_high = m.user_b) OR (f.user_low = m.user_b AND f.user_high = m.user_a))))
         AND msg.id > COALESCE(r.last_read_id, 0)
       GROUP BY m.id`,
     userId, userId, userId, userId,
@@ -2018,7 +2080,8 @@ export async function sendMessage(db, userId, matchId, body) {
   if (text.length > 500) throw new AppError(400, '메시지는 500자까지 보낼 수 있어요.');
   return db.tx(async (t) => {
     const m = await loadMatchForUser(t, userId, matchId);
-    if (m.status === 'closed') throw new AppError(400, '종료된 매칭이에요.');
+    // 끝난 매칭은 원래 채팅을 닫지만, 친구끼리는 계속 쓸 수 있다
+    if (m.status === 'closed' && !(await areFriends(t, userId, mateOf(m, userId)))) throw new AppError(400, '종료된 매칭이에요.');
     const insert = (uid, msg) => t.run(
       'INSERT INTO messages (match_id, user_id, body, created_at) VALUES (?, ?, ?, ?)', m.id, uid, msg, iso(),
     );

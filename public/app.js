@@ -1918,7 +1918,7 @@ async function renderChat(alive, id) {
   setTop({ title: '채팅' });
   setTabs('chat');
   loading();
-  const [{ matches }, { user }, u] = await Promise.all([api('/matches/active'), api('/me'), api('/chat/unread').catch(() => null)]);
+  const [{ matches }, { user }, u] = await Promise.all([api('/chat/threads'), api('/me'), api('/chat/unread').catch(() => null)]);
   if (!alive()) return;
   if (u) unread = u;
   const match = matches.find((m) => m.id === id) ?? matches[0];
@@ -2520,13 +2520,21 @@ function profileActions(u) {
   if (u.rel === 'self' || u.isBot) return '';
   const wrap = (inner) => `<div class="row" style="gap:8px;margin-top:14px;flex-wrap:wrap">${inner}</div>`;
   if (u.rel === 'blocked') return wrap(`<button class="btn ghost block" data-social="unblock" data-id="${u.id}">차단 해제</button>`);
-  let main = '';
-  if (u.rel === 'friends') main = `<span class="small" style="color:var(--green);font-weight:700;align-self:center">✓ 친구</span><button class="btn primary" data-social="poke" data-id="${u.id}">콕 찌르기</button><button class="btn ghost" data-social="remove" data-id="${u.id}" data-confirm="${esc(u.name)}님과 친구를 끊을까요?">친구 끊기</button>`;
-  else if (u.rel === 'sent') main = `<button class="btn ghost" data-social="remove" data-id="${u.id}">친구 요청 취소</button>`;
-  else if (u.rel === 'received') main = `<button class="btn primary" data-social="accept" data-id="${u.id}">친구 수락</button><button class="btn ghost" data-social="decline" data-id="${u.id}">거절</button>`;
-  else if (u.canRequest) main = `<button class="btn primary" data-social="add" data-id="${u.id}">친구 추가</button>`;
-  else main = '<p class="tiny muted" style="margin:0;align-self:center">함께 공부한 뒤에 친구를 추가할 수 있어요.</p>';
-  return wrap(`${main}<button class="btn ghost" style="color:var(--red);margin-left:auto" data-social="block" data-id="${u.id}" data-confirm="${esc(u.name)}님을 차단할까요? 친구·요청이 해제돼요.">차단</button>`);
+  const parts = [];
+  if (u.rel === 'friends') {
+    parts.push(`<button class="btn primary" data-social="poke" data-id="${u.id}">콕 찌르기</button>`);
+    if (u.chatMatchId) parts.push(`<a class="btn ghost" href="#/chat/${u.chatMatchId}">채팅</a>`);
+    parts.push(`<button class="btn ghost" data-social="remove" data-id="${u.id}" data-confirm="${esc(u.name)}님과 친구를 끊을까요?">친구 끊기</button>`);
+  } else if (u.rel === 'sent') parts.push(`<button class="btn ghost" data-social="remove" data-id="${u.id}">친구 요청 취소</button>`);
+  else if (u.rel === 'received') parts.push(`<button class="btn primary" data-social="accept" data-id="${u.id}">친구 수락</button>`, `<button class="btn ghost" data-social="decline" data-id="${u.id}">거절</button>`);
+  else if (u.canRequest) parts.push(`<button class="btn primary" data-social="add" data-id="${u.id}">친구 추가</button>`);
+  // 저장 토글 (함께 공부한 메이트)
+  if (u.canSave) parts.push(u.saved
+    ? `<button class="btn ghost" data-social="unsave" data-id="${u.id}">저장됨 ✓</button>`
+    : `<button class="btn ghost" data-social="save" data-id="${u.id}">저장</button>`);
+  if (!parts.length) parts.push('<p class="tiny muted" style="margin:0;align-self:center">함께 공부한 뒤에 친구·저장을 할 수 있어요.</p>');
+  parts.push(`<button class="btn ghost" style="color:var(--red);margin-left:auto" data-social="block" data-id="${u.id}" data-confirm="${esc(u.name)}님을 차단할까요? 친구·요청이 해제돼요.">차단</button>`);
+  return wrap(parts.join(''));
 }
 
 // 소셜 버튼 공통 처리: data-social(add|remove|accept|decline|block|unblock) + data-id, 끝나면 refresh()
@@ -2545,13 +2553,16 @@ function bindSocialButtons(root, refresh) {
         block: () => api(`/users/${id}/block`, { method: 'POST' }),
         unblock: () => api(`/users/${id}/unblock`, { method: 'POST' }),
         poke: () => api(`/friends/${id}/poke`, { method: 'POST' }),
+        save: () => api(`/users/${id}/save`, { method: 'POST' }),
+        unsave: () => api(`/users/${id}/unsave`, { method: 'POST' }),
       }[act];
       if (!call) return;
       btn.disabled = true;
       try {
         const r = await call();
         if (act === 'poke') { toast('콕 찔렀어요!'); btn.textContent = '콕 완료'; return; } // 성공 시 버튼은 잠근 채로 둔다
-        toast({ friends: '친구가 됐어요!', sent: '친구 요청을 보냈어요.', none: '처리했어요.', blocked: '차단했어요.' }[r?.state] ?? '처리했어요.');
+        const byAct = { save: '저장했어요.', unsave: '저장을 해제했어요.' };
+        toast(byAct[act] ?? { friends: '친구가 됐어요!', sent: '친구 요청을 보냈어요.', none: '처리했어요.', blocked: '차단했어요.' }[r?.state] ?? '처리했어요.');
         await refresh();
       } catch (err) { btn.disabled = false; toast(err.message, true); }
     });
@@ -2581,6 +2592,7 @@ async function renderFriends(alive) {
 
   const incoming = d.incoming.map((u) => nameRow(u, `<button class="btn sm primary" data-social="accept" data-id="${u.id}">수락</button><button class="btn sm ghost" data-social="decline" data-id="${u.id}">거절</button>`)).join('');
   const friends = d.friends.map((u) => nameRow(u, `<button class="btn sm primary" data-social="poke" data-id="${u.id}">콕</button>`)).join('');
+  const saved = (d.saved ?? []).map((u) => nameRow(u, `<button class="btn sm ghost" data-social="unsave" data-id="${u.id}">저장 해제</button>`)).join('');
   const mates = d.pastMates.map((u) => nameRow(u,
     u.rel === 'sent' ? `<button class="btn sm ghost" data-social="remove" data-id="${u.id}">요청 취소</button>`
       : u.rel === 'received' ? `<button class="btn sm primary" data-social="accept" data-id="${u.id}">수락</button>`
@@ -2595,11 +2607,12 @@ async function renderFriends(alive) {
     ? `<section class="section"><h2 class="section-title">알림</h2>${notis.items.slice(0, 8).map((n) => `<div class="list-item"><span class="small">${notiText(n)}</span>${notiAction(n)}</div>`).join('')}</section>`
     : '';
 
-  const empty = !incoming && !friends && !mates && !blocked && !alerts;
+  const empty = !incoming && !friends && !saved && !mates && !blocked && !alerts;
   view.innerHTML = `
     ${alerts}
     ${section(`받은 요청 ${d.incoming.length ? `<span class="badge inline">${d.incoming.length}</span>` : ''}`, incoming)}
     ${section('내 친구', friends)}
+    ${section('저장한 메이트', saved)}
     ${section('지난 메이트', mates, '<span class="hint">함께 공부했던 사람</span>')}
     ${section('차단', blocked)}
     ${empty ? '<div class="empty"><h3>아직 친구가 없어요</h3><p>함께 공부한 메이트의 프로필에서 \'친구 추가\'를 눌러 보세요. 지난 메이트가 여기에 모여요.</p><a class="btn primary mt-lg" href="#/match">메이트로</a></div>' : ''}`;

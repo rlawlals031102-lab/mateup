@@ -276,6 +276,8 @@ export function createApp({
   api.post('/friends/:id/poke', member, async (req, res) => res.json(await S.pokeUser(db, req.user.id, Number(req.params.id)))); // 콕 찌르기(친구한정·하루10회·24h쿨다운)
   api.post('/users/:id/block', member, async (req, res) => res.json(await S.blockUser(db, req.user.id, Number(req.params.id))));
   api.post('/users/:id/unblock', member, async (req, res) => res.json(await S.unblockUser(db, req.user.id, Number(req.params.id))));
+  api.post('/users/:id/save', member, async (req, res) => res.json(await S.saveMate(db, req.user.id, Number(req.params.id)))); // 메이트 저장
+  api.post('/users/:id/unsave', member, async (req, res) => res.json(await S.unsaveMate(db, req.user.id, Number(req.params.id))));
   api.get('/notifications', member, async (req, res) => res.json({
     items: await S.listNotifications(db, req.user.id),
     unread: await S.unreadNotificationCount(db, req.user.id),
@@ -304,6 +306,8 @@ export function createApp({
   api.get('/matches/active', member, async (req, res) => res.json({
     matches: await S.activeMatches(db, req.user.id, opts), strikes: await S.strikeStatus(db, req.user.id),
   }));
+  // 채팅 탭 대화 목록: 진행 중 매칭 + 친구인 경우 끝난 매칭도
+  api.get('/chat/threads', member, async (req, res) => res.json({ matches: await S.chatThreads(db, req.user.id, opts) }));
   // 지난 매칭 다시 보기 (/matches/current 보다 뒤에 둬야 'current'를 가로채지 않음)
   api.get('/matches/:id', member, async (req, res) => {
     res.json({ match: await S.matchById(db, req.user.id, Number(req.params.id), opts) });
