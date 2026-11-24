@@ -123,6 +123,7 @@ async function api(path, { method = 'GET', body } = {}) {
     headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
+    cache: 'no-store', // API 응답은 캐시하지 않는다 (알림·소셜 등 최신 데이터 보장)
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -2520,7 +2521,7 @@ function profileActions(u) {
   const wrap = (inner) => `<div class="row" style="gap:8px;margin-top:14px;flex-wrap:wrap">${inner}</div>`;
   if (u.rel === 'blocked') return wrap(`<button class="btn ghost block" data-social="unblock" data-id="${u.id}">차단 해제</button>`);
   let main = '';
-  if (u.rel === 'friends') main = `<span class="small" style="color:var(--green);font-weight:700;align-self:center">✓ 친구</span><button class="btn ghost" data-social="remove" data-id="${u.id}" data-confirm="${esc(u.name)}님과 친구를 끊을까요?">친구 끊기</button>`;
+  if (u.rel === 'friends') main = `<span class="small" style="color:var(--green);font-weight:700;align-self:center">✓ 친구</span><button class="btn primary" data-social="poke" data-id="${u.id}">콕 찌르기</button><button class="btn ghost" data-social="remove" data-id="${u.id}" data-confirm="${esc(u.name)}님과 친구를 끊을까요?">친구 끊기</button>`;
   else if (u.rel === 'sent') main = `<button class="btn ghost" data-social="remove" data-id="${u.id}">친구 요청 취소</button>`;
   else if (u.rel === 'received') main = `<button class="btn primary" data-social="accept" data-id="${u.id}">친구 수락</button><button class="btn ghost" data-social="decline" data-id="${u.id}">거절</button>`;
   else if (u.canRequest) main = `<button class="btn primary" data-social="add" data-id="${u.id}">친구 추가</button>`;
@@ -2543,11 +2544,13 @@ function bindSocialButtons(root, refresh) {
         decline: () => api(`/friends/${id}/respond`, { method: 'POST', body: { accept: false } }),
         block: () => api(`/users/${id}/block`, { method: 'POST' }),
         unblock: () => api(`/users/${id}/unblock`, { method: 'POST' }),
+        poke: () => api(`/friends/${id}/poke`, { method: 'POST' }),
       }[act];
       if (!call) return;
       btn.disabled = true;
       try {
         const r = await call();
+        if (act === 'poke') { toast('콕 찔렀어요!'); btn.textContent = '콕 완료'; return; } // 성공 시 버튼은 잠근 채로 둔다
         toast({ friends: '친구가 됐어요!', sent: '친구 요청을 보냈어요.', none: '처리했어요.', blocked: '차단했어요.' }[r?.state] ?? '처리했어요.');
         await refresh();
       } catch (err) { btn.disabled = false; toast(err.message, true); }
@@ -2577,7 +2580,7 @@ async function renderFriends(alive) {
   const section = (title, body, hint) => (body ? `<section class="section"><div class="section-head"><h2 class="section-title">${title}</h2>${hint ?? ''}</div>${body}</section>` : '');
 
   const incoming = d.incoming.map((u) => nameRow(u, `<button class="btn sm primary" data-social="accept" data-id="${u.id}">수락</button><button class="btn sm ghost" data-social="decline" data-id="${u.id}">거절</button>`)).join('');
-  const friends = d.friends.map((u) => nameRow(u, `<span class="chev">${icon('caret-right')}</span>`)).join('');
+  const friends = d.friends.map((u) => nameRow(u, `<button class="btn sm primary" data-social="poke" data-id="${u.id}">콕</button>`)).join('');
   const mates = d.pastMates.map((u) => nameRow(u,
     u.rel === 'sent' ? `<button class="btn sm ghost" data-social="remove" data-id="${u.id}">요청 취소</button>`
       : u.rel === 'received' ? `<button class="btn sm primary" data-social="accept" data-id="${u.id}">수락</button>`
@@ -2585,9 +2588,11 @@ async function renderFriends(alive) {
   const blocked = d.blocked.map((u) => nameRow(u, `<button class="btn sm ghost" data-social="unblock" data-id="${u.id}">차단 해제</button>`)).join('');
 
   const notiText = (n) => (n.type === 'friend_request' ? `${esc(n.actor?.name ?? '누군가')}님이 친구 요청을 보냈어요`
-    : n.type === 'friend_accepted' ? `${esc(n.actor?.name ?? '누군가')}님이 친구 요청을 수락했어요` : '새 알림');
+    : n.type === 'friend_accepted' ? `${esc(n.actor?.name ?? '누군가')}님이 친구 요청을 수락했어요`
+      : n.type === 'poke' ? `${esc(n.actor?.name ?? '누군가')}님이 콕 찔렀어요` : '새 알림');
+  const notiAction = (n) => (n.type === 'poke' && n.actor ? `<button class="btn sm ghost" data-social="poke" data-id="${n.actor.id}">되찌르기</button>` : `<span class="tiny muted">${fmtAt(n.at)}</span>`);
   const alerts = notis.items.length
-    ? `<section class="section"><h2 class="section-title">알림</h2>${notis.items.slice(0, 8).map((n) => `<div class="list-item"><span class="small">${notiText(n)}</span><span class="tiny muted">${fmtAt(n.at)}</span></div>`).join('')}</section>`
+    ? `<section class="section"><h2 class="section-title">알림</h2>${notis.items.slice(0, 8).map((n) => `<div class="list-item"><span class="small">${notiText(n)}</span>${notiAction(n)}</div>`).join('')}</section>`
     : '';
 
   const empty = !incoming && !friends && !mates && !blocked && !alerts;

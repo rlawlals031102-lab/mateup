@@ -756,7 +756,7 @@ export async function socialOverview(db, me) {
 
 export async function listNotifications(db, me) {
   const rows = await db.all(
-    'SELECT id, type, actor_id, created_at, read_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50', me);
+    'SELECT id, type, actor_id, created_at, read_at FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 50', me);
   const map = await usersByIds(db, rows.filter((r) => r.actor_id).map((r) => r.actor_id));
   return rows.map((r) => ({ id: r.id, type: r.type, at: r.created_at, read: !!r.read_at, actor: r.actor_id ? (map.get(r.actor_id) ?? null) : null }));
 }
@@ -768,6 +768,43 @@ export async function unreadNotificationCount(db, me) {
 
 export async function markNotificationsRead(db, me) {
   await db.run('UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL', iso(), me);
+  return { ok: true };
+}
+
+// ───────── 콕 찌르기 (poke) — 친구끼리만, 하루 10번, 미응답 24시간 쿨다운 ─────────
+const POKE_DAILY_CAP = 10;
+const POKE_COOLDOWN_MS = 24 * 3600 * 1000;
+
+export async function pokeUser(db, me, targetId) {
+  const target = Number(targetId);
+  if (!Number.isInteger(target) || target === me) throw new AppError(400, '잘못된 요청이에요.');
+  const u = await getUser(db, target);
+  if (!u || u.deleted_at) throw new AppError(404, '사용자를 찾을 수 없어요.');
+  if (await blockedBetween(db, me, target)) throw new AppError(403, '콕 찌를 수 없어요.');
+  if (!(await areFriends(db, me, target))) throw new AppError(403, '친구끼리만 콕 찌를 수 있어요.');
+
+  // 하루 10번 (KST 기준)
+  const used = await db.get('SELECT COUNT(*) AS n FROM pokes WHERE from_user = ? AND day = ?', me, T.today());
+  if (Number(used?.n ?? 0) >= POKE_DAILY_CAP) throw new AppError(429, `오늘은 콕 찌르기를 다 썼어요. 하루 ${POKE_DAILY_CAP}번까지예요.`);
+
+  // 미응답 24시간 쿨다운 — 내가 마지막으로 찌른 뒤 상대가 안 찔렀고 24시간이 안 지났으면 막는다
+  const last = await db.get('SELECT id, created_at FROM pokes WHERE from_user = ? AND to_user = ? ORDER BY id DESC LIMIT 1', me, target);
+  if (last) {
+    const since = T.now().getTime() - new Date(last.created_at).getTime();
+    if (since < POKE_COOLDOWN_MS) {
+      // 상대가 내 마지막 콕 이후에 되찔렀나 (삽입 순서 id 기준 — 같은 시각이어도 정확)
+      const answered = await db.get('SELECT 1 AS x FROM pokes WHERE from_user = ? AND to_user = ? AND id > ?', target, me, last.id);
+      if (!answered) {
+        const hrs = Math.max(1, Math.ceil((POKE_COOLDOWN_MS - since) / 3600000));
+        throw new AppError(429, `아직 답이 없어요. ${hrs}시간 뒤에 다시 콕 찌를 수 있어요.`);
+      }
+    }
+  }
+
+  await db.tx(async (t) => {
+    await t.run('INSERT INTO pokes (from_user, to_user, day, created_at) VALUES (?, ?, ?, ?)', me, target, T.today(), iso());
+    await notify(t, target, 'poke', me);
+  });
   return { ok: true };
 }
 

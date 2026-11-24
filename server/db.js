@@ -295,14 +295,23 @@ CREATE TABLE IF NOT EXISTS user_blocks (
   UNIQUE (blocker, blocked)
 );
 
--- 알림: 친구요청 받음·수락됨 등. 후속 단계(찌르기 등)도 여기에 쌓는다.
+-- 알림: 친구요청 받음·수락됨·콕 찌르기 등. 후속 기능도 여기에 쌓는다.
 CREATE TABLE IF NOT EXISTS notifications (
   id         ${ID},
   user_id    INTEGER NOT NULL REFERENCES users(id), -- 알림을 받는 사람
-  type       TEXT NOT NULL,                          -- friend_request | friend_accepted
+  type       TEXT NOT NULL,                          -- friend_request | friend_accepted | poke
   actor_id   INTEGER REFERENCES users(id),           -- 알림을 일으킨 사람
   created_at TEXT NOT NULL,
   read_at    TEXT
+);
+
+-- 콕 찌르기(페북 poke): 친구끼리만. day(KST 날짜)로 하루 10번 제한, created_at 으로 미응답 24시간 쿨다운.
+CREATE TABLE IF NOT EXISTS pokes (
+  id         ${ID},
+  from_user  INTEGER NOT NULL REFERENCES users(id),
+  to_user    INTEGER NOT NULL REFERENCES users(id),
+  day        TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_status ON match_requests(status);
@@ -325,6 +334,8 @@ CREATE INDEX IF NOT EXISTS idx_freq_to ON friend_requests(to_user, status);
 CREATE INDEX IF NOT EXISTS idx_freq_from ON friend_requests(from_user, status);
 CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON user_blocks(blocker);
 CREATE INDEX IF NOT EXISTS idx_notifs_user ON notifications(user_id, read_at);
+CREATE INDEX IF NOT EXISTS idx_pokes_from_day ON pokes(from_user, day);
+CREATE INDEX IF NOT EXISTS idx_pokes_pair ON pokes(from_user, to_user, created_at);
 ${dialect === 'pg' ? RLS : ''}`;
 }
 
@@ -332,7 +343,7 @@ ${dialect === 'pg' ? RLS : ''}`;
 // 아무 데이터도 읽거나 쓸 수 없고, 테이블 소유자로 직접 접속하는 우리 서버만 접근한다.
 const RLS = ['users', 'auth_tokens', 'match_requests', 'matches', 'appointments', 'attendance', 'messages', 'point_logs', 'reviews', 'email_codes', 'deposits', 'attendance_codes', 'visits', 'chat_reads', 'strikes', 'sent_reminders',
   'sessions', 'rate_limits', 'reports', 'admin_logs', 'blocked_emails', 'ops_heartbeats', 'schema_migrations',
-  'friendships', 'friend_requests', 'user_blocks', 'notifications']
+  'friendships', 'friend_requests', 'user_blocks', 'notifications', 'pokes']
   .map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`)
   .join('\n');
 

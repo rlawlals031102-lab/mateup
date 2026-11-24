@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { openSqlite } from '../server/db.js';
 import { openPglite } from '../server/db-pg.js';
 import * as S from '../server/service.js';
-import { setNow, kst } from '../server/time.js';
+import { setNow, kst, today } from '../server/time.js';
 
 const DRIVERS = { sqlite: () => openSqlite(':memory:'), postgres: () => openPglite() };
 const iso = () => new Date().toISOString();
@@ -130,6 +130,46 @@ for (const [name, open] of Object.entries(DRIVERS)) {
         await makeMatch(a.id, bot.id);
         await assert.rejects(S.sendFriendRequest(db, a.id, bot.id), /체험용|메이트에게는/);
       }
+    });
+
+    // ── 콕 찌르기(poke) ──
+    async function friends() {
+      const [a, b] = await twoMates();
+      await S.sendFriendRequest(db, a.id, b.id);
+      await S.respondFriendRequest(db, b.id, a.id, true);
+      return [a, b];
+    }
+
+    test('콕 찌르기는 친구끼리만, 찌르면 알림이 간다', async () => {
+      const [a, b] = await twoMates(); // 매칭했지만 아직 친구 아님
+      await assert.rejects(S.pokeUser(db, a.id, b.id), /친구끼리만/);
+      await S.sendFriendRequest(db, a.id, b.id);
+      await S.respondFriendRequest(db, b.id, a.id, true);
+      assert.equal((await S.pokeUser(db, a.id, b.id)).ok, true);
+      assert.equal((await S.listNotifications(db, b.id))[0].type, 'poke');
+    });
+
+    test('미응답 24시간 쿨다운 — 되찌르면 바로 다시 가능', async () => {
+      const [a, b] = await friends();
+      await S.pokeUser(db, a.id, b.id);
+      await assert.rejects(S.pokeUser(db, a.id, b.id), /아직 답이 없어요|시간 뒤/); // 바로 또 = 쿨다운
+      await S.pokeUser(db, b.id, a.id); // B가 되찌름 → 응답됨
+      assert.equal((await S.pokeUser(db, a.id, b.id)).ok, true);
+    });
+
+    test('24시간이 지나면 응답 없어도 다시 가능', async () => {
+      const [a, b] = await friends();
+      await S.pokeUser(db, a.id, b.id);
+      setNow(kst(2026, 11, 1, 10, 0)); // +25시간
+      assert.equal((await S.pokeUser(db, a.id, b.id)).ok, true);
+    });
+
+    test('하루 10번 제한', async () => {
+      const [a, b] = await friends();
+      for (let i = 0; i < 10; i++) {
+        await db.run('INSERT INTO pokes (from_user, to_user, day, created_at) VALUES (?, ?, ?, ?)', a.id, b.id, today(), iso());
+      }
+      await assert.rejects(S.pokeUser(db, a.id, b.id), /하루 10번|다 썼어요/);
     });
   });
 }

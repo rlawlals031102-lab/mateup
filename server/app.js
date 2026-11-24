@@ -273,6 +273,7 @@ export function createApp({
   api.post('/friends/:id/request', member, async (req, res) => res.json(await S.sendFriendRequest(db, req.user.id, Number(req.params.id))));
   api.post('/friends/:id/respond', member, async (req, res) => res.json(await S.respondFriendRequest(db, req.user.id, Number(req.params.id), req.body?.accept === true)));
   api.post('/friends/:id/remove', member, async (req, res) => res.json(await S.removeFriendLink(db, req.user.id, Number(req.params.id))));
+  api.post('/friends/:id/poke', member, async (req, res) => res.json(await S.pokeUser(db, req.user.id, Number(req.params.id)))); // 콕 찌르기(친구한정·하루10회·24h쿨다운)
   api.post('/users/:id/block', member, async (req, res) => res.json(await S.blockUser(db, req.user.id, Number(req.params.id))));
   api.post('/users/:id/unblock', member, async (req, res) => res.json(await S.unblockUser(db, req.user.id, Number(req.params.id))));
   api.get('/notifications', member, async (req, res) => res.json({
