@@ -12,6 +12,10 @@ export const ROOMS_BY_DATE = {
   '2026-11-27': '미래관 320호',
   '2026-11-28': '공학관 B119호',
   '2026-11-29': '공학관 B119호',
+  '2026-11-30': '공학관 B119호',
+  '2026-12-01': '공학관 B119호',
+  '2026-12-02': '공학관 B119호',
+  '2026-12-03': '공학관 B119호',
 };
 // 지정 강의실이 없는 날: 이날만 고르면 지정 강의실을 못 고르고,
 // 다른 날과 같이 고르면 이날 약속만 '채팅으로 정하기'가 된다 (다른 날은 지정 강의실).
@@ -19,7 +23,7 @@ export const NO_ROOM_DATES = ['2026-11-23', '2026-11-24'];
 export const isRoomLocation = (l) => String(l ?? '').startsWith('지정 강의실');
 // '지정 강의실 (기본)' 장소를 그날의 강의실로 바꿔 보여 준다 (강의실이 없는 날은 '채팅으로 정하기')
 // 이날부터는 강의실을 아직 정하지 않았다 (ROOMS_BY_DATE 에 넣으면 그 강의실로)
-export const ROOMS_UNASSIGNED_FROM = '2026-11-30';
+export const ROOMS_UNASSIGNED_FROM = '2026-12-04';
 export const UNASSIGNED_ROOM = '아직 배정된 강의실이 없어요';
 export const roomLocation = (location, date) => {
   if (!isRoomLocation(location)) return location;

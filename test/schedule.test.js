@@ -38,11 +38,12 @@ test('신청 검증: 월~일 어느 요일이든, 시간은 17~22시 칸만', ()
   setNow(null);
 });
 
-test('지정 강의실: 날짜마다 다른 강의실, 11/23·24는 채팅, 11/30부터는 아직 없음', () => {
+test('지정 강의실: 날짜마다 다른 강의실, 11/23·24는 채팅, 12/4부터는 아직 없음', () => {
   assert.equal(roomLocation(ROOM, '2026-11-25'), '지정 강의실 (공학관 B119호)');
   assert.equal(roomLocation(ROOM, '2026-11-27'), '지정 강의실 (미래관 320호)');
   assert.equal(roomLocation(ROOM, '2026-11-24'), CHAT);
-  assert.equal(roomLocation(ROOM, '2026-11-30'), '지정 강의실 (아직 배정된 강의실이 없어요)');
+  assert.equal(roomLocation(ROOM, '2026-12-03'), '지정 강의실 (공학관 B119호)');
+  assert.equal(roomLocation(ROOM, '2026-12-04'), '지정 강의실 (아직 배정된 강의실이 없어요)');
   assert.equal(roomLocation(ROOM, '2026-11-20'), ROOM);
   assert.equal(roomLocation(CHAT, '2026-11-25'), CHAT);
 });
