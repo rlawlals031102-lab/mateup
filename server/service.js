@@ -4,7 +4,7 @@ import * as T from './time.js';
 import {
   LOCATIONS, STYLES, CHECKIN_EARLY_MIN, MIN_OVERLAP_MIN,
   EMAIL_CODE_TTL_MIN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_RESEND_SEC, EXAM, TIME_SLOTS, STUDY_PERIOD, ADMIN_EMAILS, PROMISE_RULE,
-  PRIVACY_POLICY, PRIOR_TEAMS, roomLocation, NO_ROOM_DATES, isRoomLocation,
+  PRIVACY_POLICY, PRIOR_TEAMS, roomLocation, NO_ROOM_DATES, isRoomLocation, HOME_SLOTS, HOUR_TO_HOME,
   DEPOSIT, depositConfigured,
 } from './options.js';
 import { createSession, sessionUser, endSession, endAllSessions } from './sessions.js';
@@ -851,15 +851,19 @@ async function sharedMatchId(db, a, b) {
 
 // ───────────────────────── 개인 일정 ─────────────────────────
 
-// 홈 시간표에 보이는 내 개인 일정 (수업 등). [{ cell: "요일-시간대번호", title }]
+// 홈 시간표에 보이는 내 개인 일정 (수업 등). [{ cell: "요일-p홈줄번호", title }] (HOME_SLOTS)
+// 예전 1시간 칸("요일-번호")으로 오면 그 시작 시각이 든 홈 줄로 바꿔 저장한다.
 export async function setPersonalSchedule(db, userId, entries) {
   if (!Array.isArray(entries)) throw new AppError(400, '일정 형식이 올바르지 않습니다.');
   const seen = new Set();
   const clean = [];
   for (const e of entries) {
-    const cell = String(e?.cell ?? '');
-    const [d, i] = parseCell(cell);
-    if (!/^\d-\d+$/.test(cell) || d < 1 || d > 7 || !TIME_SLOTS[i]) throw new AppError(400, '시간표 칸이 올바르지 않습니다.');
+    const raw = String(e?.cell ?? '');
+    const m = raw.match(/^(\d)-(p?)(\d+)$/);
+    const d = Number(m?.[1]);
+    const i = m && (m[2] ? Number(m[3]) : HOUR_TO_HOME[Number(m[3])]);
+    if (!m || d < 1 || d > 7 || !HOME_SLOTS[i]) throw new AppError(400, '시간표 칸이 올바르지 않습니다.');
+    const cell = `${d}-p${i}`;
     if (seen.has(cell)) continue;
     seen.add(cell);
     const title = String(e?.title ?? '').trim().slice(0, 20) || '개인 일정';

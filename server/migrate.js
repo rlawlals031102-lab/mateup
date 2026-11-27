@@ -8,6 +8,7 @@
 //  한 곳만 적용하도록 트랜잭션 잠금(pg_advisory_xact_lock)을 건다. 되돌리기는 하지 않고, 앞으로 고치는 변경을 새로 추가한다.
 import crypto from 'node:crypto';
 import { schema, migrations } from './db.js';
+import { HOUR_TO_HOME } from './options.js';
 
 const LOCK_ID = 727274; // 마이그레이션 잠금 번호 (아무 숫자, 바꾸지 않기)
 
@@ -50,6 +51,28 @@ export const STEPS = [
       }
       // 실제 사용자의 대기 신청은 예전 날짜·칸 것이라 취소한다. 데모 메이트 신청은 서버가 켜질 때 새로 맞춘다.
       await t.run("UPDATE match_requests SET status = 'cancelled' WHERE status = 'pending' AND user_id IN (SELECT id FROM users WHERE is_bot = 0)");
+    },
+  },
+  {
+    id: 'm003',
+    name: '홈 시간표 줄 바꾸기: 개인 일정을 1시간 칸 → 홈 줄(09~18시 1시간 30분, 18~22시 1시간, "요일-p번호")로. 시작 시각이 든 줄로 옮긴다',
+    js: async (t) => {
+      for (const u of await t.all("SELECT id, personal FROM users WHERE personal IS NOT NULL AND personal <> ''")) {
+        let list;
+        try { list = JSON.parse(u.personal); } catch { continue; }
+        if (!Array.isArray(list)) continue;
+        const seen = new Set();
+        const out = [];
+        for (const p of list) {
+          const m = String(p?.cell ?? '').match(/^(\d)-(p?)(\d+)$/);
+          if (!m) continue;
+          const i = m[2] ? Number(m[3]) : HOUR_TO_HOME[Number(m[3])];
+          if (!(i >= 0)) continue;
+          const cell = `${m[1]}-p${i}`;
+          if (!seen.has(cell)) { seen.add(cell); out.push({ cell, title: p.title }); }
+        }
+        await t.run('UPDATE users SET personal = ? WHERE id = ?', JSON.stringify(out), u.id);
+      }
     },
   },
 ];

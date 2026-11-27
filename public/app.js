@@ -777,17 +777,66 @@ function myTimetable({ matches = [], pendingRequests = [], personal = [] }) {
   for (const req of pendingRequests) {
     for (const r of runsOfCells(req.cells)) put(cellsOfRun(r.day, r.start, r.end), { kind: 'pending', label: '대기' });
   }
-  const byTitle = new Map();
-  for (const p of personal) byTitle.set(p.title, [...(byTitle.get(p.title) ?? []), p.cell]);
-  for (const [title, cells] of byTitle) {
-    for (const r of runsOfCells(cells)) put(cellsOfRun(r.day, r.start, r.end), { kind: 'personal', label: title });
-  }
+  // 개인 일정은 홈 줄(HOME_SLOTS)로 저장돼서 여기(1시간 칸)에는 넣지 않는다 — 신청 화면은 개인 일정을 막지 않음
   return map;
 }
 
-// 시간표 HTML. cellInfo(cell) → { cls, label, on, disabled }
-function timetableHTML(id, cellInfo) {
-  const SLOTS = OPTIONS.timeSlots;
+// 홈 '내 시간표': 홈 줄(09~18시 1시간 30분, 18~22시 1시간) 칸 "요일-줄번호" → { personal, fill }
+//  personal: { label } (개인 일정, 서버에는 "요일-p줄번호"로 저장)
+//  fill: { kind: match|pending, label, matchId, top, h } — 매칭·대기 시간이 그 줄과 겹치는 부분 (0~1 비율)
+//   예: 17~18시 매칭 → 16:30~18:00 줄의 top 1/3, h 2/3
+const homeCellOf = (cell) => cell.replace('-p', '-'); // 서버 "1-p3" → 화면 "1-3"
+const personalCellOf = (cell) => cell.replace(/^(\d)-(\d+)$/, '$1-p$2');
+function homeTimetable({ matches = [], pendingRequests = [], personal = [] }) {
+  const SLOTS = OPTIONS.homeSlots;
+  const map = new Map();
+  const at = (cell) => map.get(cell) ?? map.set(cell, {}).get(cell);
+  const paint = (day, start, end, info) => {
+    const [s, e] = [toMinutes(start), toMinutes(end)];
+    let first = true;
+    SLOTS.forEach((row, i) => {
+      const [rs, re] = [toMinutes(row.start), toMinutes(row.end)];
+      const a = Math.max(s, rs);
+      const b = Math.min(e, re);
+      if (b <= a) return;
+      const cell = at(`${day}-${i}`);
+      if (cell.fill && cell.fill.kind === 'match' && info.kind !== 'match') return; // 매칭이 먼저
+      cell.fill = { ...info, label: first ? info.label : '', top: (a - rs) / (re - rs), h: (b - a) / (re - rs) };
+      first = false;
+    });
+  };
+  for (const m of matches) for (const r of m.schedule) paint(r.day, r.start, r.end, { kind: 'match', label: m.mate.name, matchId: m.id });
+  for (const req of pendingRequests) for (const r of runsOfCells(req.cells)) paint(r.day, r.start, r.end, { kind: 'pending', label: '대기' });
+  // 개인 일정: 같은 이름이 이어진 줄이면 첫 줄에만 이름
+  const sorted = personal.map((p) => ({ ...p, cell: homeCellOf(p.cell) }))
+    .sort((x, y) => (x.cell.split('-')[0] - y.cell.split('-')[0]) || (x.cell.split('-')[1] - y.cell.split('-')[1]));
+  for (const p of sorted) {
+    const [d, i] = p.cell.split('-').map(Number);
+    const prev = map.get(`${d}-${i - 1}`)?.personal;
+    at(p.cell).personal = { label: prev?.title === p.title ? '' : p.title, title: p.title };
+  }
+  return map;
+}
+// 홈 칸 하나의 모양: 개인 일정이 있으면 바탕은 개인 일정, 매칭·대기가 줄을 다 채우면 그 색, 일부만 겹치면 겹친 만큼만 칠한다
+function homeCellLook(info) {
+  if (!info) return { cls: '', html: '' };
+  const { personal, fill } = info;
+  const full = fill && fill.top <= 0.001 && fill.h >= 0.999;
+  if (!personal && full) return { cls: fill.kind, html: fill.label ? `<span>${esc(fill.label)}</span>` : '', label: fill.label };
+  // 위·아래 끝에 닿으면 칸 테두리(1px)까지 덮는다
+  const edge = (v) => (v <= 0.001 ? '-1px' : `${(v * 100).toFixed(2)}%`);
+  const part = fill && !(personal && full)
+    ? `<i class="tt-fill ${fill.kind}" style="top:${edge(fill.top)};bottom:${edge(1 - fill.top - fill.h)}">${fill.label ? `<span>${esc(fill.label)}</span>` : ''}</i>` : '';
+  return {
+    cls: [personal ? 'personal' : '', fill ? 'has-fill' : ''].filter(Boolean).join(' '),
+    // 개인 일정 이름은 매칭이 겹쳐 칠해진 칸에서는 가려져서 뺀다 (색으로만 보임, 읽기용 이름은 aria-label)
+    html: `${personal?.label && !part ? `<span>${esc(personal.label)}</span>` : ''}${part}`,
+    label: personal?.label || fill?.label || '',
+  };
+}
+
+// 시간표 HTML. cellInfo(cell) → { cls, label, html, on, disabled }
+function timetableHTML(id, cellInfo, SLOTS = OPTIONS.timeSlots) {
   const days = [1, 2, 3, 4, 5, 6, 7];
   return `
     <div class="tt" id="${id}">
@@ -797,7 +846,7 @@ function timetableHTML(id, cellInfo) {
         ${days.map((d) => {
           const info = cellInfo(`${d}-${i}`) ?? {};
           return `<button type="button" class="tt-cell${s.start >= '18:00' ? ' evening' : ''}${info.cls ? ` ${info.cls}` : ''}" data-cell="${d}-${i}"
-            aria-pressed="${!!info.on}"${info.disabled ? ' disabled' : ''} aria-label="${WD[d]} ${s.start}~${s.end}${info.label ? ` ${esc(info.label)}` : ''}">${info.label ? `<span>${esc(info.label)}</span>` : ''}</button>`;
+            aria-pressed="${!!info.on}"${info.disabled ? ' disabled' : ''} aria-label="${WD[d]} ${s.start}~${s.end}${info.label ? ` ${esc(info.label)}` : ''}">${info.html ?? (info.label ? `<span>${esc(info.label)}</span>` : '')}</button>`;
         }).join('')}`).join('')}
       <div class="tt-time">${SLOTS.at(-1).end}</div><div style="grid-column: span ${days.length}"></div>
     </div>`;
@@ -980,12 +1029,12 @@ async function renderHome(alive) {
   let editTitle = '수업';
   // 편집 중에는 칸 모양과 이름만 다시 칠한다 (끌기 상태 유지)
   const redrawCells = () => {
-    const map = myTimetable({ matches, pendingRequests, personal: mine });
+    const map = homeTimetable({ matches, pendingRequests, personal: mine });
     $$('#my-tt .tt-cell').forEach((b) => {
-      const info = map.get(b.dataset.cell);
-      b.classList.remove('match', 'pending', 'personal');
-      if (info) b.classList.add(info.kind);
-      b.innerHTML = info?.label ? `<span>${esc(info.label)}</span>` : '';
+      const look = homeCellLook(map.get(b.dataset.cell));
+      b.classList.remove('match', 'pending', 'personal', 'has-fill');
+      if (look.cls) b.classList.add(...look.cls.split(' '));
+      b.innerHTML = look.html;
     });
   };
   // 매칭·신청이 없는 첫 화면: 위 타일 묶음(메이트 신청 · 디데이 · 함께 공부한 팀)은 화면의 약 1/4(결제 앱 첫 화면 타일 비율),
@@ -1029,7 +1078,7 @@ async function renderHome(alive) {
   const drawTimetable = () => {
     view.classList.toggle('tt-editing', editing);
     setTimeout(fitHome, 0);
-    const map = myTimetable({ matches, pendingRequests, personal: mine });
+    const map = homeTimetable({ matches, pendingRequests, personal: mine });
     const card = $('#my-tt-card');
     const empty = !matches.length && !pendingRequests.length && !mine.length;
     card.innerHTML = `
@@ -1045,18 +1094,21 @@ async function renderHome(alive) {
       ${timetableHTML('my-tt', (cell) => {
         const info = map.get(cell);
         if (!info) return editing ? {} : { cls: 'ro' };
-        if (editing) return { cls: info.kind, label: info.label, disabled: info.kind !== 'personal' };
-        return { cls: `${info.kind} ${info.kind === 'match' ? 'link' : 'ro'}`, label: info.label };
-      })}
+        const look = homeCellLook(info);
+        // 편집 중: 매칭·대기가 줄을 다 채운 칸은 막고, 일부만 겹친 칸(16:30~18:00 등)은 개인 일정을 넣을 수 있다
+        const full = info.fill && info.fill.top <= 0.001 && info.fill.h >= 0.999;
+        if (editing) return { cls: look.cls, html: look.html, label: look.label, disabled: full && !info.personal };
+        return { cls: `${look.cls} ${info.fill?.kind === 'match' ? 'link' : 'ro'}`, html: look.html, label: look.label };
+      }, OPTIONS.homeSlots)}
       ${editing ? '' : (empty ? '<p class="tiny muted mt">매칭이나 개인 일정이 생기면 여기에 보여요.</p>' : '')}`;
 
     const tt = $('#my-tt');
     if (!editing) {
       // 매칭 칸을 누르면 그 매칭 화면으로
       tt.addEventListener('click', (e) => {
-        const btn = e.target.closest('.tt-cell.match');
+        const btn = e.target.closest('.tt-cell');
         const info = btn && map.get(btn.dataset.cell);
-        if (info) location.hash = `#/match/${info.matchId}`;
+        if (info?.fill?.matchId) location.hash = `#/match/${info.fill.matchId}`;
       });
       $('#tt-edit').addEventListener('click', () => {
         // 일정 추가: 내 시간표 카드는 누르기 전 크기 그대로, 그 아래 내용은 숨긴다
@@ -1071,11 +1123,13 @@ async function renderHome(alive) {
     }
     $('#tt-title').addEventListener('input', (e) => { editTitle = e.target.value; });
     tt.classList.add('editing');
+    // 화면 칸 "요일-줄" ↔ 저장 칸 "요일-p줄"
     attachPaint(tt, {
-      get: (cell) => mine.some((p) => p.cell === cell),
+      get: (cell) => mine.some((p) => p.cell === personalCellOf(cell)),
       set: (cell, on) => {
-        mine = mine.filter((p) => p.cell !== cell);
-        if (on) mine.push({ cell, title: editTitle.trim() || '개인 일정' });
+        const saved = personalCellOf(cell);
+        mine = mine.filter((p) => p.cell !== saved);
+        if (on) mine.push({ cell: saved, title: editTitle.trim() || '개인 일정' });
         redrawCells();
       },
     });

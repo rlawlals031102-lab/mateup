@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import * as S from './service.js';
-import { LOCATIONS, ROOMS_BY_DATE, NO_ROOM_DATES, ROOMS_UNASSIGNED_FROM, UNASSIGNED_ROOM, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, STUDY_PERIOD, PROMISE_RULE, PRIVACY_POLICY, DEPOSIT } from './options.js';
+import { LOCATIONS, ROOMS_BY_DATE, NO_ROOM_DATES, ROOMS_UNASSIGNED_FROM, UNASSIGNED_ROOM, STYLES, CHECKIN_EARLY_MIN, TIME_SLOTS, HOME_SLOTS, STUDY_PERIOD, PROMISE_RULE, PRIVACY_POLICY, DEPOSIT } from './options.js';
 import { sessionUser } from './sessions.js';
 import { emailHash } from './fieldcrypt.js';
 import { LIMITS, limit, assertUnder, countHit, clearHits, ipKey, securityHeaders } from './security.js';
@@ -77,7 +77,7 @@ export function createApp({
 
   api.get('/options', (req, res) => {
     res.json({
-      locations: LOCATIONS, roomsByDate: ROOMS_BY_DATE, noRoomDates: NO_ROOM_DATES, roomsUnassignedFrom: ROOMS_UNASSIGNED_FROM, unassignedRoom: UNASSIGNED_ROOM, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, timeSlots: TIME_SLOTS, studyPeriod: STUDY_PERIOD,
+      locations: LOCATIONS, roomsByDate: ROOMS_BY_DATE, noRoomDates: NO_ROOM_DATES, roomsUnassignedFrom: ROOMS_UNASSIGNED_FROM, unassignedRoom: UNASSIGNED_ROOM, styles: STYLES, checkinEarlyMin: CHECKIN_EARLY_MIN, demo, timeSlots: TIME_SLOTS, homeSlots: HOME_SLOTS, studyPeriod: STUDY_PERIOD,
       emailDomain: emailPolicy.domain, emailVerification: emailPolicy.verify, demoLogin, promiseRule: PROMISE_RULE,
       privacyVersion: PRIVACY_POLICY.version, reportReasons: REPORT_REASONS,
       authMode,

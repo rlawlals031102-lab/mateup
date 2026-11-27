@@ -928,3 +928,9 @@ body { font-variant-numeric: tabular-nums; }
 /* 리포트 도착 카드(연초록) 안 버튼: 흰 바탕 + 진한 초록 글씨 */
 .card.lime .btn.primary { background: #fff; border-color: #fff; color: #15803d; }
 .card.lime .btn.primary:hover:not(:disabled) { background: #f0fdf4; }
+
+/* 홈 내 시간표: 매칭·대기가 줄의 일부만 겹치면 겹친 만큼만 칠한다 (예: 17~18시 매칭 → 16:30~18:00 줄의 아래 2/3) */
+.tt-fill { position: absolute; left: -1px; right: -1px; display: block; font-style: normal; pointer-events: none; }
+.tt-fill.match { background: var(--green); color: #fff; }
+.tt-fill.pending { background: var(--lime-soft); border-top: 1px dashed var(--lime-line); color: var(--ink); }
+.tt-cell.has-fill:not(.personal) { background: var(--surface); }

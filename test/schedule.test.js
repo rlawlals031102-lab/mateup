@@ -100,6 +100,28 @@ test('m002: 예전 12칸 개인 일정을 새 칸으로 옮기고, 실제 사용
   await db.close?.();
 });
 
+test('m003: 개인 일정 1시간 칸 → 홈 줄(09~18시 1시간 30분)로, 시작 시각이 든 줄', async () => {
+  const db = await openSqlite(':memory:');
+  await db.run(
+    "INSERT INTO users (email, password_hash, name, created_at, personal) VALUES ('a@kookmin.ac.kr', 'h', 'A', 'now', ?)",
+    JSON.stringify([
+      { cell: '1-0', title: '아침' }, // 09시 → 09:00~10:30
+      { cell: '1-1', title: '아침2' }, // 10시 → 09:00~10:30 (같은 줄이라 앞의 것만)
+      { cell: '1-2', title: '점심 전' }, // 11시 → 10:30~12:00
+      { cell: '1-8', title: '저녁' }, // 17시 → 16:30~18:00
+      { cell: '1-9', title: '밤' }, // 18시 → 18:00~19:00
+      { cell: '2-p3', title: '이미 새 칸' },
+    ]),
+  );
+  await db.run("DELETE FROM schema_migrations WHERE id = 'm003'");
+  assert.deepEqual(await migrate(db), ['m003']);
+  assert.deepEqual(JSON.parse((await db.get('SELECT personal FROM users WHERE id = 1')).personal), [
+    { cell: '1-p0', title: '아침' }, { cell: '1-p1', title: '점심 전' }, { cell: '1-p5', title: '저녁' },
+    { cell: '1-p6', title: '밤' }, { cell: '2-p3', title: '이미 새 칸' },
+  ]);
+  await db.close?.();
+});
+
 const DRIVERS = { sqlite: () => openSqlite(':memory:'), postgres: () => openPglite() };
 for (const [name, open] of Object.entries(DRIVERS)) {
   describe(`이용 후기/${name}`, () => {

@@ -483,10 +483,15 @@ for (const [name, open] of Object.entries(DRIVERS)) {
 
     test('개인 일정', async () => {
       const me = await signup('me');
-      const saved = await S.setPersonalSchedule(db, me, [{ cell: '2-0', title: '마케팅' }, { cell: '2-1', title: '' }]);
-      assert.deepEqual(saved, [{ cell: '2-0', title: '마케팅' }, { cell: '2-1', title: '개인 일정' }]);
+      // 홈 줄(09~18시 1시간 30분, 18~22시 1시간) 번호로 저장: "요일-p줄"
+      const saved = await S.setPersonalSchedule(db, me, [{ cell: '2-p0', title: '마케팅' }, { cell: '2-p5', title: '' }]);
+      assert.deepEqual(saved, [{ cell: '2-p0', title: '마케팅' }, { cell: '2-p5', title: '개인 일정' }]);
       assert.deepEqual((await S.homeState(db, me)).personal, saved);
+      // 예전 1시간 칸으로 오면 시작 시각이 든 줄로 (10시 → 09:00~10:30 줄, 17시 → 16:30~18:00 줄)
+      assert.deepEqual(await S.setPersonalSchedule(db, me, [{ cell: '2-1', title: 'a' }, { cell: '2-0', title: 'b' }, { cell: '2-8', title: 'c' }]),
+        [{ cell: '2-p0', title: 'a' }, { cell: '2-p5', title: 'c' }]);
       await assert.rejects(S.setPersonalSchedule(db, me, [{ cell: '9-0' }]), /올바르지/);
+      await assert.rejects(S.setPersonalSchedule(db, me, [{ cell: '1-p10' }]), /올바르지/);
     });
 
     test('매칭 우선순위: 먼저 기다린 순서', async () => {
